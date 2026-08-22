@@ -47,6 +47,7 @@ import {
 } from 'lucide-react';
 import { AccountingIntegrationsHub } from '@/components/settings/AccountingIntegrationsHub';
 import { DentallyIntegrationCard } from '@/components/settings/DentallyIntegrationCard';
+import { PatientEconomicsPatCard } from '@/components/settings/PatientEconomicsPatCard';
 import { PlaidSection } from '@/components/plaid/PlaidSection';
 import { LocationRegionManagement } from '@/components/settings/LocationRegionManagement';
 import { useIntegrations, Integration } from '@/hooks/useIntegrations';
@@ -583,6 +584,8 @@ export default function Settings() {
                   <PlaidSection orgId={organizationId} />
                 </div>
               </div>
+
+              <PatientEconomicsPatCard />
 
               {/* Non-Dentally integrations (Implicit Accounting, etc.) */}
               {integrations.filter(int => int.integration_name !== 'Dentally').map((integration) => {

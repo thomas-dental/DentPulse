@@ -89,7 +89,7 @@ CREATE POLICY "Users can view sync runs for their practice"
     AND public.user_in_org(auth.uid(), practice_id)
   );
 
-REVOKE ALL ON TABLE public.sync_runs FROM anon;
+REVOKE ALL ON TABLE public.sync_runs FROM anon, authenticated;
 GRANT SELECT ON TABLE public.sync_runs TO authenticated;
 GRANT ALL ON TABLE public.sync_runs TO service_role;
 
