@@ -1,0 +1,55 @@
+{
+  "1": {
+    "user_id": "1",
+    "name": "Charly Test",
+    "email": "charlytest1@gmail.com",
+    "clinic": "DentLedger",
+    "permissions": {
+      "dentpulse": true,
+      "dentledger": true,
+      "dentscale": false
+    },
+    "updated_at": "2026-04-15T09:15:10.650Z"
+  },
+  "bd75ca5f-b983-4706-8a46-ee0484d2c200": {
+    "dentpulse": true,
+    "dentledger": true,
+    "dentscale": false
+  },
+  "824b4a2a-6553-488e-8a12-b4adf7eaf1fc": {
+    "user_id": "824b4a2a-6553-488e-8a12-b4adf7eaf1fc",
+    "name": "Test",
+    "email": "testingg@yopmail.com",
+    "clinic": "No clinic",
+    "permissions": {
+      "dentpulse": true,
+      "dentledger": false,
+      "dentscale": false
+    },
+    "updated_at": "2026-04-14T09:54:14.159Z"
+  },
+  "b19b1981-8b6c-4215-8c8e-077107c6acf0": {
+    "user_id": "b19b1981-8b6c-4215-8c8e-077107c6acf0",
+    "name": "Denish",
+    "email": "dfaldu387@gmail.com",
+    "clinic": "The South Street Dental Practice",
+    "permissions": {
+      "dentpulse": true,
+      "dentledger": true,
+      "dentscale": false
+    },
+    "updated_at": "2026-04-15T09:15:04.435Z"
+  },
+  "ef97f261-e477-48e7-9d2f-4007e29aa47a": {
+    "user_id": "ef97f261-e477-48e7-9d2f-4007e29aa47a",
+    "name": "smith dentist",
+    "email": "smithdent@yopmail.com",
+    "clinic": "GM Dental & Implant Centre",
+    "permissions": {
+      "dentpulse": true,
+      "dentledger": false,
+      "dentscale": false
+    },
+    "updated_at": "2026-04-15T09:37:35.971Z"
+  }
+}

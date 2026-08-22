@@ -1,0 +1,1566 @@
+/* eslint-disable */
+/*
+ * Group Dashboard — ported verbatim from the design mockup and rendered inside
+ * a Shadow DOM so its generic CSS (body, section, .card, h2 …) and its own
+ * light/dark theme stay fully isolated from the SuperAdmin shell.
+ *
+ * One-time port of the design HTML. The CSS, markup and chart JS below are the
+ * designer's, unchanged except for the minimal document→shadow-root retargeting
+ * (document.getElementById → ROOT / document.documentElement → HOST) needed to
+ * run in a shadow tree. Edit this file directly from here on.
+ *
+ * PHASE 1: renders the design on the mockup's sample data. PHASE 2 will replace
+ * the inline literals + the chart data structures with a real /api/group-dashboard
+ * payload (see api.getGroupDashboard). Metrics with no backend source yet stay
+ * flagged 'Indicative' in the design.
+ */
+import { useEffect, useRef } from 'react';
+
+const STYLE = `
+  :host {
+    color-scheme: light;
+    --plane:        #f9f9f7;
+    --surface:      #fcfcfb;
+    --surface-2:    #ffffff;
+    --ink:          #0b0b0b;
+    --ink-2:        #52514e;
+    --muted:        #898781;
+    --grid:         #e1e0d9;
+    --border:       rgba(11,11,11,0.10);
+    --border-2:     rgba(11,11,11,0.06);
+    --series-1:     #2a78d6;
+    --series-1-soft:#cde2fb;
+    --good:         #0ca30c;
+    --good-ink:     #006300;
+    --warning:      #fab219;
+    --warning-ink:  #9a6a00;
+    --serious:      #ec835a;
+    --serious-ink:  #b24a24;
+    --critical:     #d03b3b;
+    --critical-ink: #a52121;
+    --accent-wash:  #eef5fe;
+    --shadow:       0 1px 2px rgba(11,11,11,0.04), 0 4px 16px rgba(11,11,11,0.04);
+  }
+  :host([data-theme="dark"]) {
+    color-scheme: dark;
+    --plane:        #0d0d0d;
+    --surface:      #1a1a19;
+    --surface-2:    #201f1e;
+    --ink:          #ffffff;
+    --ink-2:        #c3c2b7;
+    --muted:        #898781;
+    --grid:         #2c2c2a;
+    --border:       rgba(255,255,255,0.10);
+    --border-2:     rgba(255,255,255,0.06);
+    --series-1:     #3987e5;
+    --series-1-soft:#184f95;
+    --good:         #0ca30c;
+    --good-ink:     #22c522;
+    --warning:      #fab219;
+    --warning-ink:  #f5c451;
+    --serious:      #ec835a;
+    --serious-ink:  #f0a07e;
+    --critical:     #d03b3b;
+    --critical-ink: #ec6a6a;
+    --accent-wash:  #16283d;
+    --shadow:       0 1px 2px rgba(0,0,0,0.4), 0 4px 20px rgba(0,0,0,0.35);
+  }
+  * { box-sizing: border-box; }
+  :host {
+    background: var(--plane);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.45;
+  }
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 20px 18px 64px; }
+
+  /* ---------- Header ---------- */
+  header.top {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding-bottom: 18px; margin-bottom: 8px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .mark {
+    width: 30px; height: 30px; border-radius: 9px;
+    background: linear-gradient(135deg, var(--series-1), #1c5cab);
+    display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 15px;
+    box-shadow: var(--shadow);
+  }
+  .brand .name { font-weight: 700; font-size: 18px; letter-spacing: -0.01em; }
+  .brand .name span { color: var(--series-1); }
+  .practice { color: var(--ink-2); font-size: 13.5px; }
+  .practice b { color: var(--ink); font-weight: 600; }
+  .spacer { flex: 1 1 auto; }
+  .freshness {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 12px; color: var(--ink-2);
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 6px 11px; border-radius: 999px;
+  }
+  .freshness .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 3px rgba(12,163,12,0.15); }
+  .toggle {
+    border: 1px solid var(--border); background: var(--surface); color: var(--ink-2);
+    padding: 6px 12px; border-radius: 999px; font-size: 12px; cursor: pointer; font-weight: 600;
+  }
+  .toggle:hover { color: var(--ink); }
+
+  /* ---------- Date picker ---------- */
+  .datepicker { position: relative; }
+  .dp-btn {
+    display: inline-flex; align-items: center; gap: 8px; font-family: inherit;
+    border: 1px solid var(--border); background: var(--surface); color: var(--ink);
+    padding: 6px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  }
+  .dp-btn:hover { border-color: var(--series-1); }
+  .dp-ic { color: var(--series-1); font-size: 13px; }
+  .dp-cv { color: var(--muted); font-size: 10px; }
+  .dp-panel {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; min-width: 232px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow); padding: 6px; display: none;
+  }
+  .datepicker.open .dp-panel { display: block; }
+  .dp-row {
+    padding: 8px 10px; border-radius: 8px; font-size: 13px; color: var(--ink-2); cursor: pointer;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .dp-row:hover { background: var(--accent-wash); color: var(--ink); }
+  .dp-row.is-sel { color: var(--ink); font-weight: 650; }
+  .dp-row.is-sel::after { content: "✓"; color: var(--series-1); font-weight: 700; }
+  .dp-custom {
+    border-top: 1px solid var(--border-2); margin-top: 6px; padding: 10px 10px 6px;
+    font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  }
+  .dp-custom input {
+    font-family: inherit; font-size: 11.5px; border: 1px solid var(--border); border-radius: 6px;
+    padding: 3px 6px; background: var(--surface-2); color: var(--ink); color-scheme: light dark;
+  }
+
+  /* ---------- Trend chart ---------- */
+  .trend { padding: 16px 16px 12px; }
+  .trend-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  .seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 2px; }
+  .seg button {
+    font-family: inherit; border: none; background: none; color: var(--ink-2);
+    font-size: 13px; font-weight: 600; padding: 6px 15px; border-radius: 8px; cursor: pointer;
+  }
+  .seg button:hover { color: var(--ink); }
+  .seg button.on { background: var(--series-1); color: #fff; }
+  .seg.small button { font-size: 12px; padding: 5px 11px; font-weight: 650; }
+  .trend .tctitle { font-size: 20px; font-weight: 650; letter-spacing: -0.02em; margin: 6px 2px 0; }
+  .trend .tcsub { font-size: 12.5px; color: var(--ink-2); margin: 2px 2px 0; }
+  .trend .tcsub .delta { font-weight: 650; }
+  .legend { display: flex; gap: 16px; margin: 12px 2px 4px; font-size: 12px; color: var(--ink-2); }
+  .legend .lk { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .ld { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .chart-wrap { position: relative; }
+  #trendSvg { width: 100%; height: auto; display: block; touch-action: none; }
+  .tip {
+    position: absolute; pointer-events: none; z-index: 6; min-width: 130px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 9px;
+    box-shadow: var(--shadow); padding: 8px 10px; font-size: 12px; opacity: 0; transition: opacity .08s;
+    transform: translate(-50%, -108%);
+  }
+  .tip .tm { font-weight: 700; font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 5px; }
+  .tip .tr { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 1px 0; }
+  .tip .tr .k { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+  .tip .tr .v { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .tip .dotc { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+
+  /* ---------- Section scaffolding ---------- */
+  section { margin-top: 26px; }
+  .sec-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+  .sec-head h2 {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--muted); margin: 0;
+  }
+  .sec-head .sub { font-size: 12.5px; color: var(--muted); }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: var(--shadow);
+  }
+
+  /* ---------- Zone 1: Scoreboard ---------- */
+  .scoreboard { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  .tile { padding: 15px 15px 13px; position: relative; overflow: hidden; }
+  .tile .tlabel { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
+  .tile .tval { font-size: 27px; font-weight: 650; letter-spacing: -0.02em; margin: 5px 0 2px; }
+  .tile .tval .u { font-size: 15px; font-weight: 600; color: var(--ink-2); }
+  .tile .tmeta { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .delta { font-weight: 650; display: inline-flex; align-items: center; gap: 2px; }
+  .delta.up { color: var(--good-ink); }
+  .delta.down { color: var(--critical-ink); }
+  .rag { position: absolute; top: 0; left: 0; width: 100%; height: 3px; }
+  .rag.g { background: var(--good); }
+  .rag.a { background: var(--warning); }
+  .rag.r { background: var(--critical); }
+  .meter { margin-top: 12px; }
+  .meter .mtrack { position: relative; height: 6px; background: var(--grid); border-radius: 4px; }
+  .meter .mfill { height: 100%; border-radius: 4px; background: var(--series-1); }
+  .meter .mfill.g { background: var(--good); }
+  .meter .mfill.a { background: var(--warning); }
+  .meter .mfill.r { background: var(--critical); }
+  .meter .mfill.band { background: var(--series-1); opacity: 0.28; }
+  .meter .tick { position: absolute; top: -3px; width: 2px; height: 12px; background: var(--ink-2); border-radius: 1px; opacity: 0.6; }
+  .meter .mcap { font-size: 11px; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .pill { font-size: 10.5px; font-weight: 650; padding: 1px 7px; border-radius: 999px; letter-spacing: 0.02em; }
+  .pill.ind { background: var(--accent-wash); color: var(--series-1); }
+  .info { color: var(--muted); font-size: 11px; border: 1px solid var(--border); border-radius: 50%; width: 15px; height: 15px; display: inline-grid; place-items: center; cursor: help; }
+
+  /* ---------- Zone 2: Business Pulse ---------- */
+  .pulse { padding: 16px 16px 18px; }
+  .chain { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; }
+  .stage { padding: 4px 16px; position: relative; }
+  .stage:not(:last-child)::after {
+    content: "→"; position: absolute; right: -9px; top: 30px;
+    color: var(--muted); font-size: 17px; z-index: 2;
+  }
+  .stage:first-child { padding-left: 4px; }
+  .stage .sname { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+  .stage .sval { font-size: 22px; font-weight: 650; letter-spacing: -0.02em; margin: 3px 0 1px; }
+  .stage .sdelta { font-size: 12px; }
+  .bars { margin-top: 11px; display: flex; flex-direction: column; gap: 6px; }
+  .barrow { display: grid; grid-template-columns: 60px 1fr 54px; align-items: center; gap: 8px; font-size: 11px; color: var(--ink-2); }
+  .track { height: 7px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+  .fill { height: 100%; border-radius: 4px; }
+  .fill.actual { background: var(--series-1); }
+  .fill.target { background: var(--muted); opacity: 0.55; }
+  .fill.last { background: var(--series-1-soft); }
+  .barrow .bval { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; }
+  .verdict {
+    margin-top: 16px; padding: 12px 15px; border-radius: 11px;
+    background: var(--accent-wash); border: 1px solid var(--border-2);
+    font-size: 14px; color: var(--ink); display: flex; gap: 10px; align-items: flex-start;
+  }
+  .verdict b { font-weight: 700; }
+  .verdict .vi { color: var(--warning-ink); font-weight: 800; }
+
+  /* ---------- Zone 3: Profit Engine ---------- */
+  .engine { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .ecard { padding: 15px 15px 14px; }
+  .ecard .ehead { display: flex; align-items: center; justify-content: space-between; }
+  .ecard .etitle { font-size: 13px; font-weight: 700; }
+  .ecard .escore { font-size: 12px; font-weight: 650; padding: 2px 8px; border-radius: 999px; }
+  .escore.g { background: rgba(12,163,12,0.13); color: var(--good-ink); }
+  .escore.a { background: rgba(250,178,25,0.16); color: var(--warning-ink); }
+  .escore.r { background: rgba(208,59,59,0.13); color: var(--critical-ink); }
+  .erow { display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; padding: 7px 0; border-top: 1px solid var(--border-2); color: var(--ink-2); }
+  .erow:first-of-type { border-top: none; margin-top: 8px; }
+  .erow .en { color: var(--ink); font-weight: 550; }
+  .erow .ev { font-variant-numeric: tabular-nums; }
+  .opp {
+    margin-top: 11px; padding: 10px 12px; border-radius: 10px; font-size: 12.5px;
+    background: var(--surface-2); border: 1px dashed var(--border);
+  }
+  .opp .oh { font-weight: 700; color: var(--serious-ink); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .est { font-size: 10.5px; color: var(--muted); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; }
+
+  /* ---------- Zone 3b: Operational Efficiency ---------- */
+  .effkpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
+  .kcard { padding: 13px 15px 12px; }
+  .kcard .kl { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+  .kcard .kv { font-size: 23px; font-weight: 750; letter-spacing: -0.01em; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .kcard .kv .u { font-size: 13px; color: var(--muted); font-weight: 600; }
+  .kcard .km { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+  .kcard .km .delta { font-size: 11.5px; }
+  .efftable { padding: 4px 0 2px; overflow-x: auto; }
+  .effhead, .effrow {
+    display: grid; grid-template-columns: minmax(130px,1.1fr) 74px 74px 84px minmax(190px,1.5fr);
+    gap: 10px; align-items: center; padding: 10px 16px; min-width: 620px;
+  }
+  .effhead { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; padding-bottom: 6px; border-bottom: 1px solid var(--border-2); }
+  .effrow { border-bottom: 1px solid var(--border-2); font-size: 13px; }
+  .effrow:last-of-type { border-bottom: none; }
+  .effrow .sn { font-weight: 600; }
+  .effrow .sn .ss { display: block; font-weight: 500; font-size: 11.5px; color: var(--muted); }
+  .effrow .nv { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  .effrow .nv.strong { color: var(--ink); font-weight: 650; }
+  .effrow .nv.neg { color: var(--critical-ink); font-weight: 650; }
+  .daybar { position: relative; }
+  .daybar .dlab { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+  .daybar .dtrack { position: relative; height: 12px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border-2); overflow: hidden; }
+  .daybar .dcost { position: absolute; inset: 0 auto 0 0; background: rgba(236,131,90,0.45); }
+  .daybar .dprofit { position: absolute; inset: 0 0 0 auto; background: rgba(12,163,12,0.4); }
+  .daybar .dloss { position: absolute; inset: 0; background: rgba(208,59,59,0.32); }
+  .daybar .dtick { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink); border-radius: 2px; }
+  .daybar .dcap { font-size: 11px; margin-top: 4px; color: var(--ink-2); }
+  .daybar .dcap b { font-weight: 650; color: var(--ink); }
+  .effnote { padding: 9px 16px 12px; font-size: 11.5px; color: var(--muted); border-top: 1px solid var(--border-2); }
+  @media (max-width: 860px){ .effkpis { grid-template-columns: repeat(2, 1fr); } }
+
+  /* ---------- Group: site league ---------- */
+  .lghead, .lgrow {
+    display: grid; grid-template-columns: 30px minmax(140px,1.2fr) 48px 100px 110px 62px 48px minmax(170px,1.3fr);
+    gap: 10px; align-items: center; padding: 11px 16px; min-width: 780px;
+  }
+  .lghead { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; padding-bottom: 6px; border-bottom: 1px solid var(--border-2); }
+  .lgrow { border-bottom: 1px solid var(--border-2); font-size: 13px; }
+  .lgrow:last-of-type { border-bottom: none; }
+  .lgrow.drag { background: rgba(208,59,59,0.05); }
+  .lgrow .sn { font-weight: 600; }
+  .lgrow .sn .ss { display: block; font-weight: 500; font-size: 11.5px; color: var(--muted); }
+  .lgrow .nv { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  .lgrow .nv.strong { color: var(--ink); font-weight: 700; }
+  .lgrow .nv.neg { color: var(--critical-ink); font-weight: 700; }
+  .rankn { font-size: 15px; font-weight: 800; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .rankn.r { color: var(--critical-ink); }
+  .pqspill { display: inline-block; min-width: 34px; text-align: center; font-size: 12px; font-weight: 750; padding: 3px 7px; border-radius: 999px; font-variant-numeric: tabular-nums; }
+  .pqspill.g { background: rgba(12,163,12,0.13); color: var(--good-ink); }
+  .pqspill.a { background: rgba(250,178,25,0.16); color: var(--warning-ink); }
+  .pqspill.r { background: rgba(208,59,59,0.13); color: var(--critical-ink); }
+
+  /* ---------- Group: NHS delivery ---------- */
+  .nhshead, .nhsrow {
+    display: grid; grid-template-columns: minmax(140px,1fr) 70px minmax(220px,2fr) 90px;
+    gap: 12px; align-items: center; padding: 11px 16px; min-width: 620px;
+  }
+  .nhshead { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; padding-bottom: 6px; border-bottom: 1px solid var(--border-2); }
+  .nhsrow { border-bottom: 1px solid var(--border-2); font-size: 13px; }
+  .nhsrow:last-of-type { border-bottom: none; }
+  .nhsrow .sn { font-weight: 600; }
+  .nhsrow .nv { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  .nhsrow .nv.strong { font-weight: 700; }
+  .nhstrack { position: relative; height: 16px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border-2); }
+  .nhsfill { position: absolute; inset: 0 auto 0 0; border-radius: 8px 0 0 8px; }
+  .nhsfill.g { background: rgba(12,163,12,0.4); }
+  .nhsfill.a { background: rgba(250,178,25,0.5); }
+  .nhsfill.r { background: rgba(208,59,59,0.4); }
+  .nhsexp { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); border-radius: 2px; }
+  .nhspct { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 10.5px; font-weight: 700; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+  /* ---------- Group: move owners + site chips ---------- */
+  .ownerrow { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .avatar {
+    width: 24px; height: 24px; border-radius: 50%; flex: none;
+    background: linear-gradient(135deg, var(--series-1), #1c5cab); color: #fff;
+    display: grid; place-items: center; font-size: 10px; font-weight: 750;
+  }
+  .oname { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+  .sitechip {
+    display: inline-block; font-size: 10.5px; font-weight: 700; color: var(--ink-2);
+    border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; margin-left: 4px; vertical-align: 1px;
+  }
+
+  /* ---------- Group: head to head ---------- */
+  .h2hsel { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .h2hpick {
+    font-family: inherit; font-size: 13px; font-weight: 650; color: var(--ink);
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px;
+    padding: 7px 10px; cursor: pointer;
+  }
+  .h2hvs { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .h2hwrap { display: grid; grid-template-columns: 1fr 1.05fr; gap: 18px; align-items: start; }
+  @media (max-width: 820px){ .h2hwrap { grid-template-columns: 1fr; } }
+  .cmphead, .cmprow { display: grid; grid-template-columns: 1.3fr 0.8fr 0.8fr 0.9fr; gap: 8px; align-items: center; padding: 8px 4px; }
+  .cmphead { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; border-bottom: 1px solid var(--border-2); }
+  .cmprow { border-bottom: 1px solid var(--border-2); font-size: 13px; }
+  .cmprow:last-of-type { border-bottom: none; }
+  .cmprow .mname { color: var(--ink-2); font-weight: 550; }
+  .cmprow .mv { font-variant-numeric: tabular-nums; font-weight: 650; }
+  .cmprow .gap { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 12.5px; }
+  .gap.good { color: var(--good-ink); }
+  .gap.bad { color: var(--critical-ink); }
+  .gap.even { color: var(--muted); }
+
+  /* ---------- Group: collapse + cash + mobile ---------- */
+  .collapsible > .sec-head { cursor: pointer; user-select: none; }
+  .foldind { font-size: 11px; font-weight: 700; color: var(--series-1); margin-left: auto; white-space: nowrap; }
+  .sec-head .foldind { margin-left: auto; }
+  .collapsible.collapsed > *:not(.sec-head) { display: none; }
+  .cardfold .effhead { cursor: pointer; user-select: none; }
+  .cardfold .effhead .foldind { margin-left: 6px; }
+  .cardfold.folded > *:not(.effhead) { display: none; }
+  .cashhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+
+  @media (max-width: 700px){
+    .efftable { overflow-x: visible; }
+    .lghead, .effhead, .nhshead { display: none; }
+    .cardfold .effhead { display: grid; grid-template-columns: 1fr; }
+    .cardfold .effhead > span:not(:first-child) { display: none; }
+    .lgrow, .effrow, .nhsrow { min-width: 0; }
+    .lgrow { grid-template-columns: 24px 1fr auto auto; row-gap: 7px; padding: 12px 14px; }
+    .lgrow > .nv:nth-child(3), .lgrow > .nv:nth-child(4), .lgrow > .nv:nth-child(6) { display: none; }
+    .lgrow .daybar { grid-column: 1 / -1; }
+    .effrow { grid-template-columns: 1fr auto; row-gap: 7px; padding: 12px 14px; }
+    .effrow > .nv:nth-child(2), .effrow > .nv:nth-child(3) { display: none; }
+    .effrow .daybar { grid-column: 1 / -1; }
+    .nhsrow { grid-template-columns: 1fr auto; row-gap: 7px; }
+    .nhsrow .nhstrack { grid-column: 1 / -1; }
+    .cmphead, .cmprow { grid-template-columns: 1.15fr 0.7fr 0.7fr 0.75fr; font-size: 12px; }
+  }
+
+  /* ---------- Chairman: exceptions, staffing, debt ---------- */
+  .exwrap { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; align-items: start; }
+  @media (max-width: 820px){ .exwrap { grid-template-columns: 1fr; } }
+  .exsummary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13.5px; padding-bottom: 10px; border-bottom: 1px solid var(--border-2); }
+  .okchip { font-size: 11.5px; font-weight: 650; color: var(--good-ink); background: rgba(12,163,12,0.1); border-radius: 999px; padding: 2px 9px; }
+  .exrow { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border-2); }
+  .exsev { width: 4px; align-self: stretch; border-radius: 3px; flex: none; }
+  .exsev.r { background: var(--critical); } .exsev.a { background: var(--warning); }
+  .extxt { flex: 1 1 auto; font-size: 13.5px; }
+  .exwhy { color: var(--ink-2); font-size: 12.5px; margin-top: 2px; }
+  .exval { text-align: right; flex: none; }
+  .exown { font-size: 11px; color: var(--muted); margin-top: 3px; font-weight: 600; }
+  .threshbar { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding-top: 11px; }
+  .threshlab { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; }
+  .thresh { font-size: 11px; font-weight: 600; color: var(--ink-2); border: 1px dashed var(--border); border-radius: 999px; padding: 2px 9px; }
+  .threshedit { font-size: 11px; font-weight: 700; color: var(--series-1); cursor: pointer; }
+  .wacard { padding: 13px 14px; }
+  .walab { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; margin-bottom: 8px; }
+  .wabubble {
+    background: rgba(12,163,12,0.08); border: 1px solid rgba(12,163,12,0.18);
+    border-radius: 12px 12px 12px 3px; padding: 11px 13px; font-size: 12.5px; line-height: 1.55;
+  }
+  .wanote { font-size: 11px; color: var(--muted); margin-top: 8px; }
+  .sthead, .strow { display: grid; grid-template-columns: minmax(140px,1.2fr) 76px 110px 110px 96px minmax(160px,1.3fr); gap: 10px; align-items: center; padding: 10px 16px; min-width: 720px; }
+  .sthead { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; padding-bottom: 6px; border-bottom: 1px solid var(--border-2); }
+  .strow { border-bottom: 1px solid var(--border-2); font-size: 13px; }
+  .strow:last-of-type { border-bottom: none; }
+  .strow .sn { font-weight: 600; } .strow .sn .ss { display: block; font-weight: 500; font-size: 11.5px; color: var(--muted); }
+  .strow .nv { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  .strow .nv.strong { font-weight: 700; }
+  .stfix { font-size: 12px; font-weight: 650; }
+  .stfix.g { color: var(--good-ink); } .stfix.a { color: var(--warning-ink); } .stfix.r { color: var(--critical-ink); }
+  .ddwrap { display: grid; grid-template-columns: 1fr 1.15fr; gap: 12px; align-items: stretch; }
+  @media (max-width: 820px){ .ddwrap { grid-template-columns: 1fr; } }
+  .ddtitle { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .ddbig { font-size: 30px; font-weight: 750; letter-spacing: -0.02em; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .ddbig .u { font-size: 16px; color: var(--ink-2); font-weight: 600; }
+  .ddsub { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+  .covtrack { position: relative; height: 10px; border-radius: 6px; background: var(--grid); margin-top: 12px; overflow: visible; }
+  .covfill { height: 100%; border-radius: 6px; background: var(--good); }
+  .covtick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--critical); border-radius: 2px; }
+  .ddcap { font-size: 12px; color: var(--ink-2); margin-top: 9px; }
+  .ddnote { font-size: 11.5px; color: var(--muted); margin-top: 7px; border-top: 1px solid var(--border-2); padding-top: 8px; }
+  @media (max-width: 700px){
+    .sthead { display: none; }
+    .strow { min-width: 0; grid-template-columns: 1fr auto; row-gap: 6px; padding: 12px 14px; }
+    .strow .stfix { grid-column: 1 / -1; }
+  }
+
+  /* ---------- Zone 4: Alerts ---------- */
+  .alerts { padding: 6px 4px; }
+  .alert { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border-2); }
+  .alert:last-child { border-bottom: none; }
+  .alert .ico { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; font-size: 14px; font-weight: 800; flex: none; }
+  .ico.r { background: rgba(208,59,59,0.14); color: var(--critical-ink); }
+  .ico.a { background: rgba(250,178,25,0.18); color: var(--warning-ink); }
+  .ico.s { background: rgba(236,131,90,0.16); color: var(--serious-ink); }
+  .alert .atxt { flex: 1 1 auto; font-size: 13.5px; }
+  .alert .atxt b { font-weight: 650; }
+  .alert .atxt .asub { color: var(--muted); font-size: 12px; }
+  .alert .aval { font-weight: 700; font-variant-numeric: tabular-nums; font-size: 14px; }
+  .alert .aval.r { color: var(--critical-ink); }
+  .alert .aval.a { color: var(--warning-ink); }
+  .alert .aval.s { color: var(--serious-ink); }
+  .chev { color: var(--muted); font-size: 15px; }
+
+  /* ---------- Zone 5: Next 3 Moves ---------- */
+  .moves { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .move { padding: 16px; position: relative; display: flex; flex-direction: column; }
+  .move .rank { position: absolute; top: 14px; right: 14px; font-size: 11px; font-weight: 700; color: var(--muted); }
+  .move .flag { width: 11px; height: 11px; border-radius: 50%; margin-bottom: 11px; }
+  .flag.r { background: var(--critical); box-shadow: 0 0 0 4px rgba(208,59,59,0.14); }
+  .flag.a { background: var(--warning); box-shadow: 0 0 0 4px rgba(250,178,25,0.16); }
+  .flag.g { background: var(--good); box-shadow: 0 0 0 4px rgba(12,163,12,0.14); }
+  .move .mtitle { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; line-height: 1.3; }
+  .move .mimpact { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin: 9px 0 3px; }
+  .move .mimpact.r { color: var(--critical-ink); }
+  .move .mimpact.a { color: var(--serious-ink); }
+  .move .mimpact.g { color: var(--good-ink); }
+  .move .mwhy { font-size: 12.5px; color: var(--ink-2); flex: 1 1 auto; }
+  .move .mact {
+    margin-top: 13px; display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px; color: var(--series-1); font-weight: 650; cursor: pointer;
+  }
+  .move .mtrack { font-size: 11px; color: var(--muted); margin-top: 8px; padding-top: 9px; border-top: 1px solid var(--border-2); }
+  .move .mtrack b { color: var(--good-ink); font-weight: 700; }
+
+  .foot { margin-top: 30px; text-align: center; font-size: 11.5px; color: var(--muted); }
+
+  @media (max-width: 900px) {
+    .scoreboard { grid-template-columns: repeat(2, 1fr); }
+    .scoreboard .tile:nth-child(5) { grid-column: 1 / -1; }
+    .chain { grid-template-columns: 1fr 1fr; row-gap: 18px; }
+    .stage::after { display: none; }
+    .engine, .moves { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 520px) {
+    .scoreboard { grid-template-columns: 1fr 1fr; }
+    .chain { grid-template-columns: 1fr; }
+    .tile .tval { font-size: 24px; }
+  }
+`;
+
+const BODY = `<div class="wrap">
+
+  <!-- HEADER -->
+  <header class="top">
+    <div class="brand">
+      <div class="mark">D</div>
+      <div>
+        <div class="name">Dent<span>Pulse</span></div>
+      </div>
+    </div>
+    <div class="practice">&nbsp;·&nbsp; <b>Bridgeside Dental Group</b> &nbsp;·&nbsp; 4 practices · 14 surgeries &nbsp;·&nbsp; Monday 20 July 2026</div>
+    <div class="spacer"></div>
+    <div class="datepicker" id="sp">
+      <button class="dp-btn" id="spBtn">
+        <span class="dp-ic">⌂</span><span id="spLabel">All sites</span><span class="dp-cv">▾</span>
+      </button>
+      <div class="dp-panel" id="spPanel">
+        <div class="dp-row is-sel" data-label="All sites">All sites</div>
+        <div class="dp-row" data-label="Bridgeside · Leeds">Bridgeside · Leeds</div>
+        <div class="dp-row" data-label="Harrogate Road">Harrogate Road</div>
+        <div class="dp-row" data-label="Kirkstall">Kirkstall</div>
+        <div class="dp-row" data-label="Wakefield">Wakefield</div>
+      </div>
+    </div>
+    <div class="datepicker" id="dp">
+      <button class="dp-btn" id="dpBtn">
+        <span class="dp-ic">▦</span><span id="dpLabel">Month to date · Jul 2026</span><span class="dp-cv">▾</span>
+      </button>
+      <div class="dp-panel" id="dpPanel">
+        <div class="dp-row" data-label="Today · 20 Jul 2026">Today</div>
+        <div class="dp-row" data-label="This week · 14–20 Jul">This week</div>
+        <div class="dp-row is-sel" data-label="Month to date · Jul 2026">Month to date</div>
+        <div class="dp-row" data-label="Last month · Jun 2026">Last month</div>
+        <div class="dp-row" data-label="Quarter to date · Q3 2026">Quarter to date</div>
+        <div class="dp-row" data-label="Year to date · 2026">Year to date</div>
+        <div class="dp-row" data-label="Last 12 months">Last 12 months</div>
+        <div class="dp-custom">
+          <span>Custom</span>
+          <input type="date" value="2026-07-01"><span>–</span><input type="date" value="2026-07-20">
+        </div>
+      </div>
+    </div>
+    <div class="freshness"><span class="dot"></span> Data to 19 Jul · 96% reconciled</div>
+    <button class="toggle" id="themeBtn">◐ Theme</button>
+  </header>
+
+  <!-- ZONE 0 — EXCEPTIONS -->
+  <section>
+    <div class="sec-head"><h2>Exceptions</h2><span class="sub">What needs you this week — everything else is on plan</span><span class="pill ind" style="margin-left:auto">Chairman</span></div>
+    <div class="exwrap">
+
+      <div class="card" style="padding:14px 16px">
+        <div class="exsummary"><b>2 of 4 sites on plan</b><span class="okchip">✓ Harrogate Road</span><span class="okchip">✓ Wakefield</span></div>
+
+        <div class="exrow">
+          <div class="exsev r"></div>
+          <div class="extxt">
+            <b>Kirkstall</b>
+            <div class="exwhy">Profit £289/chair/day vs £494 group average (−41%) · UDA delivery 12% behind</div>
+          </div>
+          <div class="exval"><span class="aval r">£313k/yr</span><div class="exown">Move #1 · Priya N · 31 Aug</div></div>
+        </div>
+
+        <div class="exrow">
+          <div class="exsev a"></div>
+          <div class="extxt">
+            <b>Bridgeside · Leeds</b>
+            <div class="exwhy">Margin 22.1% vs 24% target · Surgery 2 has 8 unbooked sessions/week</div>
+          </div>
+          <div class="exval"><span class="aval a">£47k/yr</span><div class="exown">Move #3 · James T</div></div>
+        </div>
+
+        <div class="threshbar">
+          <span class="threshlab">Your thresholds</span>
+          <span class="thresh">Profit/chair &lt; group −15%</span>
+          <span class="thresh">UDA −5pt behind</span>
+          <span class="thresh">Cash floor £180k</span>
+          <span class="thresh">Margin −2pt vs target</span>
+          <span class="threshedit">edit ›</span>
+        </div>
+      </div>
+
+      <div class="card wacard">
+        <div class="walab">Monday digest · sent 7:00am to your WhatsApp</div>
+        <div class="wabubble">
+          <b>DentPulse · Mon 20 Jul</b><br>
+          Group profit £131.4k MTD (88% of plan). 2 of 4 sites on plan.<br><br>
+          ⚠️ <b>Kirkstall</b>: £313k/yr gap · UDA exposure £86k → Priya, due 31 Aug<br>
+          👀 <b>Bridgeside</b>: Surgery 2 unbooked → recall push (James)<br>
+          💷 Cash clears Sep low £189k · CT £118k on 1 Oct — set-aside £22k short<br><br>
+          Full board → dentpulse.app/g/board
+        </div>
+        <div class="wanote">One message, every Monday. Severity follows your thresholds — quiet weeks send two lines.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ZONE 1 — GROUP SCOREBOARD -->
+  <section>
+    <div class="sec-head"><h2>Group Scoreboard</h2><span class="sub">Are we winning? — across all 4 practices</span></div>
+    <div class="scoreboard">
+
+      <div class="card tile">
+        <div class="rag a"></div>
+        <div class="tlabel">Cash in bank</div>
+        <div class="tval">£276<span class="u">k</span></div>
+        <div class="tmeta"><span class="delta down">▼ 1.8 months cover</span></div>
+        <div class="meter"><div class="mtrack"><div class="mfill a" style="width:60%"></div></div><div class="mcap">1.8 of 3.0-month comfort target</div></div>
+      </div>
+
+      <div class="card tile">
+        <div class="rag a"></div>
+        <div class="tlabel">Operating profit <span class="pill ind">MTD</span></div>
+        <div class="tval">£131.4<span class="u">k</span></div>
+        <div class="tmeta"><span class="delta down">▼ 12%</span> vs target</div>
+        <div class="meter"><div class="mtrack"><div class="mfill a" style="width:88%"></div></div><div class="mcap">£131.4k of £150k target</div></div>
+      </div>
+
+      <div class="card tile">
+        <div class="rag a"></div>
+        <div class="tlabel">Profit margin</div>
+        <div class="tval">21.4<span class="u">%</span></div>
+        <div class="tmeta"><span class="delta down">▼ 1.7pt</span> vs last year</div>
+        <div class="meter"><div class="mtrack"><div class="mfill a" style="width:89%"></div></div><div class="mcap">21.4% of 24% target</div></div>
+      </div>
+
+      <div class="card tile">
+        <div class="rag g"></div>
+        <div class="tlabel">Safe to draw <span class="info" title="Cash − VAT set-aside − corporation tax − personal tax − loan repayments − committed outgoings. Indicative.">i</span></div>
+        <div class="tval">£54<span class="u">k</span></div>
+        <div class="tmeta"><span class="pill ind">Indicative</span> after all set-asides</div>
+        <div class="meter"><div class="mtrack"><div class="mfill g" style="width:90%"></div></div><div class="mcap">£54k of £60k monthly plan</div></div>
+      </div>
+
+      <div class="card tile">
+        <div class="rag g"></div>
+        <div class="tlabel">Estimated group value <span class="info" title="Indicative range based on adjusted EBITDA × sector multiple. PQS moves the multiple. Not a formal valuation.">i</span></div>
+        <div class="tval">£6.5–7.9<span class="u">m</span></div>
+        <div class="tmeta"><span class="delta up">▲ £640k</span> YoY · <span class="pill ind">Indicative</span></div>
+        <div class="meter"><div class="mtrack"><div class="mfill band" style="width:100%"></div><div class="tick" style="left:58%"></div></div><div class="mcap">range £6.5m – £7.9m · mid £7.2m</div></div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ZONE 1b — TREND -->
+  <section>
+    <div class="sec-head"><h2>Trend</h2><span class="sub">Are we getting better or worse — over time</span></div>
+    <div class="card trend">
+      <div class="trend-controls">
+        <div class="seg" id="metricSeg">
+          <button data-m="revenue" class="on">Revenue</button>
+          <button data-m="profit">Profit</button>
+          <button data-m="cashflow">Cash flow</button>
+        </div>
+        <div class="spacer"></div>
+        <div class="seg small" id="rangeSeg">
+          <button data-r="6">6M</button>
+          <button data-r="12" class="on">12M</button>
+          <button data-r="24">24M</button>
+          <button data-r="ytd">YTD</button>
+        </div>
+      </div>
+      <div class="tctitle" id="tcTitle">Revenue</div>
+      <div class="tcsub" id="tcSub"></div>
+      <div class="legend" id="trendLegend"></div>
+      <div class="chart-wrap">
+        <svg id="trendSvg" viewBox="0 0 820 300" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Trend chart"></svg>
+        <div class="tip" id="trendTip"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ZONE 2 — BUSINESS PULSE -->
+  <section>
+    <div class="sec-head"><h2>Business Pulse</h2><span class="sub">Revenue → Profit → Cash → Owner Wealth · group, this month vs target vs last year</span></div>
+    <div class="card pulse">
+      <div class="chain">
+
+        <div class="stage">
+          <div class="sname">Revenue</div>
+          <div class="sval">£614k</div>
+          <div class="sdelta"><span class="delta up">▲ 12%</span> <span style="color:var(--muted)">vs LY</span></div>
+          <div class="bars">
+            <div class="barrow"><span>Actual</span><div class="track"><div class="fill actual" style="width:94%"></div></div><span class="bval">£614k</span></div>
+            <div class="barrow"><span>Target</span><div class="track"><div class="fill target" style="width:100%"></div></div><span class="bval">£650k</span></div>
+            <div class="barrow"><span>Last yr</span><div class="track"><div class="fill last" style="width:84%"></div></div><span class="bval">£548k</span></div>
+          </div>
+        </div>
+
+        <div class="stage">
+          <div class="sname">Profit</div>
+          <div class="sval">£131.4k</div>
+          <div class="sdelta"><span class="delta up">▲ 4%</span> <span style="color:var(--muted)">vs LY</span></div>
+          <div class="bars">
+            <div class="barrow"><span>Actual</span><div class="track"><div class="fill actual" style="width:88%"></div></div><span class="bval">£131.4k</span></div>
+            <div class="barrow"><span>Target</span><div class="track"><div class="fill target" style="width:100%"></div></div><span class="bval">£150k</span></div>
+            <div class="barrow"><span>Last yr</span><div class="track"><div class="fill last" style="width:84%"></div></div><span class="bval">£126.4k</span></div>
+          </div>
+        </div>
+
+        <div class="stage">
+          <div class="sname">Cash</div>
+          <div class="sval">£276k</div>
+          <div class="sdelta"><span class="delta down">▼ £46k</span> <span style="color:var(--muted)">vs last mo</span></div>
+          <div class="bars">
+            <div class="barrow"><span>Actual</span><div class="track"><div class="fill actual" style="width:77%"></div></div><span class="bval">£276k</span></div>
+            <div class="barrow"><span>Target</span><div class="track"><div class="fill target" style="width:100%"></div></div><span class="bval">£360k</span></div>
+            <div class="barrow"><span>Last yr</span><div class="track"><div class="fill last" style="width:87%"></div></div><span class="bval">£312k</span></div>
+          </div>
+        </div>
+
+        <div class="stage">
+          <div class="sname">Owner wealth</div>
+          <div class="sval">£7.2m</div>
+          <div class="sdelta"><span class="delta up">▲ £640k</span> <span style="color:var(--muted)">equity YoY</span></div>
+          <div class="bars">
+            <div class="barrow"><span>Draw MTD</span><div class="track"><div class="fill actual" style="width:90%"></div></div><span class="bval">£54k</span></div>
+            <div class="barrow"><span>Target</span><div class="track"><div class="fill target" style="width:100%"></div></div><span class="bval">£60k</span></div>
+            <div class="barrow"><span>Equity</span><div class="track"><div class="fill last" style="width:90%"></div></div><span class="bval">£7.2m</span></div>
+          </div>
+        </div>
+
+      </div>
+      <div class="verdict">
+        <span class="vi">!</span>
+        <div><b>Revenue +12% · EBITDA +4% · Cash −£46k</b> — the group is growing, but the growth isn't converting to cash. Lab costs at two sites and Kirkstall's NHS payment timing are absorbing the extra revenue before it reaches the bank.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ZONE 2b — PROFIT ENGINE -->
+  <section class="collapsible collapsed">
+    <div class="sec-head"><h2>Profit Engine</h2><span class="sub">Where group profit is made — and where it's leaking <span class="est">estimated · owner-confirmed cost model</span></span><span class="foldind">▸ show</span></div>
+    <div class="engine">
+
+      <div class="card ecard">
+        <div class="ehead"><span class="etitle">Associates · 11 across group</span><span class="escore a">2 to review</span></div>
+        <div class="erow"><span class="en">Dr Ellison <span class="sitechip">Harrogate</span></span><span class="ev">£52k prod · 58% margin ★</span></div>
+        <div class="erow"><span class="en">Dr Okafor <span class="sitechip">Bridgeside</span></span><span class="ev">£46k prod · <span style="color:var(--critical-ink);font-weight:600">38% margin ▼</span></span></div>
+        <div class="erow"><span class="en">Dr Hughes <span class="sitechip">Kirkstall</span></span><span class="ev">£41k prod · <span style="color:var(--critical-ink);font-weight:600">35% margin ▼</span></span></div>
+        <div class="opp">
+          <div class="oh">Biggest opportunity</div>
+          Two associates run high lab-cost cases at legacy pricing. Repricing at both sites recovers <b>~£4.6k / month</b> without touching production.
+        </div>
+      </div>
+
+      <div class="card ecard">
+        <div class="ehead"><span class="etitle">Chairs · 14 across group</span><span class="escore r">3 underused</span></div>
+        <div class="erow"><span class="en">Group utilisation</span><span class="ev">78% average</span></div>
+        <div class="erow"><span class="en">Kirkstall S3 <span class="sitechip">57%</span> · S4 <span class="sitechip">63%</span></span><span class="ev"><span style="color:var(--critical-ink);font-weight:600">worst two ▼</span></span></div>
+        <div class="erow"><span class="en">Bridgeside S2</span><span class="ev"><span style="color:var(--warning-ink);font-weight:600">61% utilised</span></span></div>
+        <div class="opp">
+          <div class="oh">Biggest opportunity</div>
+          Filling the three worst chairs to the group average is <b>£128k annualised</b> in recoverable capacity — most of it at Kirkstall.
+        </div>
+      </div>
+
+      <div class="card ecard">
+        <div class="ehead"><span class="etitle">Treatments · group mix</span><span class="escore a">Margin watch</span></div>
+        <div class="erow"><span class="en">Invisalign</span><span class="ev">£212k rev · <span style="color:var(--warning-ink);font-weight:600">margin below target</span></span></div>
+        <div class="erow"><span class="en">Implants</span><span class="ev">£186k rev · 46% margin</span></div>
+        <div class="erow"><span class="en">Hygiene / perio</span><span class="ev">£164k rev · 71% margin</span></div>
+        <div class="opp">
+          <div class="oh">Biggest opportunity</div>
+          One group lab agreement plus a pricing review lifts contribution ~£18k / quarter — this is <b>Move #2</b> below.
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ZONE 3 — OPERATIONAL EFFICIENCY · SITE LEAGUE -->
+  <section>
+    <div class="sec-head"><h2>Operational Efficiency</h2><span class="sub">What each chair earns, costs and keeps — group per clinical day, then every site ranked <span class="est">estimated · owner-confirmed cost model</span></span></div>
+
+    <div class="effkpis">
+      <div class="card kcard">
+        <div class="kl">Revenue per chair per day</div>
+        <div class="kv">£2,308</div>
+        <div class="km"><span class="delta down">▼ £412</span> vs NASDAL peer median £2,720</div>
+      </div>
+      <div class="card kcard">
+        <div class="kl">Operating cost per surgery per day</div>
+        <div class="kv">£1,814</div>
+        <div class="km">incl. £256/day central overhead share</div>
+      </div>
+      <div class="card kcard">
+        <div class="kl">Profit per chair per day</div>
+        <div class="kv">£494</div>
+        <div class="km">fully loaded · 14 chairs · 266 chair-days MTD</div>
+      </div>
+      <div class="card kcard">
+        <div class="kl">Group break-even time</div>
+        <div class="kv">3:17<span class="u">pm</span></div>
+        <div class="km">everything billed after this is profit</div>
+      </div>
+    </div>
+
+    <div class="card efftable">
+      <div class="lghead">
+        <span></span><span>Practice</span><span>Chairs</span><span>Rev / chair / day</span><span>Profit / chair / day</span><span>Margin</span><span>PQS</span><span>Clinical day · 9am → 5pm</span>
+      </div>
+
+      <div class="lgrow">
+        <div class="rankn">1</div>
+        <div class="sn">Harrogate Road<span class="ss">Private-led · 92% utilised</span></div>
+        <div class="nv">4</div>
+        <div class="nv">£2,447</div>
+        <div class="nv strong">£632</div>
+        <div class="nv">25.8%</div>
+        <div><span class="pqspill g">81</span></div>
+        <div class="daybar">
+          <div class="dtrack"><div class="dcost" style="width:74%"></div><div class="dprofit" style="width:26%"></div><div class="dtick" style="left:74%"></div></div>
+          <div class="dcap">Breaks even <b>2:56pm</b></div>
+        </div>
+      </div>
+
+      <div class="lgrow">
+        <div class="rankn">2</div>
+        <div class="sn">Bridgeside · Leeds<span class="ss">Mixed · Surgery 2 at 61%</span></div>
+        <div class="nv">3</div>
+        <div class="nv">£2,490</div>
+        <div class="nv strong">£550</div>
+        <div class="nv">22.1%</div>
+        <div><span class="pqspill a">74</span></div>
+        <div class="daybar">
+          <div class="dtrack"><div class="dcost" style="width:78%"></div><div class="dprofit" style="width:22%"></div><div class="dtick" style="left:78%"></div></div>
+          <div class="dcap">Breaks even <b>3:14pm</b></div>
+        </div>
+      </div>
+
+      <div class="lgrow">
+        <div class="rankn">3</div>
+        <div class="sn">Wakefield<span class="ss">Mixed · steady</span></div>
+        <div class="nv">3</div>
+        <div class="nv">£2,246</div>
+        <div class="nv strong">£526</div>
+        <div class="nv">23.4%</div>
+        <div><span class="pqspill a">72</span></div>
+        <div class="daybar">
+          <div class="dtrack"><div class="dcost" style="width:77%"></div><div class="dprofit" style="width:23%"></div><div class="dtick" style="left:77%"></div></div>
+          <div class="dcap">Breaks even <b>3:08pm</b></div>
+        </div>
+      </div>
+
+      <div class="lgrow drag">
+        <div class="rankn r">4</div>
+        <div class="sn">Kirkstall<span class="ss">NHS-heavy · UDAs 12% behind</span></div>
+        <div class="nv">4</div>
+        <div class="nv">£2,079</div>
+        <div class="nv neg">£289</div>
+        <div class="nv neg">13.9%</div>
+        <div><span class="pqspill r">58</span></div>
+        <div class="daybar">
+          <div class="dtrack"><div class="dcost" style="width:86%"></div><div class="dprofit" style="width:14%"></div><div class="dtick" style="left:86%"></div></div>
+          <div class="dcap"><b style="color:var(--critical-ink)">Breaks even 3:53pm</b> — last hour pays you</div>
+        </div>
+      </div>
+
+      <div class="effnote">Profit per chair per day is fully loaded: direct chair costs + each site's share of group central overheads. Sites sum to £131.4k MTD group operating profit above. Same-site basis: Horsforth (acquired May 26) is tracked on its ramp in Debt &amp; Deals, not here.</div>
+    </div>
+
+    <div class="card efftable cardfold folded" id="kdrill" style="margin-top:12px">
+      <div class="effhead" style="padding-top:12px">
+        <span>Inside the dragging site — Kirkstall's 4 chairs <b class="foldind" id="kdchev">▸ show</b></span><span>Rev / day</span><span>Cost / day</span><span>Profit / day</span><span>Clinical day · 9am → 5pm</span>
+      </div>
+
+      <div class="effrow">
+        <div class="sn">Surgery 1<span class="ss">Dr Hughes · 84% utilised</span></div>
+        <div class="nv">£2,720</div>
+        <div class="nv">£2,080</div>
+        <div class="nv strong">£640</div>
+        <div class="daybar">
+          <div class="dtrack"><div class="dcost" style="width:76%"></div><div class="dprofit" style="width:24%"></div><div class="dtick" style="left:76%"></div></div>
+          <div class="dcap">Pays for itself by <b>3:07pm</b></div>
+        </div>
+      </div>
+
+      <div class="effrow">
+        <div class="sn">Surgery 2<span class="ss">Dr Farah · 79% utilised</span></div>
+        <div class="nv">£2,410</div>
+        <div class="nv">£1,930</div>
+        <div class="nv strong">£480</div>
+        <div class="daybar">
+          <div class="dtrack"><div class="dcost" style="width:80%"></div><div class="dprofit" style="width:20%"></div><div class="dtick" style="left:80%"></div></div>
+          <div class="dcap">Pays for itself by <b>3:24pm</b></div>
+        </div>
+      </div>
+
+      <div class="effrow">
+        <div class="sn">Surgery 3<span class="ss">NHS sessions · 57% utilised</span></div>
+        <div class="nv">£1,480</div>
+        <div class="nv">£1,700</div>
+        <div class="nv neg">−£220</div>
+        <div class="daybar">
+          <div class="dtrack"><div class="dloss"></div></div>
+          <div class="dcap"><b style="color:var(--critical-ink)">Never breaks even</b> — loses £220 per clinical day fully loaded</div>
+        </div>
+      </div>
+
+      <div class="effrow">
+        <div class="sn">Surgery 4<span class="ss">Mixed · 63% utilised</span></div>
+        <div class="nv">£1,706</div>
+        <div class="nv">£1,448</div>
+        <div class="nv strong">£258</div>
+        <div class="daybar">
+          <div class="dtrack"><div class="dcost" style="width:85%"></div><div class="dprofit" style="width:15%"></div><div class="dtick" style="left:85%"></div></div>
+          <div class="dcap">Pays for itself by <b>3:47pm</b></div>
+        </div>
+      </div>
+
+      <div class="effnote">Chairs sum to Kirkstall's £289 profit per chair per day in the league above. Every site opens to this chair-level view — select a site from the picker to drill in.</div>
+    </div>
+
+    <div class="verdict" style="margin-top:12px">
+      <span class="vi">!</span>
+      <div><b>Kirkstall is the dragging site.</b> If every site matched Harrogate Road's £632 profit per chair per day, group profit rises <b>~£440k a year — £313k of it at Kirkstall</b>. Its NHS mix and 12% UDA shortfall are the root cause, not its clinicians' production.</div>
+    </div>
+  </section>
+
+  <!-- ZONE 3a — STAFFING & CAPACITY -->
+  <section>
+    <div class="sec-head"><h2>Staffing &amp; Capacity</h2><span class="sub">Is an empty chair a demand problem or a dentist problem? <span class="est">sessions per week · from the diary</span></span></div>
+    <div class="card efftable">
+      <div class="sthead">
+        <span>Practice</span><span>Sessions / wk</span><span>Unfilled · no clinician</span><span>Unbooked · no patients</span><span>Vacancy cost / wk</span><span>The fix</span>
+      </div>
+
+      <div class="strow">
+        <div class="sn">Harrogate Road</div>
+        <div class="nv">40</div>
+        <div class="nv">0</div>
+        <div class="nv">3</div>
+        <div class="nv">£0</div>
+        <div class="stfix g">Recall tune-up</div>
+      </div>
+
+      <div class="strow">
+        <div class="sn">Bridgeside · Leeds<span class="ss">Surgery 2 · all unbooked</span></div>
+        <div class="nv">30</div>
+        <div class="nv">0</div>
+        <div class="nv strong" style="color:var(--warning-ink)">8</div>
+        <div class="nv">£0</div>
+        <div class="stfix a">Demand — recall + reactivation (Move #3)</div>
+      </div>
+
+      <div class="strow">
+        <div class="sn">Wakefield</div>
+        <div class="nv">30</div>
+        <div class="nv">2</div>
+        <div class="nv">4</div>
+        <div class="nv">£900</div>
+        <div class="stfix a">Locum cover Fridays</div>
+      </div>
+
+      <div class="strow">
+        <div class="sn">Kirkstall<span class="ss">Dr Farah covers Kirkstall + Wakefield (7:3 split)</span></div>
+        <div class="nv">40</div>
+        <div class="nv strong" style="color:var(--critical-ink)">6</div>
+        <div class="nv">5</div>
+        <div class="nv strong" style="color:var(--critical-ink)">£2,300</div>
+        <div class="stfix r">Recruitment — associate vacancy 3 days/wk</div>
+      </div>
+
+      <div class="effnote">Unfilled = clinician gap (recruitment or locum). Unbooked = patient gap (recall, reactivation, marketing). Vacancy cost = contribution foregone on unfilled sessions at the site's average.</div>
+    </div>
+
+    <div class="verdict" style="margin-top:12px">
+      <span class="vi">!</span>
+      <div><b>Kirkstall Surgery 3's 57% utilisation is a vacancy, not weak demand.</b> Six unfilled sessions cost £2.3k a week — £120k a year. Recruitment fixes it; marketing spend can't. Bridgeside's gap is the opposite: clinicians in place, diary unbooked — that one is recall.</div>
+    </div>
+  </section>
+
+  <!-- ZONE 3b — HEAD TO HEAD -->
+  <section class="collapsible collapsed">
+    <div class="sec-head"><h2>Head to Head</h2><span class="sub">Any site vs the group average — or any other site</span><span class="foldind">▸ show</span></div>
+    <div class="card" style="padding:16px">
+      <div class="h2hsel">
+        <select id="h2hA" class="h2hpick">
+          <option value="kirkstall" selected>Kirkstall</option>
+          <option value="harrogate">Harrogate Road</option>
+          <option value="bridgeside">Bridgeside · Leeds</option>
+          <option value="wakefield">Wakefield</option>
+        </select>
+        <span class="h2hvs">vs</span>
+        <select id="h2hB" class="h2hpick">
+          <option value="group" selected>Group average</option>
+          <option value="harrogate">Harrogate Road</option>
+          <option value="bridgeside">Bridgeside · Leeds</option>
+          <option value="wakefield">Wakefield</option>
+          <option value="kirkstall">Kirkstall</option>
+        </select>
+        <div class="spacer"></div>
+        <div class="seg small" id="h2hMetricSeg">
+          <button data-hm="rev" class="on">Revenue</button>
+          <button data-hm="profit">Profit</button>
+        </div>
+      </div>
+
+      <div class="h2hwrap">
+        <div class="cmp" id="h2hTable"></div>
+        <div>
+          <div class="tctitle" id="h2hChartTitle" style="margin-top:4px"></div>
+          <div class="legend" id="h2hLegend"></div>
+          <div class="chart-wrap"><svg id="h2hSvg" viewBox="0 0 460 260" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Site comparison chart"></svg></div>
+        </div>
+      </div>
+
+      <div class="verdict" id="h2hVerdict" style="margin-top:14px"></div>
+    </div>
+  </section>
+
+  <!-- ZONE 3 — NHS DELIVERY -->
+  <section>
+    <div class="sec-head"><h2>NHS Delivery &amp; Clawback Risk</h2><span class="sub">UDA delivery vs where you should be — 9 months into the contract year</span></div>
+    <div class="card efftable">
+      <div class="nhshead">
+        <span>Practice</span><span>Contract</span><span>Delivered vs expected (70%)</span><span>Exposure</span>
+      </div>
+
+      <div class="nhsrow">
+        <div class="sn">Wakefield</div>
+        <div class="nv">£280k</div>
+        <div class="nhstrack"><div class="nhsfill g" style="width:71%"></div><div class="nhsexp" style="left:70%"></div><span class="nhspct">71%</span></div>
+        <div class="nv strong" style="color:var(--good-ink)">On track</div>
+      </div>
+
+      <div class="nhsrow">
+        <div class="sn">Harrogate Road</div>
+        <div class="nv">£95k</div>
+        <div class="nhstrack"><div class="nhsfill g" style="width:74%"></div><div class="nhsexp" style="left:70%"></div><span class="nhspct">74%</span></div>
+        <div class="nv strong" style="color:var(--good-ink)">On track</div>
+      </div>
+
+      <div class="nhsrow">
+        <div class="sn">Bridgeside · Leeds</div>
+        <div class="nv">£310k</div>
+        <div class="nhstrack"><div class="nhsfill a" style="width:64%"></div><div class="nhsexp" style="left:70%"></div><span class="nhspct">64%</span></div>
+        <div class="nv strong" style="color:var(--warning-ink)">£27k</div>
+      </div>
+
+      <div class="nhsrow">
+        <div class="sn">Kirkstall</div>
+        <div class="nv">£520k</div>
+        <div class="nhstrack"><div class="nhsfill r" style="width:58%"></div><div class="nhsexp" style="left:70%"></div><span class="nhspct">58%</span></div>
+        <div class="nv strong" style="color:var(--critical-ink)">£86k</div>
+      </div>
+
+      <div class="effnote">Exposure = clawback if the current run-rate holds to 31 March. Group exposure: <b>£113k</b>. Recovery window closes around December — after that, capacity can't catch up.</div>
+    </div>
+  </section>
+
+  <!-- ZONE 3c — CASH RUNWAY -->
+  <section>
+    <div class="sec-head"><h2>Cash Runway</h2><span class="sub">Next 13 weeks, group — with forecast confidence scored</span></div>
+    <div class="card" style="padding:16px">
+      <div class="cashhead">
+        <div class="tctitle">13-week group cash forecast</div>
+        <span class="pqspill a" title="How reliable this forecast is, based on debtor payment behaviour, NHS payment timing and booking firmness. Part of the Working Capital module.">Cash Confidence 68/100</span>
+      </div>
+      <div class="legend"><span class="lk"><span class="ld" style="background:var(--series-1)"></span>Forecast cash</span><span class="lk"><span class="ld" style="background:var(--critical)"></span>£180k comfort floor</span></div>
+      <div class="chart-wrap"><svg id="cashSvg" viewBox="0 0 820 250" preserveAspectRatio="xMidYMid meet" role="img" aria-label="13-week cash forecast"></svg></div>
+      <div class="verdict" style="margin-top:12px">
+        <span class="vi">!</span>
+        <div><b>Cash clears the 8 Sep low at £189k, but corporation tax on 1 Oct pushes the group £6k under the £180k floor for two weeks.</b> Chasing the £41.2k debtor book or staging the CT set-aside from August clears it with room to spare.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ZONE 3d — DEBT & DEALS -->
+  <section>
+    <div class="sec-head"><h2>Debt &amp; Deals</h2><span class="sub">Covenant headroom and acquisitions on their own curve</span><span class="pill ind" style="margin-left:auto">Chairman</span></div>
+    <div class="ddwrap">
+
+      <div class="card" style="padding:15px 16px">
+        <div class="ddtitle">Bank covenant headroom</div>
+        <div class="ddbig">1.21<span class="u">x</span></div>
+        <div class="ddsub">Net debt £1.85m ÷ EBITDA (TTM) £1.53m · covenant max <b>2.75x</b></div>
+        <div class="covtrack"><div class="covfill" style="width:44%"></div><div class="covtick" style="left:100%"></div></div>
+        <div class="ddcap">EBITDA can fall <b>£860k</b> before breach · worst month this year: 1.44x · tested quarterly, next test 30 Sep</div>
+        <div class="ddnote">Breaching this is worse than any dip on the cash chart — it alerts at 80% of covenant, before the bank calls you.</div>
+      </div>
+
+      <div class="card" style="padding:15px 16px">
+        <div class="ddtitle">Horsforth — acquired May 2026 <span class="pill ind">month 3 of 12 ramp</span></div>
+        <div class="legend" style="margin-top:6px"><span class="lk"><span class="ld" style="background:var(--series-1)"></span>Actual</span><span class="lk"><span class="ld" style="background:#008300"></span>Acquisition case</span></div>
+        <div class="chart-wrap"><svg id="rampSvg" viewBox="0 0 420 150" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Acquisition ramp"></svg></div>
+        <div class="ddcap">Month 3 revenue £89k vs case £90k — <b style="color:var(--good-ink)">on case (−1%)</b> · payback tracking 4.2 yrs vs 4.5 planned</div>
+        <div class="ddnote">Excluded from the same-site league and every group average until month 12 — new acquisitions get judged against their deal case, not against Harrogate.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ZONE 4 — FINANCIAL ALERTS -->
+  <section>
+    <div class="sec-head"><h2>Financial Alerts</h2><span class="sub">Only what carries money or risk — ranked, group-wide</span></div>
+    <div class="card alerts">
+      <div class="alert">
+        <div class="ico r">!</div>
+        <div class="atxt"><b>Corporation tax due 1 October <span class="sitechip">Group</span></b><div class="asub">Set-aside currently £22k short of liability</div></div>
+        <div class="aval r">£118k</div><span class="chev">›</span>
+      </div>
+      <div class="alert">
+        <div class="ico r">!</div>
+        <div class="atxt"><b>UDA delivery 12% behind — clawback exposure <span class="sitechip">Kirkstall</span></b><div class="asub">58% delivered vs 70% expected · recovery window closes ~December</div></div>
+        <div class="aval r">£86k</div><span class="chev">›</span>
+      </div>
+      <div class="alert">
+        <div class="ico a">⚑</div>
+        <div class="atxt"><b>Projected cash dips below site floor in September <span class="sitechip">Kirkstall</span></b><div class="asub">Lowest point 8 Sep, before Q3 NHS payment lands</div></div>
+        <div class="aval a">−£28k</div><span class="chev">›</span>
+      </div>
+      <div class="alert">
+        <div class="ico s">▲</div>
+        <div class="atxt"><b>Lab costs above benchmark <span class="sitechip">Bridgeside</span> <span class="sitechip">Kirkstall</span></b><div class="asub">Running at 11.1% of revenue vs 8.5% target — no group lab agreement in place</div></div>
+        <div class="aval s">+2.6pt</div><span class="chev">›</span>
+      </div>
+      <div class="alert">
+        <div class="ico a">⏱</div>
+        <div class="atxt"><b>Aged debtors over 90 days <span class="sitechip">Group</span></b><div class="asub">£19k of it is one delayed insurance batch at Harrogate Road</div></div>
+        <div class="aval a">£41.2k</div><span class="chev">›</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ZONE 5 — NEXT 3 MOVES -->
+  <section>
+    <div class="sec-head"><h2>Your Next 3 Moves</h2><span class="sub">Exactly three — ranked by financial impact, each with an owner and a date</span></div>
+    <div class="moves">
+
+      <div class="card move">
+        <div class="rank">#1 · by 31 Aug</div>
+        <div class="flag r"></div>
+        <div class="mtitle">Protect £86k of NHS revenue at Kirkstall</div>
+        <div class="mimpact r">+£86k</div>
+        <div class="mwhy">Rebook failed UDA capacity into evening sessions and agree an in-year exception plan with the ICB before the recovery window closes in December.</div>
+        <div class="ownerrow"><span class="avatar">PN</span><span class="oname">Priya N · Practice Manager, Kirkstall</span></div>
+        <div class="mact"><span>Show me why →</span></div>
+        <div class="mtrack">Status: <b>in progress</b> · impact updates when actioned</div>
+      </div>
+
+      <div class="card move">
+        <div class="rank">#2 · by 30 Sep</div>
+        <div class="flag a"></div>
+        <div class="mtitle">Close Kirkstall's margin gap to group average</div>
+        <div class="mimpact a">+£78k/yr</div>
+        <div class="mwhy">Kirkstall runs at 13.9% vs the 21.4% group margin. Repricing legacy private fees and moving both flagged sites onto one group lab agreement closes most of the gap.</div>
+        <div class="ownerrow"><span class="avatar">SM</span><span class="oname">Sarah M · Group Operations</span></div>
+        <div class="mact"><span>Show me why →</span></div>
+        <div class="mtrack">Status: <b>not started</b> · impact updates when actioned</div>
+      </div>
+
+      <div class="card move">
+        <div class="rank">#3 · this quarter</div>
+        <div class="flag g"></div>
+        <div class="mtitle">Roll Harrogate's recall playbook to the other 3 sites</div>
+        <div class="mimpact g">+£64k/yr</div>
+        <div class="mwhy">Harrogate books hygiene at 92%; the group average is 71%. Its recall and reactivation cadence is documented — rolling it out lifts the highest-margin line everywhere.</div>
+        <div class="ownerrow"><span class="avatar">JT</span><span class="oname">James T · Group TCO Lead</span></div>
+        <div class="mact"><span>Show me why →</span></div>
+        <div class="mtrack">Last quarter's group move added <b>+£31k</b> ✓</div>
+      </div>
+
+    </div>
+  </section>
+
+  <div class="foot">
+    DentPulse Group — one view across every practice, between your PMS and your accountant. Figures are an indicative mockup with sample data · Safe-to-Draw, PQS and valuation are indicative and not a substitute for advice from your accountant.
+  </div>
+
+</div>`;
+
+function initGroupDashboard(ROOT, HOST) {
+
+  const btn = ROOT.getElementById('themeBtn');
+  btn.addEventListener('click', () => {
+    const cur = HOST.getAttribute('data-theme');
+    HOST.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+  });
+
+  // Date-range picker
+  const dp = ROOT.getElementById('dp');
+  const dpBtn = ROOT.getElementById('dpBtn');
+  const dpLabel = ROOT.getElementById('dpLabel');
+  dpBtn.addEventListener('click', (e) => { e.stopPropagation(); dp.classList.toggle('open'); });
+  ROOT.querySelectorAll('.dp-row').forEach(row => {
+    row.addEventListener('click', () => {
+      ROOT.querySelectorAll('.dp-row').forEach(r => r.classList.remove('is-sel'));
+      row.classList.add('is-sel');
+      dpLabel.textContent = row.getAttribute('data-label');
+      dp.classList.remove('open');
+    });
+  });
+  ROOT.addEventListener('click', (e) => { if (!dp.contains(e.target)) dp.classList.remove('open'); });
+
+  // Site picker
+  const sp = ROOT.getElementById('sp');
+  const spBtn = ROOT.getElementById('spBtn');
+  const spLabel = ROOT.getElementById('spLabel');
+  spBtn.addEventListener('click', (e) => { e.stopPropagation(); sp.classList.toggle('open'); });
+  sp.querySelectorAll('.dp-row').forEach(row => {
+    row.addEventListener('click', () => {
+      sp.querySelectorAll('.dp-row').forEach(r => r.classList.remove('is-sel'));
+      row.classList.add('is-sel');
+      spLabel.textContent = row.getAttribute('data-label');
+      sp.classList.remove('open');
+    });
+  });
+  ROOT.addEventListener('click', (e) => { if (!sp.contains(e.target)) sp.classList.remove('open'); });
+
+  /* ===================== Trend chart ===================== */
+  const MONTHS = ['Aug 24','Sep 24','Oct 24','Nov 24','Dec 24','Jan 25','Feb 25','Mar 25','Apr 25','May 25','Jun 25','Jul 25','Aug 25','Sep 25','Oct 25','Nov 25','Dec 25','Jan 26','Feb 26','Mar 26','Apr 26','May 26','Jun 26','Jul 26'];
+  const METRICS = {
+    revenue:  { label: 'Revenue',   area: true,  zero: false,
+      data: [482,520,538,551,465,533,546,572,559,576,555,546,508,559,576,589,499,568,581,606,593,615,598,614] },
+    profit:   { label: 'Profit',    area: true,  zero: false,
+      data: [86,108,116,120,69,112,116,129,120,129,116,112,95,120,129,133,86,125,129,142,129,146,129,131.4] },
+    cashflow: { label: 'Cash flow', area: false, zero: true,
+      data: [34,60,52,77,-26,-52,64,86,43,69,39,26,17,-34,56,82,-43,-60,73,95,47,52,21,-46] }
+  };
+  const C_ACTUAL = getVar('--series-1'), C_PRIOR = '#008300', C_CRIT = getVar('--critical');
+  function getVar(n){ return getComputedStyle(HOST).getPropertyValue(n).trim(); }
+
+  const svg = ROOT.getElementById('trendSvg');
+  const tip = ROOT.getElementById('trendTip');
+  const NS = 'http://www.w3.org/2000/svg';
+  const VBW = 820, VBH = 300, ML = 46, MR = 56, MT = 16, MB = 30;
+  const PW = VBW - ML - MR, PH = VBH - MT - MB;
+  let curMetric = 'revenue', curRange = 12, pts = [], showPrior = true;
+
+  function fmt(v, m){ const s = (v < 0 ? '-£' : '£') + Math.abs(Math.round(v*10)/10); return s + (m.zero || true ? 'k' : ''); }
+  function windowIdx(range){
+    if (range === 'ytd') return [17, 23];
+    const n = +range; return [24 - n, 23];
+  }
+  function render(){
+    const m = METRICS[curMetric];
+    const [s, e] = windowIdx(curRange);
+    const idx = []; for (let i = s; i <= e; i++) idx.push(i);
+    const actual = idx.map(i => m.data[i]);
+    showPrior = (curRange !== 24) && (s - 12 >= 0);
+    const prior = showPrior ? idx.map(i => m.data[i - 12]) : null;
+
+    // y-domain — nice rounded ticks
+    let vals = actual.slice(); if (prior) vals = vals.concat(prior); if (m.zero) vals.push(0);
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    if (m.zero){ lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+    const span = (hi - lo) || 10;
+    const rawStep = span / 4;
+    const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    const norm = rawStep / mag;
+    const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+    lo = Math.floor(lo / step) * step;
+    hi = Math.ceil(hi / step) * step;
+    if (hi === lo) hi = lo + step;
+    const yOf = v => MT + (1 - (v - lo) / (hi - lo)) * PH;
+    const xOf = i => ML + (idx.length === 1 ? PW/2 : (i / (idx.length - 1)) * PW);
+
+    // ticks
+    const ticks = [];
+    for (let tv = lo; tv <= hi + step * 0.001; tv += step) ticks.push(Math.round(tv * 100) / 100);
+
+    let g = '';
+    // gridlines + y labels
+    ticks.forEach(tv => {
+      const y = yOf(tv);
+      const isZero = m.zero && Math.abs(tv) < (hi-lo)*0.02;
+      g += `<line x1="${ML}" y1="${y.toFixed(1)}" x2="${ML+PW}" y2="${y.toFixed(1)}" stroke="${isZero?getVar('--baseline'):getVar('--grid')}" stroke-width="1"/>`;
+      g += `<text x="${ML-8}" y="${(y+4).toFixed(1)}" text-anchor="end" font-size="11" fill="${getVar('--muted')}" font-family="system-ui,sans-serif">${fmtTick(tv, m)}</text>`;
+    });
+    // x labels
+    const xStep = Math.ceil(idx.length / 8);
+    idx.forEach((di, k) => {
+      if (k % xStep === 0 || k === idx.length - 1){
+        g += `<text x="${xOf(k).toFixed(1)}" y="${VBH-10}" text-anchor="middle" font-size="10.5" fill="${getVar('--muted')}" font-family="system-ui,sans-serif">${MONTHS[di]}</text>`;
+      }
+    });
+
+    // paths
+    const linePath = arr => arr.map((v,k)=>`${k?'L':'M'}${xOf(k).toFixed(1)},${yOf(v).toFixed(1)}`).join(' ');
+    if (m.area && !m.zero){
+      const areaP = linePath(actual) + ` L${xOf(actual.length-1).toFixed(1)},${yOf(lo).toFixed(1)} L${xOf(0).toFixed(1)},${yOf(lo).toFixed(1)} Z`;
+      g += `<path d="${areaP}" fill="${C_ACTUAL}" fill-opacity="0.10"/>`;
+    }
+    if (prior){
+      g += `<path d="${linePath(prior)}" fill="none" stroke="${C_PRIOR}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    }
+    g += `<path d="${linePath(actual)}" fill="none" stroke="${C_ACTUAL}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+
+    // end marker + label on actual
+    const lx = xOf(actual.length-1), ly = yOf(actual[actual.length-1]);
+    g += `<circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="4" fill="${C_ACTUAL}" stroke="${getVar('--surface')}" stroke-width="2"/>`;
+    g += `<text x="${(lx+8).toFixed(1)}" y="${(ly+4).toFixed(1)}" font-size="12" font-weight="700" fill="${getVar('--ink')}" font-family="system-ui,sans-serif">${fmtTick(actual[actual.length-1], m)}</text>`;
+
+    // crosshair placeholders
+    g += `<line id="cx" x1="0" y1="${MT}" x2="0" y2="${MT+PH}" stroke="${getVar('--muted')}" stroke-width="1" opacity="0"/>`;
+    g += `<circle id="cxp" r="4.5" fill="${C_PRIOR}" stroke="${getVar('--surface')}" stroke-width="2" opacity="0"/>`;
+    g += `<circle id="cxa" r="4.5" fill="${C_ACTUAL}" stroke="${getVar('--surface')}" stroke-width="2" opacity="0"/>`;
+    // hit overlay
+    g += `<rect id="cxhit" x="${ML}" y="${MT}" width="${PW}" height="${PH}" fill="transparent"/>`;
+
+    svg.innerHTML = g;
+
+    // store points
+    pts = idx.map((di, k) => ({
+      x: xOf(k), month: MONTHS[di],
+      va: actual[k], ya: yOf(actual[k]),
+      vp: prior ? prior[k] : null, yp: prior ? yOf(prior[k]) : null
+    }));
+
+    // legend + title + subtitle
+    const legend = ROOT.getElementById('trendLegend');
+    legend.innerHTML = `<span class="lk"><span class="ld" style="background:${C_ACTUAL}"></span>This year</span>` +
+      (showPrior ? `<span class="lk"><span class="ld" style="background:${C_PRIOR}"></span>Last year</span>` : '');
+    ROOT.getElementById('tcTitle').textContent = m.label;
+    const first = actual[0], last = actual[actual.length-1];
+    const chg = last - first, pct = first !== 0 ? Math.round(chg / Math.abs(first) * 100) : 0;
+    const up = chg >= 0; const goodUp = curMetric !== 'cashflow' ? up : up;
+    const cls = up ? 'up' : 'down'; const arrow = up ? '▲' : '▼';
+    const col = up ? getVar('--good-ink') : getVar('--critical-ink');
+    ROOT.getElementById('tcSub').innerHTML =
+      `<span class="delta" style="color:${col}">${arrow} ${up?'+':''}${fmtTick(chg,m)}</span> over ${curRange==='ytd'?'the year to date':(curRange+' months')} · now ${fmtTick(last,m)}`;
+
+    bindHover();
+  }
+  function fmtTick(v, m){
+    const r = Math.round(v*10)/10;
+    const num = (Math.abs(r) >= 1000) ? (r/1000).toFixed(1)+'m' : r + 'k';
+    return (r < 0 ? '-£' : '£') + num.replace('-','');
+  }
+  function bindHover(){
+    const hit = ROOT.getElementById('cxhit');
+    const cx = ROOT.getElementById('cx'), cxa = ROOT.getElementById('cxa'), cxp = ROOT.getElementById('cxp');
+    const move = ev => {
+      const rect = svg.getBoundingClientRect();
+      const px = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+      const vbX = px / rect.width * VBW;
+      let best = 0, bd = Infinity;
+      pts.forEach((p,i) => { const d = Math.abs(p.x - vbX); if (d < bd){ bd = d; best = i; } });
+      const p = pts[best];
+      cx.setAttribute('x1', p.x); cx.setAttribute('x2', p.x); cx.setAttribute('opacity','0.5');
+      cxa.setAttribute('cx', p.x); cxa.setAttribute('cy', p.ya); cxa.setAttribute('opacity','1');
+      if (p.vp != null){ cxp.setAttribute('cx', p.x); cxp.setAttribute('cy', p.yp); cxp.setAttribute('opacity','1'); }
+      else cxp.setAttribute('opacity','0');
+      const m = METRICS[curMetric];
+      let html = `<div class="tm">${p.month}</div>`;
+      html += `<div class="tr"><span class="k"><span class="dotc" style="background:${C_ACTUAL}"></span>This year</span><span class="v">${fmtTick(p.va,m)}</span></div>`;
+      if (p.vp != null) html += `<div class="tr"><span class="k"><span class="dotc" style="background:${C_PRIOR}"></span>Last year</span><span class="v">${fmtTick(p.vp,m)}</span></div>`;
+      tip.innerHTML = html;
+      tip.style.opacity = '1';
+      tip.style.left = (p.x / VBW * rect.width) + 'px';
+      tip.style.top = (Math.min(p.ya, p.yp ?? p.ya) / VBH * rect.height) + 'px';
+    };
+    const leave = () => { tip.style.opacity = '0'; cx.setAttribute('opacity','0'); cxa.setAttribute('opacity','0'); cxp.setAttribute('opacity','0'); };
+    hit.addEventListener('mousemove', move);
+    hit.addEventListener('mouseleave', leave);
+    hit.addEventListener('touchstart', move, {passive:true});
+    hit.addEventListener('touchmove', move, {passive:true});
+    hit.addEventListener('touchend', leave);
+  }
+  // controls
+  ROOT.getElementById('metricSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    ROOT.querySelectorAll('#metricSeg button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on'); curMetric = b.dataset.m; render();
+  });
+  ROOT.getElementById('rangeSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    ROOT.querySelectorAll('#rangeSeg button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on'); curRange = b.dataset.r === 'ytd' ? 'ytd' : +b.dataset.r; render();
+  });
+  ROOT.getElementById('themeBtn').addEventListener('click', () => setTimeout(render, 0));
+  render();
+
+  /* ===================== Head to Head ===================== */
+  const H2H_MONTHS = ['Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar','Apr','May','Jun','Jul'];
+  const SITES = {
+    group:      { label: 'Group average', short: 'Group avg',
+      rev:    [127,139.8,144,147.3,124.8,142,145.3,151.5,148.3,153.8,149.5,153.5],
+      profit: [23.8,30,32.3,33.3,21.5,31.3,32.3,35.5,32.3,36.5,32.3,32.9],
+      m: { revmo: 153.5, revchair: 2308, profchair: 494, margin: 21.4, util: 78, be: 377, pqs: 71, uda: 64 } },
+    harrogate:  { label: 'Harrogate Road', short: 'Harrogate',
+      rev:    [152,168,174,178,150,171,175,183,179,186,181,186],
+      profit: [34,43,46,48,31,45,47,52,48,55,48,48],
+      m: { revmo: 186, revchair: 2447, profchair: 632, margin: 25.8, util: 92, be: 356, pqs: 81, uda: 74 } },
+    bridgeside: { label: 'Bridgeside · Leeds', short: 'Bridgeside',
+      rev:    [118,130,134,137,116,132,135,141,138,143,139,142],
+      profit: [22,28,30,31,20,29,30,34,30,35,30,31.4],
+      m: { revmo: 142, revchair: 2490, profchair: 550, margin: 22.1, util: 72, be: 374, pqs: 74, uda: 64 } },
+    wakefield:  { label: 'Wakefield', short: 'Wakefield',
+      rev:    [104,115,118,122,103,117,119,124,122,126,123,128],
+      profit: [21,26,28,29,19,28,29,32,29,33,29,30],
+      m: { revmo: 128, revchair: 2246, profchair: 526, margin: 23.4, util: 77, be: 368, pqs: 72, uda: 71 } },
+    kirkstall:  { label: 'Kirkstall', short: 'Kirkstall',
+      rev:    [134,146,150,152,130,148,152,158,154,160,155,158],
+      profit: [18,23,25,25,16,23,23,24,22,23,22,22],
+      m: { revmo: 158, revchair: 2079, profchair: 289, margin: 13.9, util: 71, be: 413, pqs: 58, uda: 58 } }
+  };
+  const fmtBE = mins => { const tot = 540 + mins; const hh = Math.floor(tot/60), mm = tot%60; const h12 = ((hh+11)%12)+1; return h12 + ':' + String(mm).padStart(2,'0') + (hh >= 12 ? 'pm' : 'am'); };
+  const H2H_METRICS = [
+    { k:'revmo',     name:'Revenue / month',        fmt:v=>'£'+v+'k',            hib:true  },
+    { k:'revchair',  name:'Rev / chair / day',      fmt:v=>'£'+v.toLocaleString('en-GB'), hib:true },
+    { k:'profchair', name:'Profit / chair / day',   fmt:v=>'£'+v,                hib:true  },
+    { k:'margin',    name:'Operating margin',       fmt:v=>v+'%',                hib:true  },
+    { k:'util',      name:'Chair utilisation',      fmt:v=>v+'%',                hib:true  },
+    { k:'be',        name:'Break-even time',        fmt:fmtBE,                   hib:false },
+    { k:'pqs',       name:'Profit Quality Score',   fmt:v=>v+' / 100',           hib:true  },
+    { k:'uda',       name:'UDA delivered (vs 70%)', fmt:v=>v+'%',                hib:true  }
+  ];
+  let h2hMetric = 'rev';
+  const h2hA = ROOT.getElementById('h2hA'), h2hB = ROOT.getElementById('h2hB');
+
+  function h2hGap(met, a, b){
+    let diff, txt;
+    if (met.k === 'be'){ diff = b - a; const mins = Math.abs(a-b); txt = (a<b?'−':'+') + mins + ' min'; }
+    else { diff = met.hib ? a - b : b - a;
+      const d = Math.round((a-b)*10)/10;
+      txt = (d>0?'+':'') + (met.k==='revmo'?'£'+d+'k': met.k==='revchair'||met.k==='profchair' ? '£'+d : d + (met.k==='pqs'?' pts':'pt')); }
+    const cls = Math.abs(diff) < 0.01 ? 'even' : (diff > 0 ? 'good' : 'bad');
+    return { txt, cls };
+  }
+
+  function renderH2H(){
+    const A = SITES[h2hA.value], B = SITES[h2hB.value];
+    // table
+    let t = '<div class="cmphead"><span>Metric</span><span>' + A.short + '</span><span>' + B.short + '</span><span>Gap</span></div>';
+    H2H_METRICS.forEach(met => {
+      const a = A.m[met.k], b = B.m[met.k];
+      const g = h2hGap(met, a, b);
+      t += '<div class="cmprow"><span class="mname">' + met.name + '</span><span class="mv">' + met.fmt(a) + '</span><span class="mv" style="color:var(--ink-2)">' + met.fmt(b) + '</span><span class="gap ' + g.cls + '">' + g.txt + '</span></div>';
+    });
+    ROOT.getElementById('h2hTable').innerHTML = t;
+
+    // chart
+    const key = h2hMetric === 'rev' ? 'rev' : 'profit';
+    const sa = A[key], sb = B[key];
+    const W = 460, H = 260, mL = 42, mR = 14, mT = 14, mB = 26;
+    const pw = W - mL - mR, ph = H - mT - mB;
+    let lo = Math.min(...sa, ...sb), hi = Math.max(...sa, ...sb);
+    const pad = (hi - lo) * 0.12 || 5; lo -= pad; hi += pad;
+    const y = v => mT + (1 - (v - lo) / (hi - lo)) * ph;
+    const x = i => mL + i / 11 * pw;
+    const CA = getVar('--series-1'), CB = '#008300';
+    let g = '';
+    for (let i = 0; i <= 3; i++){
+      const tv = lo + (hi - lo) * i / 3, ty = y(tv);
+      g += '<line x1="' + mL + '" y1="' + ty.toFixed(1) + '" x2="' + (mL+pw) + '" y2="' + ty.toFixed(1) + '" stroke="' + getVar('--grid') + '" stroke-width="1"/>';
+      g += '<text x="' + (mL-7) + '" y="' + (ty+4).toFixed(1) + '" text-anchor="end" font-size="10.5" fill="' + getVar('--muted') + '" font-family="system-ui,sans-serif">£' + Math.round(tv) + 'k</text>';
+    }
+    H2H_MONTHS.forEach((mo, i) => { if (i % 2 === 0) g += '<text x="' + x(i).toFixed(1) + '" y="' + (H-8) + '" text-anchor="middle" font-size="10" fill="' + getVar('--muted') + '" font-family="system-ui,sans-serif">' + mo + '</text>'; });
+    const path = arr => arr.map((v,i)=> (i?'L':'M') + x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
+    g += '<path d="' + path(sb) + '" fill="none" stroke="' + CB + '" stroke-width="2" stroke-dasharray="5 4" stroke-linecap="round"/>';
+    g += '<path d="' + path(sa) + '" fill="none" stroke="' + CA + '" stroke-width="2.5" stroke-linecap="round"/>';
+    g += '<circle cx="' + x(11).toFixed(1) + '" cy="' + y(sa[11]).toFixed(1) + '" r="4" fill="' + CA + '" stroke="' + getVar('--surface') + '" stroke-width="2"/>';
+    g += '<circle cx="' + x(11).toFixed(1) + '" cy="' + y(sb[11]).toFixed(1) + '" r="4" fill="' + CB + '" stroke="' + getVar('--surface') + '" stroke-width="2"/>';
+    ROOT.getElementById('h2hSvg').innerHTML = g;
+    ROOT.getElementById('h2hChartTitle').textContent = (h2hMetric === 'rev' ? 'Monthly revenue' : 'Monthly profit') + ' · last 12 months';
+    ROOT.getElementById('h2hLegend').innerHTML =
+      '<span class="lk"><span class="ld" style="background:' + CA + '"></span>' + A.short + '</span>' +
+      '<span class="lk"><span class="ld" style="background:' + CB + '"></span>' + B.short + '</span>';
+
+    // verdict
+    const pcGap = A.m.profchair - B.m.profchair;
+    const chairs = { group: 3.5, harrogate: 4, bridgeside: 3, wakefield: 3, kirkstall: 4 }[h2hA.value];
+    const annual = Math.round(Math.abs(pcGap) * chairs * 19 * 12 / 1000);
+    let v;
+    if (h2hA.value === h2hB.value) v = '<b>Same site on both sides.</b> Pick a different comparison to see the gap.';
+    else if (pcGap < 0) v = '<b>' + A.short + ' makes £' + Math.abs(pcGap) + ' less per chair per day than ' + B.short + '.</b> At ' + chairs + ' chairs, closing that gap is worth ~£' + annual + 'k a year.';
+    else v = '<b>' + A.short + ' makes £' + pcGap + ' more per chair per day than ' + B.short + '.</b> That edge is worth ~£' + annual + 'k a year — its playbook is what the other sites should copy.';
+    ROOT.getElementById('h2hVerdict').innerHTML = '<span class="vi">!</span><div>' + v + '</div>';
+  }
+  h2hA.addEventListener('change', renderH2H);
+  h2hB.addEventListener('change', renderH2H);
+  ROOT.getElementById('h2hMetricSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    ROOT.querySelectorAll('#h2hMetricSeg button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on'); h2hMetric = b.dataset.hm; renderH2H();
+  });
+  renderH2H();
+
+  /* ===================== Acquisition ramp ===================== */
+  (function(){
+    const caseRev = [78,84,90,96,101,106,110,114,117,120,122,124];
+    const actual = [71,80,89];
+    const W = 420, H = 150, mL = 36, mR = 12, mT = 12, mB = 22;
+    const pw = W - mL - mR, ph = H - mT - mB;
+    const lo = 65, hi = 130;
+    const y = v => mT + (1 - (v - lo) / (hi - lo)) * ph;
+    const x = i => mL + i / 11 * pw;
+    let g = '';
+    [70,90,110,130].forEach(tv => {
+      g += '<line x1="' + mL + '" y1="' + y(tv).toFixed(1) + '" x2="' + (mL+pw) + '" y2="' + y(tv).toFixed(1) + '" stroke="' + getVar('--grid') + '" stroke-width="1"/>';
+      g += '<text x="' + (mL-6) + '" y="' + (y(tv)+3.5).toFixed(1) + '" text-anchor="end" font-size="9.5" fill="' + getVar('--muted') + '" font-family="system-ui,sans-serif">\u00a3' + tv + 'k</text>';
+    });
+    ['May','Jul','Sep','Nov','Jan','Mar'].forEach((lab,k) => {
+      g += '<text x="' + x(k*2).toFixed(1) + '" y="' + (H-7) + '" text-anchor="middle" font-size="9.5" fill="' + getVar('--muted') + '" font-family="system-ui,sans-serif">' + lab + '</text>';
+    });
+    const path = (arr, off) => arr.map((v,i)=> (i?'L':'M') + x(i+(off||0)).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
+    g += '<path d="' + path(caseRev) + '" fill="none" stroke="#008300" stroke-width="2" stroke-dasharray="5 4" stroke-linecap="round"/>';
+    g += '<path d="' + path(actual) + '" fill="none" stroke="' + getVar('--series-1') + '" stroke-width="2.5" stroke-linecap="round"/>';
+    g += '<circle cx="' + x(2).toFixed(1) + '" cy="' + y(89).toFixed(1) + '" r="4" fill="' + getVar('--series-1') + '" stroke="' + getVar('--surface') + '" stroke-width="2"/>';
+    ROOT.getElementById('rampSvg').innerHTML = g;
+  })();
+
+  /* ===================== Folds ===================== */
+  ROOT.querySelectorAll('.collapsible > .sec-head').forEach(h => {
+    h.addEventListener('click', () => {
+      const s = h.parentElement;
+      s.classList.toggle('collapsed');
+      const f = h.querySelector('.foldind');
+      if (f) f.textContent = s.classList.contains('collapsed') ? '\u25b8 show' : '\u25be hide';
+    });
+  });
+  const kd = ROOT.getElementById('kdrill');
+  kd.querySelector('.effhead').addEventListener('click', () => {
+    kd.classList.toggle('folded');
+    ROOT.getElementById('kdchev').textContent = kd.classList.contains('folded') ? '\u25b8 show' : '\u25be hide';
+  });
+
+  /* ===================== Cash runway ===================== */
+  (function(){
+    const wk = ['20 Jul','27 Jul','3 Aug','10 Aug','17 Aug','24 Aug','31 Aug','7 Sep','14 Sep','21 Sep','28 Sep','5 Oct','12 Oct'];
+    const cash = [276,264,255,249,238,224,210,189,192,262,288,174,196];
+    const FLOOR = 180;
+    const W = 820, H = 250, mL = 46, mR = 16, mT = 18, mB = 30;
+    const pw = W - mL - mR, ph = H - mT - mB;
+    const lo = 150, hi = 300;
+    const y = v => mT + (1 - (v - lo) / (hi - lo)) * ph;
+    const x = i => mL + i / 12 * pw;
+    let g = '';
+    [150,200,250,300].forEach(tv => {
+      g += '<line x1="' + mL + '" y1="' + y(tv).toFixed(1) + '" x2="' + (mL+pw) + '" y2="' + y(tv).toFixed(1) + '" stroke="' + getVar('--grid') + '" stroke-width="1"/>';
+      g += '<text x="' + (mL-8) + '" y="' + (y(tv)+4).toFixed(1) + '" text-anchor="end" font-size="11" fill="' + getVar('--muted') + '" font-family="system-ui,sans-serif">\u00a3' + tv + 'k</text>';
+    });
+    wk.forEach((w, i) => { if (i % 2 === 0) g += '<text x="' + x(i).toFixed(1) + '" y="' + (H-10) + '" text-anchor="middle" font-size="10" fill="' + getVar('--muted') + '" font-family="system-ui,sans-serif">' + w + '</text>'; });
+    g += '<line x1="' + mL + '" y1="' + y(FLOOR).toFixed(1) + '" x2="' + (mL+pw) + '" y2="' + y(FLOOR).toFixed(1) + '" stroke="' + getVar('--critical') + '" stroke-width="1.5" stroke-dasharray="6 5" opacity="0.7"/>';
+    const path = cash.map((v,i)=> (i?'L':'M') + x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
+    g += '<path d="' + path + ' L' + x(12).toFixed(1) + ',' + y(lo).toFixed(1) + ' L' + x(0).toFixed(1) + ',' + y(lo).toFixed(1) + ' Z" fill="' + getVar('--series-1') + '" fill-opacity="0.08"/>';
+    g += '<path d="' + path + '" fill="none" stroke="' + getVar('--series-1') + '" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>';
+    [[7,'8 Sep \u00b7 \u00a3189k',-14],[11,'CT \u2212\u00a3118k \u00b7 \u00a3174k',18]].forEach(([i,lab,dy]) => {
+      g += '<circle cx="' + x(i).toFixed(1) + '" cy="' + y(cash[i]).toFixed(1) + '" r="4.5" fill="' + getVar('--critical') + '" stroke="' + getVar('--surface') + '" stroke-width="2"/>';
+      g += '<text x="' + x(i).toFixed(1) + '" y="' + (y(cash[i])+dy).toFixed(1) + '" text-anchor="middle" font-size="11" font-weight="700" fill="' + getVar('--critical-ink') + '" font-family="system-ui,sans-serif">' + lab + '</text>';
+    });
+    ROOT.getElementById('cashSvg').innerHTML = g;
+  })();
+
+}
+
+export default function GroupDashboard() {
+  const hostRef = useRef(null);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const root = host.shadowRoot || host.attachShadow({ mode: 'open' });
+    root.innerHTML = '<style>' + STYLE + '</style>' + BODY;
+    try {
+      initGroupDashboard(root, host);
+    } catch (err) {
+      console.error('[GroupDashboard] init failed:', err);
+    }
+    return () => { root.innerHTML = ''; };
+  }, []);
+
+  // The host is a plain block; all visual styling lives inside the shadow root.
+  return <div ref={hostRef} data-theme="light" style={{ display: 'block' }} />;
+}

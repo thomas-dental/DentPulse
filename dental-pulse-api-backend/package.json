@@ -1,0 +1,29 @@
+{
+  "name": "dentpulse-superadmin",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "concurrently \"npm run dev -w backend\" \"npm run dev -w frontend\"",
+    "dev:backend": "npm run dev -w backend",
+    "dev:frontend": "npm run dev -w frontend",
+    "install:all": "npm install",
+    "clean": "rm -rf node_modules backend/node_modules frontend/node_modules"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.95.3",
+    "jsonwebtoken": "^9.0.3",
+    "jwks-rsa": "^4.0.1",
+    "node-cron": "^4.5.0",
+    "nodemailer": "^8.0.7",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

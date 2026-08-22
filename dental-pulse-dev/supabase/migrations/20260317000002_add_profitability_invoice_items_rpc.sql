@@ -1,0 +1,130 @@
+-- RPC function: get_profitability_invoice_items
+-- Matches Dentally Income Report exactly:
+--   paid invoices (is_paid=true) filtered by paid_date range + location
+--   ALL invoice line items included (LEFT JOIN LATERAL to treatments for cost enrichment)
+--   Each line item matches at most ONE treatment (no duplicates via LIMIT 1)
+--   Uses item_name from invoice when no treatment match found
+--   Uses SUM(quantity) for treatment count (matches Dentally's quantity column)
+--   Treats quantity=0 or NULL as 1 (Dentally counts every item at least once)
+drop function if exists get_profitability_invoice_items(uuid, date, date, uuid);
+
+create or replace function get_profitability_invoice_items(
+  p_organization_id uuid,
+  p_from_date date,
+  p_to_date date,
+  p_location_id uuid default null
+)
+returns table (
+  treatment_id uuid,
+  treatment_name text,
+  treatment_code text,
+  category_name text,
+  paid_month text,
+  no_of_treatments bigint,
+  total_revenue numeric,
+  avg_income numeric,
+  material_cost numeric,
+  lab_bill numeric,
+  therapist_pay_rate numeric,
+  percent_fees numeric,
+  finance_fee numeric,
+  hourly_rate numeric,
+  duration_minutes numeric
+)
+language sql
+stable
+security definer
+as $$
+  with line_items_with_treatment as (
+    select
+      piili.id as line_id,
+      -- Treat quantity 0 or NULL as 1 (Dentally counts every line item at least once)
+      case when coalesce(piili.quantity, 0) > 0 then piili.quantity else 1 end as qty,
+      piili.line_amount,
+      piili.item_name,
+      piili.sundry_id,
+      pii.paid_date,
+      -- Pick at most one matching treatment per line item
+      t_match.id as matched_treatment_id,
+      t_match.treatment_name as matched_treatment_name,
+      t_match.treatment_code as matched_treatment_code,
+      t_match.material_cost as matched_material_cost,
+      t_match.lab_bill as matched_lab_bill,
+      t_match.therapist_pay_rate as matched_therapist_pay_rate,
+      t_match.percent_fees as matched_percent_fees,
+      t_match.finance_fee as matched_finance_fee,
+      t_match.hourly_rate as matched_hourly_rate,
+      t_match.duration_minutes as matched_duration_minutes,
+      t_match.category_id as matched_category_id
+    from
+      platform_integration_invoices pii
+      join platform_integration_invoice_line_items piili
+        on piili.organization_id = pii.organization_id
+        and piili.invoice_id = pii.id
+      -- LATERAL ensures at most ONE treatment match per line item
+      left join lateral (
+        select t.*
+        from treatments t
+        where t.organization_id = pii.organization_id
+          and t.deleted_at is null
+          and (
+            (piili.treatment_id is not null and t.external_id = piili.treatment_id::integer)
+            or
+            (piili.treatment_id is null and lower(trim(t.treatment_name)) = lower(trim(piili.item_name)))
+          )
+        order by
+          -- Prefer treatment_id match over name match
+          case when piili.treatment_id is not null and t.external_id = piili.treatment_id::integer then 0 else 1 end,
+          -- Prefer active treatments
+          case when t.is_active then 0 else 1 end
+        limit 1
+      ) t_match on true
+    where
+      pii.organization_id = p_organization_id
+      and pii.is_paid = true
+      and pii.deleted_at is null
+      and pii.paid_date >= p_from_date
+      and pii.paid_date <= p_to_date
+      and (
+        p_location_id is null
+        or pii.location_id = p_location_id
+      )
+  )
+  select
+    li.matched_treatment_id as treatment_id,
+    coalesce(li.matched_treatment_name, trim(li.item_name)) as treatment_name,
+    coalesce(li.matched_treatment_code, '') as treatment_code,
+    coalesce(tc.name, '-') as category_name,
+    to_char(li.paid_date, 'YYYY-MM') as paid_month,
+    sum(li.qty)::bigint as no_of_treatments,
+    coalesce(sum(li.line_amount), 0) as total_revenue,
+    case when sum(li.qty) > 0
+      then coalesce(sum(li.line_amount), 0) / sum(li.qty)
+      else 0
+    end as avg_income,
+    coalesce(li.matched_material_cost, 0) as material_cost,
+    coalesce(li.matched_lab_bill, 0) as lab_bill,
+    coalesce(li.matched_therapist_pay_rate, 0) as therapist_pay_rate,
+    coalesce(li.matched_percent_fees, 0) as percent_fees,
+    coalesce(li.matched_finance_fee, 0) as finance_fee,
+    coalesce(li.matched_hourly_rate, 0) as hourly_rate,
+    coalesce(li.matched_duration_minutes, 0) as duration_minutes
+  from
+    line_items_with_treatment li
+    left join treatment_categories tc
+      on tc.organization_id = p_organization_id
+      and tc.id = li.matched_category_id
+      and tc.deleted_at is null
+  where
+    -- Exclude sundry items (matches Dentally's "Sundries: Excluded" default)
+    li.sundry_id is null
+  group by
+    li.matched_treatment_id, li.matched_treatment_name, trim(li.item_name),
+    li.matched_treatment_code, tc.name,
+    to_char(li.paid_date, 'YYYY-MM'),
+    li.matched_material_cost, li.matched_lab_bill, li.matched_therapist_pay_rate,
+    li.matched_percent_fees, li.matched_finance_fee, li.matched_hourly_rate,
+    li.matched_duration_minutes
+  order by
+    total_revenue desc, treatment_name, paid_month;
+$$;

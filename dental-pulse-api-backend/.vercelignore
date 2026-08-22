@@ -1,0 +1,11 @@
+# Ignore frontend when deploying backend
+frontend/
+
+# Ignore development files
+*.log
+.env.local
+.DS_Store
+
+# Test files
+**/*.test.js
+**/*.spec.js

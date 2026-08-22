@@ -1,0 +1,213 @@
+/* ============================================================
+   Membership Plan Insights — preview tabs (Overview / Members /
+   Clinicians / Capacity / Margin / Scenarios / Settings), ported
+   from a design mockup. Palette = the mockup's EXACT values, kept
+   scoped under .mpi so it never leaks into the rest of the app.
+   Typography stays Inter (the app's font) — see house note in
+   GroupDashboard.css for why the mockup's own fonts aren't loaded.
+   ============================================================ */
+
+.mpi {
+  --mpi-ink: #1b2a2e;
+  --mpi-ink-2: #27393e;
+  --mpi-ink-3: #3d5257;
+  /* Page canvas matches the app's own background (not the mockup's warm
+     cream) so this section doesn't seam against the rest of the page. */
+  --mpi-canvas: hsl(var(--background));
+  --mpi-surface: #ffffff;
+  --mpi-line: #e4e2dc;
+  --mpi-line-2: #d2cfc7;
+  --mpi-verd: #2e7d6e;
+  --mpi-verd-soft: #e2efeb;
+  --mpi-verd-deep: #1f5a4f;
+  --mpi-brick: #a8443a;
+  --mpi-brick-soft: #f7e8e5;
+  --mpi-amber: #9c6f26;
+  --mpi-amber-soft: #f7eedc;
+  --mpi-moss: #4a6b32;
+  --mpi-moss-soft: #eaf0e1;
+  --mpi-t1: #22201d;
+  --mpi-t2: #63605a;
+  --mpi-t3: #97938b;
+  --mpi-r: 8px;
+
+  background: var(--mpi-canvas);
+  color: var(--mpi-t1);
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  border-radius: var(--mpi-r);
+}
+
+.dark .mpi {
+  --mpi-ink: #eef3f2;
+  --mpi-ink-2: #d3dfdd;
+  --mpi-ink-3: #a9bcba;
+  --mpi-canvas: hsl(var(--background));
+  --mpi-surface: #1c2224;
+  --mpi-line: #2b3336;
+  --mpi-line-2: #384245;
+  --mpi-verd: #4fb39e;
+  --mpi-verd-soft: #16332d;
+  --mpi-verd-deep: #7fd2bf;
+  --mpi-brick: #dd8479;
+  --mpi-brick-soft: #3a201d;
+  --mpi-amber: #dcae5f;
+  --mpi-amber-soft: #392c15;
+  --mpi-moss: #9bc178;
+  --mpi-moss-soft: #263420;
+  --mpi-t1: #eef1ef;
+  --mpi-t2: #b3b0a7;
+  --mpi-t3: #82807a;
+}
+
+.mpi * { box-sizing: border-box; }
+.mpi .num { font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+/* ---------- scope bar (site select + group/single toggle) ---------- */
+.mpi .mpi-scopebar { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 4px; flex-wrap: wrap; }
+.mpi .mpi-eyebrow { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--mpi-t3); margin-bottom: 6px; }
+.mpi .mpi-title { font-size: 21px; font-weight: 600; letter-spacing: -0.02em; color: var(--mpi-ink); }
+.mpi .mpi-sub { font-size: 12.5px; color: var(--mpi-t2); margin-top: 3px; }
+.mpi .mpi-seg { display: inline-flex; background: var(--mpi-ink-2); border-radius: var(--mpi-r); padding: 2px; }
+.mpi .mpi-seg button { all: unset; cursor: pointer; text-align: center; font-size: 11.5px; padding: 5px 12px; border-radius: 6px; color: #a9bcba; }
+.mpi .mpi-seg button[aria-pressed="true"] { background: var(--mpi-ink-3); color: #fff; font-weight: 500; }
+.mpi .mpi-badge-sample { font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 8px; border-radius: 20px; background: var(--mpi-amber-soft); color: var(--mpi-amber); white-space: nowrap; }
+
+/* ---------- cards / stats ---------- */
+.mpi .mpi-card { background: var(--mpi-surface); border: 1px solid var(--mpi-line); border-radius: 12px; padding: 17px 19px; }
+.mpi .mpi-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 11px; }
+.mpi .mpi-stat { background: var(--mpi-surface); border: 1px solid var(--mpi-line); border-radius: 12px; padding: 14px 16px; }
+.mpi .mpi-stat .k { font-size: 12px; color: var(--mpi-t2); margin-bottom: 6px; }
+.mpi .mpi-stat .v { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; color: var(--mpi-ink); }
+.mpi .mpi-stat .n { font-size: 11.5px; margin-top: 5px; color: var(--mpi-t3); }
+.mpi .mpi-up { color: var(--mpi-moss); }
+.mpi .mpi-down { color: var(--mpi-brick); }
+
+/* ---------- ribbon ---------- */
+.mpi .mpi-ribbon { display: flex; height: 32px; border-radius: var(--mpi-r); overflow: hidden; border: 1px solid var(--mpi-line); }
+.mpi .mpi-ribbon i { display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 11.5px; font-weight: 500; overflow: hidden; white-space: nowrap; }
+.mpi .rb-net { background: var(--mpi-verd); color: #fff; }
+.mpi .rb-fee { background: var(--mpi-brick); color: #fff; }
+.mpi .rb-fail { background: var(--mpi-amber); color: #fff; }
+.mpi .mpi-ribkey { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+.mpi .mpi-ribkey div { font-size: 11.5px; color: var(--mpi-t2); display: flex; align-items: center; gap: 6px; }
+.mpi .mpi-sw { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+
+/* ---------- bars ---------- */
+.mpi .mpi-bars { display: flex; flex-direction: column; gap: 9px; }
+.mpi .mpi-bline { display: grid; grid-template-columns: 140px 1fr 58px; gap: 11px; align-items: center; font-size: 12.5px; }
+.mpi button.mpi-bline-clickable { width: 100%; background: none; border: 0; padding: 3px 4px; margin: -3px -4px; border-radius: 6px; cursor: pointer; font: inherit; text-align: left; }
+.mpi button.mpi-bline-clickable:hover { background: color-mix(in srgb, var(--mpi-surface) 92%, var(--mpi-ink)); }
+.mpi .mpi-btrack { height: 16px; background: var(--mpi-line); border-radius: 4px; overflow: hidden; display: flex; }
+.mpi .mpi-bseg { height: 100%; }
+.mpi .mpi-bval { text-align: right; font-size: 12.5px; color: var(--mpi-t2); }
+
+/* ---------- tables ---------- */
+.mpi table.mpi-tb { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.mpi table.mpi-tb th { font-size: 10.5px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--mpi-t3); text-align: right; padding: 0 8px 9px 0; font-weight: 400; }
+.mpi table.mpi-tb th:first-child, .mpi table.mpi-tb th.l { text-align: left; }
+.mpi table.mpi-tb td { padding: 9px 8px 9px 0; border-top: 1px solid var(--mpi-line); text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; }
+.mpi table.mpi-tb td:first-child { text-align: left; font-size: 13.5px; }
+.mpi table.mpi-tb td.sitecol { color: var(--mpi-t2); text-align: left; font-size: 12.5px; }
+.mpi table.mpi-tb tr.tot td { border-top: 1.5px solid var(--mpi-line-2); font-weight: 600; }
+.mpi table.mpi-tb tbody tr:hover td { background: color-mix(in srgb, var(--mpi-surface) 92%, var(--mpi-ink)); }
+
+/* Roomier spacing for the per-visit detail tables (Cost to Serve) — the
+   default 8px column gap and 9px row padding read cramped when two of
+   these tables sit side by side for direct row-by-row comparison. Columns
+   get a wider gap (the last one wider still, to also clear the scroll
+   container's own scrollbar), rows get taller padding, and the header +
+   first column get a left inset so MEMBER / the member names aren't flush
+   against the card's edge. */
+.mpi table.mpi-tb.mpi-tb-roomy th { padding: 10px 22px 11px 0; }
+.mpi table.mpi-tb.mpi-tb-roomy td { padding: 12px 22px 12px 0; }
+.mpi table.mpi-tb.mpi-tb-roomy th:first-child,
+.mpi table.mpi-tb.mpi-tb-roomy td:first-child { padding-left: 12px; }
+.mpi table.mpi-tb.mpi-tb-roomy th:last-child,
+.mpi table.mpi-tb.mpi-tb-roomy td:last-child { padding-right: 26px; }
+
+/* ---------- ledger ---------- */
+.mpi table.mpi-led { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.mpi table.mpi-led td { padding: 8px 0; border-bottom: 1px solid var(--mpi-line); }
+.mpi table.mpi-led tr:last-child td { border-bottom: 0; }
+.mpi table.mpi-led td:first-child { color: var(--mpi-t2); }
+.mpi table.mpi-led td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.mpi table.mpi-led tr.tot td { border-top: 1.5px solid var(--mpi-line-2); border-bottom: 0; padding-top: 11px; font-weight: 600; color: var(--mpi-ink); }
+
+/* ---------- worklist rows ---------- */
+.mpi .mpi-rows { border: 1px solid var(--mpi-line); border-radius: 12px; overflow: hidden; background: var(--mpi-surface); }
+.mpi .mpi-rowhead, .mpi .mpi-row { display: grid; grid-template-columns: 1.5fr 0.45fr 1.6fr 0.55fr 0.5fr; gap: 11px; padding: 11px 16px; align-items: center; }
+.mpi .mpi-rowhead { font-size: 10.5px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--mpi-t3); background: color-mix(in srgb, var(--mpi-surface) 96%, var(--mpi-ink)); border-bottom: 1px solid var(--mpi-line); }
+.mpi .mpi-row { border-bottom: 1px solid var(--mpi-line); font-size: 13.5px; }
+.mpi .mpi-row:last-child { border-bottom: 0; }
+.mpi .mpi-row:hover { background: color-mix(in srgb, var(--mpi-surface) 94%, var(--mpi-ink)); }
+.mpi .mpi-who b { font-weight: 500; display: block; }
+.mpi .mpi-who a { text-decoration: none; }
+.mpi .mpi-who a:hover b { color: var(--mpi-verd); text-decoration: underline; }
+.mpi .mpi-who span { font-size: 11px; color: var(--mpi-t3); }
+.mpi .mpi-why span { font-size: 11.5px; color: var(--mpi-t3); display: block; margin-top: 3px; }
+.mpi .mpi-rt { text-align: right; color: var(--mpi-t2); font-size: 12.5px; }
+.mpi .mpi-score { text-align: right; font-size: 13px; font-weight: 600; }
+
+/* ---------- tags / chips ---------- */
+.mpi .mpi-tag { display: inline-block; font-size: 11px; font-weight: 500; padding: 2.5px 8px; border-radius: 5px; white-space: nowrap; }
+.mpi .t-risk { background: var(--mpi-brick-soft); color: var(--mpi-brick); }
+.mpi .t-warn { background: var(--mpi-amber-soft); color: var(--mpi-amber); }
+.mpi .t-good { background: var(--mpi-moss-soft); color: var(--mpi-moss); }
+.mpi .t-info { background: var(--mpi-verd-soft); color: var(--mpi-verd-deep); }
+.mpi .mpi-chips { display: flex; gap: 7px; flex-wrap: wrap; }
+.mpi .mpi-chip { all: unset; cursor: pointer; font-size: 12.5px; padding: 6px 13px; border-radius: 20px; border: 1px solid var(--mpi-line-2); color: var(--mpi-t2); background: var(--mpi-surface); transition: all 0.12s; }
+.mpi .mpi-chip:hover { border-color: var(--mpi-t3); }
+.mpi .mpi-chip[aria-pressed="true"] { background: var(--mpi-ink); border-color: var(--mpi-ink); color: #fff; }
+.mpi .mpi-chip b { font-weight: 600; margin-left: 5px; opacity: 0.75; }
+
+/* ---------- kv rows / plan map ---------- */
+.mpi .mpi-kv { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; font-size: 13.5px; border-bottom: 1px solid var(--mpi-line); }
+.mpi .mpi-kv:last-child { border-bottom: 0; }
+.mpi .mpi-kv span:first-child { color: var(--mpi-t2); }
+.mpi .mpi-kv span:last-child { font-size: 13px; }
+.mpi .mpi-pill { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 500; }
+.mpi .p-on { background: var(--mpi-moss-soft); color: var(--mpi-moss); }
+.mpi .mpi-map { display: grid; grid-template-columns: 1.5fr 1fr 1.1fr; gap: 10px; font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--mpi-line); }
+.mpi .mpi-map:last-child { border-bottom: 0; }
+.mpi .mpi-map.h { font-size: 10.5px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--mpi-t3); border-bottom: 1px solid var(--mpi-line-2); }
+
+/* ---------- notes ---------- */
+.mpi .mpi-note { border-radius: var(--mpi-r); padding: 12px 15px; font-size: 13px; display: flex; gap: 11px; align-items: center; line-height: 1.55; }
+.mpi .n-info { background: var(--mpi-verd-soft); color: var(--mpi-verd-deep); }
+.mpi .n-warn { background: var(--mpi-amber-soft); color: var(--mpi-amber); }
+.mpi .n-bad { background: var(--mpi-brick-soft); color: var(--mpi-brick); }
+.mpi .mpi-note .mk { font-weight: 700; flex: none; }
+.mpi .mpi-note .tx { flex: 1; }
+
+/* ---------- sliders (labels around shadcn Slider) ---------- */
+.mpi .mpi-lever { display: flex; align-items: center; gap: 14px; }
+.mpi .mpi-lever label { font-size: 13px; color: var(--mpi-t2); width: 140px; flex: none; }
+.mpi .mpi-lever output { font-size: 13px; font-weight: 600; width: 64px; text-align: right; flex: none; color: var(--mpi-ink); }
+
+.mpi .mpi-betrack { height: 11px; border-radius: 6px; overflow: hidden; display: flex; background: var(--mpi-moss-soft); border: 1px solid var(--mpi-line); margin-top: 13px; }
+.mpi .mpi-bebar { background: var(--mpi-brick); transition: width 0.18s ease; }
+.mpi .mpi-belabels { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--mpi-t3); margin-top: 7px; }
+
+/* ---------- layout helpers (mirrors mockup's .two / .mb / .subhead) ---------- */
+/* align-items: start — without it, grid's default "stretch" forces every
+   card in the row to the height of its tallest sibling (e.g. Hygiene
+   visits' extra subhead line), leaving dead empty space at the bottom of
+   any shorter card instead of letting each card size to its own content. */
+.mpi .mpi-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 11px; align-items: start; }
+.mpi .mpi-three { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 11px; align-items: start; }
+.mpi .mpi-mb { margin-bottom: 11px; }
+.mpi .mpi-subhead { font-size: 12px; color: var(--mpi-t2); margin: -3px 0 11px; }
+
+@media (max-width: 800px) {
+  .mpi .mpi-rowhead, .mpi .mpi-row { grid-template-columns: 1.4fr 1.6fr 0.5fr; }
+  .mpi .mpi-rowhead span:nth-child(2), .mpi .mpi-rowhead span:nth-child(4), .mpi .mpi-row .mpi-pl, .mpi .mpi-row .mpi-rt { display: none; }
+  .mpi .mpi-bline { grid-template-columns: 100px 1fr 50px; }
+  .mpi .mpi-two { grid-template-columns: 1fr; }
+  .mpi .mpi-three { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mpi * { transition: none !important; }
+}

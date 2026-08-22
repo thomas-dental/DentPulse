@@ -1,0 +1,48 @@
+project_id = "doaouezuovagzjsyfmca"
+
+[functions.ai-summary]
+verify_jwt = false
+
+[functions.ai-chat]
+verify_jwt = false
+
+[functions.iplicit-auth]
+verify_jwt = false
+
+[functions.iplicit-sync]
+verify_jwt = false
+
+[functions.iplicit-scheduled-sync]
+verify_jwt = false
+
+[functions.quickbooks-auth]
+verify_jwt = false
+
+[functions.xero-data]
+verify_jwt = false
+
+[functions.quickbooks-reports]
+verify_jwt = false
+
+[functions.dentally-sync]
+verify_jwt = false
+
+[functions.inbound-email-webhook]
+verify_jwt = false
+
+# Gateway JWT verify rejects ES256 session tokens; these handlers validate Bearer via auth.getUser() instead.
+[functions.cashflow-statement-report]
+verify_jwt = false
+
+[functions.cashflow-report]
+verify_jwt = false
+
+[functions.cashflow-archive-report]
+verify_jwt = false
+
+[functions.cashflow-category-drilldown-report]
+verify_jwt = false
+
+# Gateway JWT verify rejects ES256 session tokens; handler validates Bearer via auth.getUser().
+[functions.xero-bank-overview]
+verify_jwt = false
