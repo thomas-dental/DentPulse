@@ -10,6 +10,7 @@ const { syncAppointments } = require('../services/patientEconomics/sync/syncAppo
 const { syncTreatmentAppointments } = require('../services/patientEconomics/sync/syncTreatmentAppointments');
 const { syncTreatmentPlans } = require('../services/patientEconomics/sync/syncTreatmentPlans');
 const { syncTreatmentItems } = require('../services/patientEconomics/sync/syncTreatmentItems');
+const { syncAcquisitionSources } = require('../services/patientEconomics/sync/syncAcquisitionSources');
 
 const router = express.Router();
 
@@ -338,6 +339,16 @@ async function handleSyncChunkRoute(req, res, syncFn, routeLabel) {
     return res.status(500).json({ success: false, error: 'Internal error' });
   }
 }
+
+/**
+ * POST /api/economics-engine/sync/acquisition-sources
+ * Body: { practiceId }
+ * Processes one acquisition_sources chunk. Call repeatedly while hasMore=true.
+ * Sync before patients so pt_acquisition_source_name can resolve at upsert time.
+ */
+router.post('/sync/acquisition-sources', syncAuthMiddleware, (req, res) =>
+  handleSyncChunkRoute(req, res, syncAcquisitionSources, '/sync/acquisition-sources')
+);
 
 /**
  * POST /api/economics-engine/sync/patients

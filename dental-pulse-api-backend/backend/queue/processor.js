@@ -10,7 +10,14 @@ const path = require('path');
 const { supabaseAdmin } = require('../config/supabase');
 const { fetchDentallyPage, fetchInvoiceDetailsBatch, fetchAccountDetailsBatch, fetchPatientById, extractRecords, PER_PAGE, getInvoiceBatchConcurrency } = require('../api/dentally/client');
 const { sleep } = require('../utils/helpers');
-const { upsertEntityData, getCategoryMap, getLocationMap, getCancellationReasonMap, invalidateMapCaches } = require('../services/sync/upsert');
+const {
+  upsertEntityData,
+  getCategoryMap,
+  getLocationMap,
+  getCancellationReasonMap,
+  getAcquisitionSourceMap,
+  invalidateMapCaches,
+} = require('../services/sync/upsert');
 const { ENTITIES_NEEDING_LOCATION_MAP } = require('../api/dentally/config');
 const { chunkLabel } = require('../utils/dateHelpers');
 const logger = require('../services/sync/logger');
@@ -55,6 +62,9 @@ async function processSyncJob(job, integration, cancelTokens) {
     }
     if (entityAlias === 'appointments' || entityAlias === 'appointments_current_month') {
       maps.cancellationReasonMap = await getCancellationReasonMap(job.organization_id);
+    }
+    if (entityAlias === 'patients') {
+      maps.acquisitionSourceMap = await getAcquisitionSourceMap(job.organization_id);
     }
 
     // Resume from last saved page (on retry, skip already-processed pages)
@@ -341,7 +351,13 @@ async function processSyncJob(job, integration, cancelTokens) {
       .eq('entity_alias', entityAlias);
 
     // Invalidate map caches after reference entities are synced so subsequent jobs get fresh data
-    if (entityAlias === 'locations' || entityAlias === 'treatment_category' || entityAlias === 'treatments' || entityAlias === 'appointment_cancellation_reasons') {
+    if (
+      entityAlias === 'locations'
+      || entityAlias === 'treatment_category'
+      || entityAlias === 'treatments'
+      || entityAlias === 'appointment_cancellation_reasons'
+      || entityAlias === 'acquisition_sources'
+    ) {
       invalidateMapCaches(job.organization_id);
     }
 

@@ -41,6 +41,15 @@ const ENTITIES = [
     dateFilter: null,
   },
   {
+    alias: 'acquisition_sources',
+    endpoint: '/v1/acquisition_sources',
+    table: 'acquisition_sources',
+    onConflict: 'organization_id,as_id',
+    responseKey: 'acquisition_sources',
+    priority: 4,
+    dateFilter: null,
+  },
+  {
     alias: 'sundries',
     endpoint: '/v1/sundries',
     table: 'sundries',

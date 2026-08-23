@@ -6,7 +6,7 @@ const {
   extractRecords,
   PER_PAGE,
 } = require('../../../api/dentally/client');
-const { upsertEntityData } = require('../../sync/upsert');
+const { upsertEntityData, invalidateMapCaches } = require('../../sync/upsert');
 const {
   classifyDentallyFetchError,
   RATE_LIMIT_RETRY_MESSAGE,
@@ -265,6 +265,10 @@ async function syncResourceChunk(practiceId, options) {
     null,
     null
   );
+
+  if (entityAlias === 'acquisition_sources' || entityAlias === 'appointment_cancellation_reasons') {
+    invalidateMapCaches(practiceId);
+  }
 
   const pageCount = totalPages ?? (records.length < PER_PAGE ? page : page + 1);
   const isLastPage =

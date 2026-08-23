@@ -103,8 +103,23 @@ Hard `failed` is reserved for PAT auth errors and non-recoverable sync errors.
 
 Dentally does **not** expose `GET /v1/recalls`. Recall due dates, intervals, and `recall_method` are attributes on `GET /v1/patients`. PE stores them on existing `public.patients` (columns `pt_*_recall_*`, `pt_recall_method`). `syncRecalls` uses `resource_type: recalls` with its own cursor but upserts via the patients entity/transform.
 
+## Acquisition sources
+
+Dentally patients carry `acquisition_source_id` (UUID). Names come from `GET /v1/acquisition_sources`.
+
+**Approach:** reference table `public.acquisition_sources` + denormalized `pt_acquisition_source_id` / `pt_acquisition_source_name` on `patients` at sync time (same pattern as `appointment_cancellation_reasons` → `apmt_cancellation_reason_name`). CLTV-by-source (M6) can filter/group on the patient columns without a join; the catalog remains for name updates and admin listing.
+
+Sync `acquisition_sources` before (or alongside) patients. To backfill Day-3 patients already synced without the columns:
+
+```bash
+node backend/scripts/backfillPePatientAcquisitionSources.js <practice_id>
+```
+
+That script syncs the catalog, resets the `patients` cursor, and re-pages patients.
+
 ## Resource types
 
+- `acquisition_sources` → `public.acquisition_sources` (catalog; resolve patient source names)
 - `patients` → `public.patients`
 - `accounts` → `public.dentally_patients_accounts`
 - `recalls` → `public.patients` (recall columns, via patients API)
@@ -117,7 +132,8 @@ Use lowercase slugs in `sync_cursors.resource_type`.
 
 ## Related files
 
-- `routes/economicsEngine.js` — PAT CRUD + `POST /sync/{patients,accounts,recalls,appointments,treatment-appointments,treatment-plans,treatment-items}`
+- `routes/economicsEngine.js` — PAT CRUD + `POST /sync/{acquisition-sources,patients,accounts,recalls,appointments,treatment-appointments,treatment-plans,treatment-items}`
+- `services/patientEconomics/sync/syncAcquisitionSources.js`
 - `services/patientEconomics/sync/syncPatients.js`
 - `services/patientEconomics/sync/syncAccounts.js`
 - `services/patientEconomics/sync/syncRecalls.js`
@@ -128,7 +144,8 @@ Use lowercase slugs in `sync_cursors.resource_type`.
 - `services/patientEconomics/sync/syncHelpers.js` — shared chunk logic + rate-limit handling
 - `services/patientEconomics/sync/rateLimitBackoff.js`
 - `services/patientEconomics/sync/cursorStore.js`
-- `scripts/syncPePatients.js`, `syncPeAccounts.js`, `syncPeRecalls.js`, `syncPeAppointments.js`, `syncPeTreatmentAppointments.js`, `syncPeTreatmentPlans.js`, `syncPeTreatmentItems.js`
+- `scripts/syncPeAcquisitionSources.js`, `syncPePatients.js`, `syncPeAccounts.js`, `syncPeRecalls.js`, `syncPeAppointments.js`, `syncPeTreatmentAppointments.js`, `syncPeTreatmentPlans.js`, `syncPeTreatmentItems.js`
+- `scripts/backfillPePatientAcquisitionSources.js` — catalog sync + patients cursor reset + re-page
 - `scripts/testPeRateLimitBackoff.js` — simulated 429 backoff test
 - `api/dentally/client.js` — shared fetch + rate limit (reuse, do not fork)
 - `services/sync/upsert.js` + `services/transformers/dentally.js`
@@ -137,3 +154,4 @@ Use lowercase slugs in `sync_cursors.resource_type`.
 
 - `20260823150001_patient_economics_sync_cursors.sql`
 - `20260823160001_add_patient_recall_columns.sql`
+- `20260823170001_acquisition_sources_and_patient_columns.sql`

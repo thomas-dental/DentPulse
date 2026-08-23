@@ -7,6 +7,7 @@ const RESOURCE_APPOINTMENTS = 'appointments';
 const RESOURCE_TREATMENT_APPOINTMENTS = 'treatment_appointments';
 const RESOURCE_TREATMENT_PLANS = 'treatment_plans';
 const RESOURCE_TREATMENT_ITEMS = 'treatment_items';
+const RESOURCE_ACQUISITION_SOURCES = 'acquisition_sources';
 
 const PAGE_BASED_RESOURCES = new Set([
   RESOURCE_PATIENTS,
@@ -16,6 +17,7 @@ const PAGE_BASED_RESOURCES = new Set([
   RESOURCE_TREATMENT_APPOINTMENTS,
   RESOURCE_TREATMENT_PLANS,
   RESOURCE_TREATMENT_ITEMS,
+  RESOURCE_ACQUISITION_SOURCES,
 ]);
 
 /**
@@ -143,6 +145,48 @@ async function updateCursor(practiceId, resourceType, { cursor, status }) {
   }
 }
 
+/**
+ * Reset a resource cursor to page 1 / in_progress so a completed sync can re-run
+ * (e.g. backfill new patient columns after reference data lands).
+ */
+async function resetCursor(practiceId, resourceType) {
+  const initialCursor = PAGE_BASED_RESOURCES.has(resourceType)
+    ? serializePageCursor(1, null)
+    : '1';
+
+  const { data: existing, error: fetchError } = await supabaseAdmin
+    .from('sync_cursors')
+    .select('id')
+    .eq('practice_id', practiceId)
+    .eq('resource_type', resourceType)
+    .maybeSingle();
+
+  if (fetchError) {
+    throw new Error(`Failed to load sync cursor for reset: ${fetchError.message}`);
+  }
+
+  if (existing) {
+    await updateCursor(practiceId, resourceType, {
+      cursor: initialCursor,
+      status: 'in_progress',
+    });
+    return;
+  }
+
+  const { error: insertError } = await supabaseAdmin
+    .from('sync_cursors')
+    .insert({
+      practice_id: practiceId,
+      resource_type: resourceType,
+      cursor: initialCursor,
+      status: 'in_progress',
+    });
+
+  if (insertError) {
+    throw new Error(`Failed to create sync cursor for reset: ${insertError.message}`);
+  }
+}
+
 module.exports = {
   RESOURCE_PATIENTS,
   RESOURCE_ACCOUNTS,
@@ -151,6 +195,7 @@ module.exports = {
   RESOURCE_TREATMENT_APPOINTMENTS,
   RESOURCE_TREATMENT_PLANS,
   RESOURCE_TREATMENT_ITEMS,
+  RESOURCE_ACQUISITION_SOURCES,
   parsePageCursor,
   serializePageCursor,
   parsePatientsCursor,
@@ -160,4 +205,5 @@ module.exports = {
   todayUtc,
   getOrCreateCursor,
   updateCursor,
+  resetCursor,
 };
