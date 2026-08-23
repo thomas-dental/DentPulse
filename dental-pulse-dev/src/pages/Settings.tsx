@@ -47,6 +47,7 @@ import {
 } from 'lucide-react';
 import { AccountingIntegrationsHub } from '@/components/settings/AccountingIntegrationsHub';
 import { DentallyIntegrationCard } from '@/components/settings/DentallyIntegrationCard';
+import { PatientEconomicsPatCard } from '@/components/settings/PatientEconomicsPatCard';
 import { PlaidSection } from '@/components/plaid/PlaidSection';
 import { LocationRegionManagement } from '@/components/settings/LocationRegionManagement';
 import { useIntegrations, Integration } from '@/hooks/useIntegrations';
@@ -565,6 +566,8 @@ export default function Settings() {
               </Card>
             ) : (
               <>
+              <PatientEconomicsPatCard organizationId={organizationId} />
+
               {/* Dental Integrations + Open Banking side by side */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 items-start">
                 <DentallyIntegrationCard

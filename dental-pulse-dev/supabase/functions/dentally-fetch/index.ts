@@ -98,9 +98,9 @@ Deno.serve(async (req) => {
 
     return new Response(
       JSON.stringify({
-        totalFetched: allItems.length,
-        completedWithPrice: completedItems.length,
-        totalRevenue: Math.round(totalRevenue * 100) / 100,
+      totalFetched: allItems.length,
+      completedWithPrice: completedItems.length,
+      totalRevenue: Math.round(totalRevenue * 100) / 100,
         items: allItems,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
