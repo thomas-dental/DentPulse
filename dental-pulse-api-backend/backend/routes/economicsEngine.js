@@ -8,6 +8,7 @@ const { syncAccounts } = require('../services/patientEconomics/sync/syncAccounts
 const { syncRecalls } = require('../services/patientEconomics/sync/syncRecalls');
 const { syncAppointments } = require('../services/patientEconomics/sync/syncAppointments');
 const { syncTreatmentAppointments } = require('../services/patientEconomics/sync/syncTreatmentAppointments');
+const { syncTreatmentPlans } = require('../services/patientEconomics/sync/syncTreatmentPlans');
 
 const router = express.Router();
 
@@ -380,6 +381,15 @@ router.post('/sync/appointments', syncAuthMiddleware, (req, res) =>
  */
 router.post('/sync/treatment-appointments', syncAuthMiddleware, (req, res) =>
   handleSyncChunkRoute(req, res, syncTreatmentAppointments, '/sync/treatment-appointments')
+);
+
+/**
+ * POST /api/economics-engine/sync/treatment-plans
+ * Body: { practiceId }
+ * Processes one treatment_plans chunk. Call repeatedly while hasMore=true.
+ */
+router.post('/sync/treatment-plans', syncAuthMiddleware, (req, res) =>
+  handleSyncChunkRoute(req, res, syncTreatmentPlans, '/sync/treatment-plans')
 );
 
 module.exports = router;

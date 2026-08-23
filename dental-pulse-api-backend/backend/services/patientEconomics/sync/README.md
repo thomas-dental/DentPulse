@@ -110,21 +110,23 @@ Dentally does **not** expose `GET /v1/recalls`. Recall due dates, intervals, and
 - `recalls` → `public.patients` (recall columns, via patients API)
 - `appointments` → `public.appointments` (`GET /v1/appointments`; `apmt_patient_id` ↔ `patients.pt_id`). Requires date windows — PE uses monthly `updated_after`/`updated_before` in the cursor (`chunkStart`/`chunkEnd`).
 - `treatment_appointments` → `public.treatment_appointments` (`GET /v1/treatment_appointments`; distinct resource — links to patient, optional appointment, treatment plan)
+- `treatment_plans` → `public.treatment_plans` (`GET /v1/treatment_plans`; `tp_patient_id` ↔ `patients.pt_id`). Monthly `created_after`/`created_before` windows. Raw Dentally completion fields synced as-is (Economic Journey derivation is M3).
 
 Use lowercase slugs in `sync_cursors.resource_type`.
 
 ## Related files
 
-- `routes/economicsEngine.js` — PAT CRUD + `POST /sync/{patients,accounts,recalls,appointments,treatment-appointments}`
+- `routes/economicsEngine.js` — PAT CRUD + `POST /sync/{patients,accounts,recalls,appointments,treatment-appointments,treatment-plans}`
 - `services/patientEconomics/sync/syncPatients.js`
 - `services/patientEconomics/sync/syncAccounts.js`
 - `services/patientEconomics/sync/syncRecalls.js`
 - `services/patientEconomics/sync/syncAppointments.js`
 - `services/patientEconomics/sync/syncTreatmentAppointments.js`
+- `services/patientEconomics/sync/syncTreatmentPlans.js`
 - `services/patientEconomics/sync/syncHelpers.js` — shared chunk logic + rate-limit handling
 - `services/patientEconomics/sync/rateLimitBackoff.js`
 - `services/patientEconomics/sync/cursorStore.js`
-- `scripts/syncPePatients.js`, `syncPeAccounts.js`, `syncPeRecalls.js`, `syncPeAppointments.js`, `syncPeTreatmentAppointments.js`
+- `scripts/syncPePatients.js`, `syncPeAccounts.js`, `syncPeRecalls.js`, `syncPeAppointments.js`, `syncPeTreatmentAppointments.js`, `syncPeTreatmentPlans.js`
 - `scripts/testPeRateLimitBackoff.js` — simulated 429 backoff test
 - `api/dentally/client.js` — shared fetch + rate limit (reuse, do not fork)
 - `services/sync/upsert.js` + `services/transformers/dentally.js`

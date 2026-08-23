@@ -5,6 +5,7 @@ const RESOURCE_ACCOUNTS = 'accounts';
 const RESOURCE_RECALLS = 'recalls';
 const RESOURCE_APPOINTMENTS = 'appointments';
 const RESOURCE_TREATMENT_APPOINTMENTS = 'treatment_appointments';
+const RESOURCE_TREATMENT_PLANS = 'treatment_plans';
 
 const PAGE_BASED_RESOURCES = new Set([
   RESOURCE_PATIENTS,
@@ -12,6 +13,7 @@ const PAGE_BASED_RESOURCES = new Set([
   RESOURCE_RECALLS,
   RESOURCE_APPOINTMENTS,
   RESOURCE_TREATMENT_APPOINTMENTS,
+  RESOURCE_TREATMENT_PLANS,
 ]);
 
 /**
@@ -145,6 +147,7 @@ module.exports = {
   RESOURCE_RECALLS,
   RESOURCE_APPOINTMENTS,
   RESOURCE_TREATMENT_APPOINTMENTS,
+  RESOURCE_TREATMENT_PLANS,
   parsePageCursor,
   serializePageCursor,
   parsePatientsCursor,
