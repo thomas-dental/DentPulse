@@ -35,49 +35,69 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   };
 }
 
+export type DentallyCredential = {
+  id: string;
+  accountLabel: string | null;
+  patHint: string | null;
+  validatedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type SavePatResult =
-  | { validated: true }
-  | { validated: false; validationError: string };
+  | { validated: true; credential?: DentallyCredential | null }
+  | { validated: false; validationError: string; credential?: DentallyCredential | null };
 
 export class DentallyUnreachableError extends Error {
   readonly code = 'DENTALLY_UNREACHABLE';
+  readonly credential?: DentallyCredential | null;
 
-  constructor(message: string) {
+  constructor(message: string, credential?: DentallyCredential | null) {
     super(message);
     this.name = 'DentallyUnreachableError';
+    this.credential = credential;
   }
 }
 
-/** DEV-only mock: localStorage `pe-pat-mock` = validated | invalid | unreachable | error */
-function applyDevMock(): SavePatResult | null {
-  if (!import.meta.env.DEV) return null;
-  const mock = localStorage.getItem('pe-pat-mock');
-  if (mock === 'validated') return { validated: true };
-  if (mock === 'invalid') {
-    return {
-      validated: false,
-      validationError: 'Token saved, but Dentally rejected it. Check the PAT and try again.',
-    };
-  }
-  if (mock === 'unreachable') {
-    throw new DentallyUnreachableError(
-      'Token saved, but Dentally timed out. Try connecting again in a moment.',
-    );
-  }
-  if (mock === 'error') {
-    throw new Error('Failed to save credentials. Please try again.');
-  }
-  return null;
+type ApiCredential = {
+  id: string;
+  accountLabel: string | null;
+  patHint: string | null;
+  validatedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function mapCredential(row: ApiCredential): DentallyCredential {
+  return {
+    id: row.id,
+    accountLabel: row.accountLabel,
+    patHint: row.patHint,
+    validatedAt: row.validatedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
 }
 
-/** Encrypt, store, and validate Dentally PAT for a practice. */
+/** Load the single saved PAT for a practice (one per practice). */
+export async function getDentallyCredential(practiceId: string): Promise<DentallyCredential | null> {
+  const headers = await getAuthHeaders();
+  const params = new URLSearchParams({ practiceId });
+  const res = await fetch(`${getBackendUrl()}/api/economics-engine/credentials?${params}`, {
+    method: 'GET',
+    headers,
+  });
+  const body = await res.json().catch(() => ({} as { success?: boolean; credential?: ApiCredential | null; error?: string }));
+
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Failed to load credential (${res.status})`);
+  }
+
+  return body.credential ? mapCredential(body.credential) : null;
+}
+
+/** Encrypt, store, and validate the practice PAT (upserts — only one per practice). */
 export async function saveDentallyPat(practiceId: string, pat: string): Promise<SavePatResult> {
-  const devResult = applyDevMock();
-  if (devResult) {
-    await new Promise((r) => setTimeout(r, 800));
-    return devResult;
-  }
-
   const headers = await getAuthHeaders();
   const res = await fetch(`${getBackendUrl()}/api/economics-engine/credentials`, {
     method: 'POST',
@@ -89,10 +109,13 @@ export async function saveDentallyPat(practiceId: string, pat: string): Promise<
     validated?: boolean;
     error?: string;
     code?: string;
+    credential?: ApiCredential | null;
   }));
 
+  const credential = body.credential ? mapCredential(body.credential) : null;
+
   if (body.code === 'DENTALLY_UNREACHABLE' || res.status === 503) {
-    throw new DentallyUnreachableError(body.error || 'Dentally API is unavailable right now');
+    throw new DentallyUnreachableError(body.error || 'Dentally API is unavailable right now', credential);
   }
 
   if (!res.ok || !body.success) {
@@ -103,8 +126,61 @@ export async function saveDentallyPat(practiceId: string, pat: string): Promise<
     return {
       validated: false,
       validationError: body.error || 'Token saved but could not be validated',
+      credential,
     };
   }
 
-  return { validated: true };
+  return { validated: true, credential };
+}
+
+/** Re-validate the stored PAT without re-entering it. */
+export async function revalidateDentallyCredential(practiceId: string): Promise<SavePatResult> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${getBackendUrl()}/api/economics-engine/credentials/validate`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ practiceId }),
+  });
+  const body = await res.json().catch(() => ({} as {
+    success?: boolean;
+    validated?: boolean;
+    error?: string;
+    code?: string;
+    credential?: ApiCredential | null;
+  }));
+
+  const credential = body.credential ? mapCredential(body.credential) : null;
+
+  if (body.code === 'DENTALLY_UNREACHABLE' || res.status === 503) {
+    throw new DentallyUnreachableError(body.error || 'Dentally API is unavailable right now', credential);
+  }
+
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Validation failed (${res.status})`);
+  }
+
+  if (body.validated === false) {
+    return {
+      validated: false,
+      validationError: body.error || 'Dentally rejected this token',
+      credential,
+    };
+  }
+
+  return { validated: true, credential };
+}
+
+/** Remove the stored PAT for a practice. */
+export async function deleteDentallyCredential(practiceId: string): Promise<void> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${getBackendUrl()}/api/economics-engine/credentials`, {
+    method: 'DELETE',
+    headers,
+    body: JSON.stringify({ practiceId }),
+  });
+  const body = await res.json().catch(() => ({} as { success?: boolean; error?: string }));
+
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Delete failed (${res.status})`);
+  }
 }

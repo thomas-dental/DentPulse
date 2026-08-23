@@ -566,6 +566,8 @@ export default function Settings() {
               </Card>
             ) : (
               <>
+              <PatientEconomicsPatCard organizationId={organizationId} />
+
               {/* Dental Integrations + Open Banking side by side */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 items-start">
                 <DentallyIntegrationCard
@@ -584,8 +586,6 @@ export default function Settings() {
                   <PlaidSection orgId={organizationId} />
                 </div>
               </div>
-
-              <PatientEconomicsPatCard organizationId={organizationId} />
 
               {/* Non-Dentally integrations (Implicit Accounting, etc.) */}
               {integrations.filter(int => int.integration_name !== 'Dentally').map((integration) => {

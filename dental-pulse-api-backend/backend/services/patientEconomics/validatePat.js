@@ -42,7 +42,22 @@ async function validatePatWithDentally(pat) {
     });
 
     if (response.ok) {
-      return { status: 'valid' };
+      let dentallyEmail = null;
+      try {
+        const payload = await response.json();
+        dentallyEmail =
+          payload?.user?.email ||
+          payload?.email ||
+          null;
+        if (typeof dentallyEmail === 'string') {
+          dentallyEmail = dentallyEmail.trim().slice(0, 120) || null;
+        } else {
+          dentallyEmail = null;
+        }
+      } catch {
+        dentallyEmail = null;
+      }
+      return { status: 'valid', dentallyEmail };
     }
 
     if (response.status === 401) {
