@@ -35,16 +35,48 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   };
 }
 
-/** Encrypt + store Dentally PAT for a practice. Does not validate against Dentally. */
-export async function saveDentallyPat(practiceId: string, pat: string): Promise<void> {
+export type SavePatResult =
+  | { validated: true }
+  | { validated: false; validationError: string };
+
+export class DentallyUnreachableError extends Error {
+  readonly code = 'DENTALLY_UNREACHABLE';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'DentallyUnreachableError';
+  }
+}
+
+/** Encrypt, store, and validate Dentally PAT for a practice. */
+export async function saveDentallyPat(practiceId: string, pat: string): Promise<SavePatResult> {
   const headers = await getAuthHeaders();
   const res = await fetch(`${getBackendUrl()}/api/economics-engine/credentials`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ practiceId, pat }),
   });
-  const body = await res.json().catch(() => ({} as { success?: boolean; error?: string }));
+  const body = await res.json().catch(() => ({} as {
+    success?: boolean;
+    validated?: boolean;
+    error?: string;
+    code?: string;
+  }));
+
+  if (body.code === 'DENTALLY_UNREACHABLE' || res.status === 503) {
+    throw new DentallyUnreachableError(body.error || 'Dentally API is unavailable right now');
+  }
+
   if (!res.ok || !body.success) {
     throw new Error(body.error || `Save failed (${res.status})`);
   }
+
+  if (body.validated === false) {
+    return {
+      validated: false,
+      validationError: body.error || 'Token saved but could not be validated',
+    };
+  }
+
+  return { validated: true };
 }

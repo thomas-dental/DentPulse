@@ -1,7 +1,8 @@
 const express = require('express');
 const syncAuthMiddleware = require('../middleware/syncAuth');
 const { supabaseAdmin } = require('../config/supabase');
-const { encryptPAT } = require('../services/patientEconomics/patEncryption');
+const { encryptPAT, decryptPAT } = require('../services/patientEconomics/patEncryption');
+const { validatePatWithDentally } = require('../services/patientEconomics/validatePat');
 
 const router = express.Router();
 
@@ -15,7 +16,7 @@ function isUuid(v) {
 /**
  * POST /api/economics-engine/credentials
  * Body: { practiceId, pat }
- * Encrypts + upserts dentally_credentials. Does not set validated_at.
+ * Encrypts, upserts, then validates via Dentally GET /v1/user.
  */
 router.post('/credentials', syncAuthMiddleware, async (req, res) => {
   try {
@@ -62,7 +63,7 @@ router.post('/credentials', syncAuthMiddleware, async (req, res) => {
           encrypted_pat: ciphertext,
           encrypted_pat_iv: iv,
           updated_at: now,
-          // validated_at intentionally omitted (Step 3)
+          validated_at: null,
         },
         { onConflict: 'practice_id' }
       );
@@ -72,7 +73,45 @@ router.post('/credentials', syncAuthMiddleware, async (req, res) => {
       return res.status(500).json({ success: false, error: 'Failed to save credentials' });
     }
 
-    return res.json({ success: true });
+    let decryptedPat;
+    try {
+      decryptedPat = decryptPAT(ciphertext, iv);
+    } catch (decErr) {
+      console.error('[EconomicsEngine] decryptPAT after save failed:', decErr.message);
+      return res.status(500).json({ success: false, error: 'Credentials saved but validation could not run' });
+    }
+
+    const validation = await validatePatWithDentally(decryptedPat);
+    decryptedPat = null;
+
+    if (validation.status === 'valid') {
+      const validatedAt = new Date().toISOString();
+      const { error: validateUpdateError } = await supabaseAdmin
+        .from('dentally_credentials')
+        .update({ validated_at: validatedAt, updated_at: validatedAt })
+        .eq('practice_id', practiceId);
+
+      if (validateUpdateError) {
+        console.error('[EconomicsEngine] validated_at update failed:', validateUpdateError.message);
+        return res.status(500).json({ success: false, error: 'Token validated but status could not be saved' });
+      }
+
+      return res.json({ success: true, validated: true });
+    }
+
+    if (validation.status === 'auth_error') {
+      return res.json({
+        success: true,
+        validated: false,
+        error: validation.message,
+      });
+    }
+
+    return res.status(503).json({
+      success: false,
+      code: 'DENTALLY_UNREACHABLE',
+      error: validation.message,
+    });
   } catch (err) {
     console.error('[EconomicsEngine] /credentials error:', err.message);
     return res.status(500).json({ success: false, error: 'Internal error' });

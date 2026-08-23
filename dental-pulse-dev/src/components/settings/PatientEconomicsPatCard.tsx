@@ -3,10 +3,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { AlertCircle, Eye, EyeOff, KeyRound, Loader2 } from 'lucide-react';
-import { saveDentallyPat } from '@/services/integrations/patientEconomicsService';
+import { AlertCircle, AlertTriangle, CheckCircle2, Eye, EyeOff, KeyRound, Loader2 } from 'lucide-react';
+import { DentallyUnreachableError, saveDentallyPat } from '@/services/integrations/patientEconomicsService';
 
-export type PatientEconomicsPatViewState = 'empty' | 'loading' | 'error' | 'form';
+export type PatientEconomicsPatViewState = 'empty' | 'loading' | 'error' | 'warning' | 'success' | 'form';
 
 type PatientEconomicsPatCardProps = {
   organizationId?: string | null;
@@ -17,6 +17,7 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
   const [showPat, setShowPat] = useState(false);
   const [viewState, setViewState] = useState<PatientEconomicsPatViewState>('form');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [warningMessage, setWarningMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
   const canConnect = pat.trim().length > 0 && !!organizationId && !isSaving;
@@ -25,13 +26,23 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
     if (!organizationId || !pat.trim() || isSaving) return;
     setIsSaving(true);
     setErrorMessage(null);
+    setWarningMessage(null);
     setViewState('loading');
     try {
-      await saveDentallyPat(organizationId, pat.trim());
+      const result = await saveDentallyPat(organizationId, pat.trim());
       setPat('');
-      setViewState('form');
+      if ('validationError' in result) {
+        setWarningMessage(result.validationError);
+        setViewState('warning');
+      } else {
+        setViewState('success');
+      }
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : 'Connection failed');
+      if (err instanceof DentallyUnreachableError) {
+        setErrorMessage(err.message);
+      } else {
+        setErrorMessage(err instanceof Error ? err.message : 'Connection failed');
+      }
       setViewState('error');
     } finally {
       setIsSaving(false);
@@ -47,14 +58,40 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
         </CardTitle>
         <CardDescription>
           Connect a Dentally personal access token for the Patient Economics Engine.
-          Credentials are stored encrypted via the API. Dentally validation comes in a later step.
+          Credentials are stored encrypted and validated against Dentally.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {viewState === 'loading' && (
           <div className="flex flex-col items-center justify-center py-10 text-muted-foreground">
             <Loader2 className="h-8 w-8 animate-spin mb-3" />
-            <p className="text-sm">Saving Dentally credentials…</p>
+            <p className="text-sm">Saving and validating Dentally credentials…</p>
+          </div>
+        )}
+
+        {viewState === 'success' && (
+          <div className="flex flex-col items-center justify-center py-10 text-center">
+            <CheckCircle2 className="h-10 w-10 text-green-600 mb-3" />
+            <p className="font-medium">PAT connected and validated</p>
+            <p className="text-sm text-muted-foreground mt-1 max-w-sm">
+              Your Dentally token was saved and confirmed with the Dentally API.
+            </p>
+            <Button type="button" variant="outline" className="mt-4" onClick={() => setViewState('form')}>
+              Done
+            </Button>
+          </div>
+        )}
+
+        {viewState === 'warning' && (
+          <div className="flex flex-col items-center justify-center py-10 text-center">
+            <AlertTriangle className="h-10 w-10 text-amber-500 mb-3" />
+            <p className="font-medium">Token saved — validation failed</p>
+            <p className="text-sm text-muted-foreground mt-1 max-w-sm">
+              {warningMessage || 'Your token was saved but Dentally rejected it. Check the PAT and try again.'}
+            </p>
+            <Button type="button" variant="outline" className="mt-4" onClick={() => setViewState('form')}>
+              Try again
+            </Button>
           </div>
         )}
 
