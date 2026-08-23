@@ -5,6 +5,7 @@ const { encryptPAT, decryptPAT } = require('../services/patientEconomics/patEncr
 const { validatePatWithDentally } = require('../services/patientEconomics/validatePat');
 const { syncPatients } = require('../services/patientEconomics/sync/syncPatients');
 const { syncAccounts } = require('../services/patientEconomics/sync/syncAccounts');
+const { syncRecalls } = require('../services/patientEconomics/sync/syncRecalls');
 
 const router = express.Router();
 
@@ -307,12 +308,14 @@ router.delete('/credentials', syncAuthMiddleware, async (req, res) => {
   }
 });
 
-/**
- * POST /api/economics-engine/sync/patients
- * Body: { practiceId }
- * Processes one patients chunk (1 Dentally page). Call repeatedly while hasMore=true.
- */
-router.post('/sync/patients', syncAuthMiddleware, async (req, res) => {
+function resolveSyncHttpStatus(result) {
+  if (result.success) return 200;
+  if (result.errorCode === 'PAT_EXPIRED_OR_INVALID') return 401;
+  if (result.errorCode === 'NO_CREDENTIAL') return 404;
+  return 503;
+}
+
+async function handleSyncChunkRoute(req, res, syncFn, routeLabel) {
   try {
     const practiceId = req.body?.practiceId;
     if (!practiceId || !isUuid(practiceId)) {
@@ -324,49 +327,39 @@ router.post('/sync/patients', syncAuthMiddleware, async (req, res) => {
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const result = await syncPatients(practiceId);
-
-    if (result.errorCode === 'NO_CREDENTIAL') {
-      return res.status(404).json({ success: false, ...result });
-    }
-
-    const httpStatus = result.success ? 200 : result.errorCode === 'PAT_EXPIRED_OR_INVALID' ? 401 : 503;
-    return res.status(httpStatus).json({ success: result.success, ...result });
+    const result = await syncFn(practiceId);
+    return res.status(resolveSyncHttpStatus(result)).json({ success: result.success, ...result });
   } catch (err) {
-    console.error('[EconomicsEngine] POST /sync/patients error:', err.message);
+    console.error(`[EconomicsEngine] POST ${routeLabel} error:`, err.message);
     return res.status(500).json({ success: false, error: 'Internal error' });
   }
-});
+}
+
+/**
+ * POST /api/economics-engine/sync/patients
+ * Body: { practiceId }
+ * Processes one patients chunk (1 Dentally page). Call repeatedly while hasMore=true.
+ */
+router.post('/sync/patients', syncAuthMiddleware, (req, res) =>
+  handleSyncChunkRoute(req, res, syncPatients, '/sync/patients')
+);
 
 /**
  * POST /api/economics-engine/sync/accounts
  * Body: { practiceId }
  * Processes one accounts chunk (1 Dentally page). Call repeatedly while hasMore=true.
  */
-router.post('/sync/accounts', syncAuthMiddleware, async (req, res) => {
-  try {
-    const practiceId = req.body?.practiceId;
-    if (!practiceId || !isUuid(practiceId)) {
-      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
-    }
+router.post('/sync/accounts', syncAuthMiddleware, (req, res) =>
+  handleSyncChunkRoute(req, res, syncAccounts, '/sync/accounts')
+);
 
-    const access = await verifyPracticeAccess(req.user.id, practiceId);
-    if (!access.ok) {
-      return res.status(access.status).json({ success: false, error: access.error });
-    }
-
-    const result = await syncAccounts(practiceId);
-
-    if (result.errorCode === 'NO_CREDENTIAL') {
-      return res.status(404).json({ success: false, ...result });
-    }
-
-    const httpStatus = result.success ? 200 : result.errorCode === 'PAT_EXPIRED_OR_INVALID' ? 401 : 503;
-    return res.status(httpStatus).json({ success: result.success, ...result });
-  } catch (err) {
-    console.error('[EconomicsEngine] POST /sync/accounts error:', err.message);
-    return res.status(500).json({ success: false, error: 'Internal error' });
-  }
-});
+/**
+ * POST /api/economics-engine/sync/recalls
+ * Body: { practiceId }
+ * Processes one recalls chunk (1 Dentally patients page). Call repeatedly while hasMore=true.
+ */
+router.post('/sync/recalls', syncAuthMiddleware, (req, res) =>
+  handleSyncChunkRoute(req, res, syncRecalls, '/sync/recalls')
+);
 
 module.exports = router;

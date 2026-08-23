@@ -7,14 +7,18 @@ const {
   PER_PAGE,
 } = require('../../../api/dentally/client');
 const { upsertEntityData } = require('../../sync/upsert');
-const { classifyDentallyFetchError } = require('./dentallyErrors');
+const {
+  classifyDentallyFetchError,
+  RATE_LIMIT_RETRY_MESSAGE,
+} = require('./dentallyErrors');
+const { withRateLimitBackoff } = require('./rateLimitBackoff');
 const {
   parsePageCursor,
   serializePageCursor,
   getOrCreateCursor,
   updateCursor,
 } = require('./cursorStore');
-const { createSyncRun, completeSyncRun } = require('./syncRunStore');
+const { createSyncRun, completeSyncRun, noteSyncRunRetry } = require('./syncRunStore');
 
 async function loadPracticePat(practiceId) {
   const { data: row, error } = await supabaseAdmin
@@ -50,6 +54,77 @@ async function markSyncFailed(practiceId, resourceType, syncRunId, errorMessage)
   if (syncRunId) {
     await completeSyncRun(syncRunId, 'failed', errorMessage);
   }
+}
+
+/**
+ * Rate limit exhausted within chunk — keep cursor at current page, stay in_progress.
+ */
+async function markSyncRateLimitRetry(practiceId, resourceType, syncRunId, page, syncRunIdValue) {
+  await updateCursor(practiceId, resourceType, {
+    cursor: serializePageCursor(page, syncRunIdValue),
+    status: 'in_progress',
+  });
+  if (syncRunId) {
+    await noteSyncRunRetry(syncRunId, RATE_LIMIT_RETRY_MESSAGE);
+  }
+}
+
+function buildRateLimitRetryResult({ page, syncRunId, resourceType }) {
+  return {
+    success: false,
+    complete: false,
+    hasMore: true,
+    page,
+    processed: 0,
+    failed: 0,
+    syncRunId,
+    cursorStatus: 'in_progress',
+    resourceType,
+    error: RATE_LIMIT_RETRY_MESSAGE,
+    errorCode: 'RATE_LIMIT_RETRY',
+  };
+}
+
+async function handleSyncError(err, practiceId, resourceType, syncRunId, page) {
+  const classified = classifyDentallyFetchError(err);
+  const errorMessage = classified.message;
+
+  if (classified.kind === 'rate_limit') {
+    await markSyncRateLimitRetry(practiceId, resourceType, syncRunId, page, syncRunId);
+    return buildRateLimitRetryResult({ page, syncRunId, resourceType });
+  }
+
+  if (classified.kind === 'pat_auth') {
+    await markSyncFailed(practiceId, resourceType, syncRunId, errorMessage);
+    return {
+      success: false,
+      complete: false,
+      hasMore: false,
+      page,
+      processed: 0,
+      failed: 0,
+      syncRunId,
+      cursorStatus: 'failed',
+      resourceType,
+      error: errorMessage,
+      errorCode: 'PAT_EXPIRED_OR_INVALID',
+    };
+  }
+
+  await markSyncFailed(practiceId, resourceType, syncRunId, errorMessage);
+  return {
+    success: false,
+    complete: false,
+    hasMore: false,
+    page,
+    processed: 0,
+    failed: 0,
+    syncRunId,
+    cursorStatus: 'failed',
+    resourceType,
+    error: errorMessage,
+    errorCode: 'SYNC_ERROR',
+  };
 }
 
 /**
@@ -121,80 +196,34 @@ async function syncResourceChunk(practiceId, options) {
 
   let responseData;
   try {
-    responseData = await fetchDentallyPage(
-      pat,
-      apiEndpoint,
-      entityAlias,
-      page,
-      null,
-      null,
-      entityConfigOverride || undefined
+    responseData = await withRateLimitBackoff(
+      `${resourceType}:fetch page ${page}`,
+      () => fetchDentallyPage(
+        pat,
+        apiEndpoint,
+        entityAlias,
+        page,
+        null,
+        null,
+        entityConfigOverride || undefined
+      )
     );
   } catch (err) {
     pat = null;
-    const classified = classifyDentallyFetchError(err);
-    const errorMessage = classified.message;
-
-    if (classified.kind === 'pat_auth' || classified.kind === 'rate_limit') {
-      await markSyncFailed(practiceId, resourceType, syncRunId, errorMessage);
-      return {
-        success: false,
-        complete: false,
-        hasMore: false,
-        page,
-        processed: 0,
-        failed: 0,
-        syncRunId,
-        cursorStatus: 'failed',
-        resourceType,
-        error: errorMessage,
-        errorCode: classified.kind === 'pat_auth' ? 'PAT_EXPIRED_OR_INVALID' : 'RATE_LIMIT',
-      };
-    }
-
-    await markSyncFailed(practiceId, resourceType, syncRunId, errorMessage);
-    return {
-      success: false,
-      complete: false,
-      hasMore: false,
-      page,
-      processed: 0,
-      failed: 0,
-      syncRunId,
-      cursorStatus: 'failed',
-      resourceType,
-      error: errorMessage,
-      errorCode: 'SYNC_ERROR',
-    };
+    return handleSyncError(err, practiceId, resourceType, syncRunId, page);
   }
 
   let { records, totalPages } = extractRecords(responseData, entityAlias);
 
   if (enrichRecords && records.length > 0) {
     try {
-      records = await enrichRecords(records, pat, apiEndpoint);
+      records = await withRateLimitBackoff(
+        `${resourceType}:enrich page ${page}`,
+        () => enrichRecords(records, pat, apiEndpoint)
+      );
     } catch (err) {
       pat = null;
-      const classified = classifyDentallyFetchError(err);
-      const errorMessage = classified.message;
-      await markSyncFailed(practiceId, resourceType, syncRunId, errorMessage);
-      return {
-        success: false,
-        complete: false,
-        hasMore: false,
-        page,
-        processed: 0,
-        failed: 0,
-        syncRunId,
-        cursorStatus: 'failed',
-        resourceType,
-        error: errorMessage,
-        errorCode: classified.kind === 'pat_auth'
-          ? 'PAT_EXPIRED_OR_INVALID'
-          : classified.kind === 'rate_limit'
-            ? 'RATE_LIMIT'
-            : 'SYNC_ERROR',
-      };
+      return handleSyncError(err, practiceId, resourceType, syncRunId, page);
     }
   }
 
@@ -263,5 +292,6 @@ module.exports = {
   loadPracticePat,
   resolveUserIdForPractice,
   markSyncFailed,
+  markSyncRateLimitRetry,
   syncResourceChunk,
 };

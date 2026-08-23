@@ -34,7 +34,19 @@ async function completeSyncRun(syncRunId, status, errorMessage = null) {
   }
 }
 
+async function noteSyncRunRetry(syncRunId, errorMessage) {
+  const { error } = await supabaseAdmin
+    .from('sync_runs')
+    .update({ error_message: errorMessage })
+    .eq('id', syncRunId);
+
+  if (error) {
+    throw new Error(`Failed to note sync run retry: ${error.message}`);
+  }
+}
+
 module.exports = {
   createSyncRun,
   completeSyncRun,
+  noteSyncRunRetry,
 };

@@ -9,6 +9,9 @@ const AUTH_ERROR_MESSAGE =
 const RATE_LIMIT_MESSAGE =
   'Dentally rate limit reached. Retry this sync chunk later.';
 
+const RATE_LIMIT_RETRY_MESSAGE =
+  'Dentally rate limit persisted after retries. Chunk paused — will resume from this page on the next invocation.';
+
 /**
  * @param {unknown} err
  * @returns {{ kind: 'pat_auth' | 'rate_limit' | 'other', message: string, httpStatus?: number }}
@@ -51,4 +54,5 @@ module.exports = {
   classifyDentallyFetchError,
   AUTH_ERROR_MESSAGE,
   RATE_LIMIT_MESSAGE,
+  RATE_LIMIT_RETRY_MESSAGE,
 };

@@ -88,30 +88,44 @@ Dentally list endpoints use **page numbers**, not opaque pagination tokens (`ref
 
 ## Rate limiting
 
-Reuse `api/dentally/client.js` (`fetchWithRetry`, `X-RateLimit-Remaining`, 403 handling). PE PAT shares the same hourly bucket as any other client using that token. Consider keying `dentally_rate_limit_state` by `practice_id` or PAT hash in a later change; today the table is keyed by `integration_id`.
+Reuse `api/dentally/client.js` (`fetchWithRetry`, `X-RateLimit-Remaining`, 403 handling). PE PAT shares the same hourly bucket as any other client using that token.
 
-## Resource types (initial)
+**Within-chunk backoff** (`sync/rateLimitBackoff.js`): each fetch and enrich step wraps Dentally calls with exponential backoff (default 5 retries, 2s base, 60s cap). If retries are exhausted:
 
-Planned PE resources (expand as endpoints are wired):
+- Cursor **stays at the current page** (no progress lost from a completed prior page)
+- `sync_cursors.status` remains **`in_progress`** (not `failed`)
+- Response `errorCode: RATE_LIMIT_RETRY` — invoke again later
+- `sync_runs.error_message` notes the pause; run stays `running`
 
-- `sites`, `patients`, `accounts`, `recalls`, …
+Hard `failed` is reserved for PAT auth errors and non-recoverable sync errors.
 
-Use lowercase slugs matching internal aliases where they overlap with `api/dentally/config.js`.
+## Recalls (no dedicated Dentally endpoint)
+
+Dentally does **not** expose `GET /v1/recalls`. Recall due dates, intervals, and `recall_method` are attributes on `GET /v1/patients`. PE stores them on existing `public.patients` (columns `pt_*_recall_*`, `pt_recall_method`). `syncRecalls` uses `resource_type: recalls` with its own cursor but upserts via the patients entity/transform.
+
+## Resource types
+
+- `patients` → `public.patients`
+- `accounts` → `public.dentally_patients_accounts`
+- `recalls` → `public.patients` (recall columns, via patients API)
+
+Use lowercase slugs in `sync_cursors.resource_type`.
 
 ## Related files
 
-- `routes/economicsEngine.js` — PAT CRUD + validate + `POST /sync/patients`
-- `services/patientEconomics/patEncryption.js`
-- `services/patientEconomics/validatePat.js`
-- `services/patientEconomics/sync/syncPatients.js` — one-chunk patients sync
-- `services/patientEconomics/sync/syncAccounts.js` — one-chunk accounts sync
-- `services/patientEconomics/sync/syncHelpers.js` — shared chunk-fetch-upsert-advance logic
-- `services/patientEconomics/sync/cursorStore.js` — `sync_cursors` read/write
-- `scripts/syncPePatients.js` — manual CLI trigger (patients)
-- `scripts/syncPeAccounts.js` — manual CLI trigger (accounts)
+- `routes/economicsEngine.js` — PAT CRUD + `POST /sync/{patients,accounts,recalls}`
+- `services/patientEconomics/sync/syncPatients.js`
+- `services/patientEconomics/sync/syncAccounts.js`
+- `services/patientEconomics/sync/syncRecalls.js`
+- `services/patientEconomics/sync/syncHelpers.js` — shared chunk logic + rate-limit handling
+- `services/patientEconomics/sync/rateLimitBackoff.js`
+- `services/patientEconomics/sync/cursorStore.js`
+- `scripts/syncPePatients.js`, `syncPeAccounts.js`, `syncPeRecalls.js`
+- `scripts/testPeRateLimitBackoff.js` — simulated 429 backoff test
 - `api/dentally/client.js` — shared fetch + rate limit (reuse, do not fork)
-- `services/sync/upsert.js` + `services/transformers/dentally.js` — upsert into existing `public.patients` and `public.dentally_patients_accounts`
+- `services/sync/upsert.js` + `services/transformers/dentally.js`
 
-## Migration
+## Migrations
 
-`dental-pulse-dev/supabase/migrations/20260823150001_patient_economics_sync_cursors.sql`
+- `20260823150001_patient_economics_sync_cursors.sql`
+- `20260823160001_add_patient_recall_columns.sql`

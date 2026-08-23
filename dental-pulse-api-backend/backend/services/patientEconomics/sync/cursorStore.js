@@ -2,8 +2,9 @@ const { supabaseAdmin } = require('../../../config/supabase');
 
 const RESOURCE_PATIENTS = 'patients';
 const RESOURCE_ACCOUNTS = 'accounts';
+const RESOURCE_RECALLS = 'recalls';
 
-const PAGE_BASED_RESOURCES = new Set([RESOURCE_PATIENTS, RESOURCE_ACCOUNTS]);
+const PAGE_BASED_RESOURCES = new Set([RESOURCE_PATIENTS, RESOURCE_ACCOUNTS, RESOURCE_RECALLS]);
 
 /**
  * Parse page cursor — supports legacy plain page ("4") or JSON { page, syncRunId }.
@@ -97,6 +98,7 @@ async function updateCursor(practiceId, resourceType, { cursor, status }) {
 module.exports = {
   RESOURCE_PATIENTS,
   RESOURCE_ACCOUNTS,
+  RESOURCE_RECALLS,
   parsePageCursor,
   serializePageCursor,
   parsePatientsCursor,
