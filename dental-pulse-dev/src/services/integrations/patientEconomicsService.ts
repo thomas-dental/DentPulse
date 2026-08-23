@@ -48,8 +48,36 @@ export class DentallyUnreachableError extends Error {
   }
 }
 
+/** DEV-only mock: localStorage `pe-pat-mock` = validated | invalid | unreachable | error */
+function applyDevMock(): SavePatResult | null {
+  if (!import.meta.env.DEV) return null;
+  const mock = localStorage.getItem('pe-pat-mock');
+  if (mock === 'validated') return { validated: true };
+  if (mock === 'invalid') {
+    return {
+      validated: false,
+      validationError: 'Token saved, but Dentally rejected it. Check the PAT and try again.',
+    };
+  }
+  if (mock === 'unreachable') {
+    throw new DentallyUnreachableError(
+      'Token saved, but Dentally timed out. Try connecting again in a moment.',
+    );
+  }
+  if (mock === 'error') {
+    throw new Error('Failed to save credentials. Please try again.');
+  }
+  return null;
+}
+
 /** Encrypt, store, and validate Dentally PAT for a practice. */
 export async function saveDentallyPat(practiceId: string, pat: string): Promise<SavePatResult> {
+  const devResult = applyDevMock();
+  if (devResult) {
+    await new Promise((r) => setTimeout(r, 800));
+    return devResult;
+  }
+
   const headers = await getAuthHeaders();
   const res = await fetch(`${getBackendUrl()}/api/economics-engine/credentials`, {
     method: 'POST',
