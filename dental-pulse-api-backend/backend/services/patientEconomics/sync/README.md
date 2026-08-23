@@ -98,12 +98,16 @@ Planned PE resources (expand as endpoints are wired):
 
 Use lowercase slugs matching internal aliases where they overlap with `api/dentally/config.js`.
 
-## Related files (M1 credentials; M2 sync runner TBD)
+## Related files
 
-- `routes/economicsEngine.js` — PAT CRUD + validate
+- `routes/economicsEngine.js` — PAT CRUD + validate + `POST /sync/patients`
 - `services/patientEconomics/patEncryption.js`
 - `services/patientEconomics/validatePat.js`
+- `services/patientEconomics/sync/syncPatients.js` — one-chunk patients sync
+- `services/patientEconomics/sync/cursorStore.js` — `sync_cursors` read/write
+- `scripts/syncPePatients.js` — manual CLI trigger
 - `api/dentally/client.js` — shared fetch + rate limit (reuse, do not fork)
+- `services/sync/upsert.js` + `services/transformers/dentally.js` — upsert into existing `public.patients`
 
 ## Migration
 
