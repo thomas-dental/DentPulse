@@ -6,6 +6,8 @@ const { validatePatWithDentally } = require('../services/patientEconomics/valida
 const { syncPatients } = require('../services/patientEconomics/sync/syncPatients');
 const { syncAccounts } = require('../services/patientEconomics/sync/syncAccounts');
 const { syncRecalls } = require('../services/patientEconomics/sync/syncRecalls');
+const { syncAppointments } = require('../services/patientEconomics/sync/syncAppointments');
+const { syncTreatmentAppointments } = require('../services/patientEconomics/sync/syncTreatmentAppointments');
 
 const router = express.Router();
 
@@ -360,6 +362,24 @@ router.post('/sync/accounts', syncAuthMiddleware, (req, res) =>
  */
 router.post('/sync/recalls', syncAuthMiddleware, (req, res) =>
   handleSyncChunkRoute(req, res, syncRecalls, '/sync/recalls')
+);
+
+/**
+ * POST /api/economics-engine/sync/appointments
+ * Body: { practiceId }
+ * Processes one appointments chunk (1 Dentally page). Call repeatedly while hasMore=true.
+ */
+router.post('/sync/appointments', syncAuthMiddleware, (req, res) =>
+  handleSyncChunkRoute(req, res, syncAppointments, '/sync/appointments')
+);
+
+/**
+ * POST /api/economics-engine/sync/treatment-appointments
+ * Body: { practiceId }
+ * Processes one treatment_appointments chunk. Call repeatedly while hasMore=true.
+ */
+router.post('/sync/treatment-appointments', syncAuthMiddleware, (req, res) =>
+  handleSyncChunkRoute(req, res, syncTreatmentAppointments, '/sync/treatment-appointments')
 );
 
 module.exports = router;

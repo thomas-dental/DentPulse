@@ -1,0 +1,31 @@
+/**
+ * Patient Economics — sync one chunk of Dentally appointments into public.appointments.
+ *
+ * Distinct from treatment_appointments: diary/calendar slots via GET /v1/appointments.
+ * Links to patients via apmt_patient_id ↔ patients.pt_id (Dentally numeric patient id).
+ *
+ * Dentally returns an empty list without a date filter — PE uses monthly
+ * updated_after/updated_before windows in the cursor (chunkStart/chunkEnd).
+ * Includes cancelled/DNA via cancelled=true (same as main Dentally sync).
+ */
+
+const { RESOURCE_APPOINTMENTS } = require('./cursorStore');
+const { syncResourceChunk } = require('./syncHelpers');
+
+const APPOINTMENTS_RANGE_START =
+  process.env.PE_SYNC_APPOINTMENTS_START || '2020-01-01';
+
+async function syncAppointments(practiceId) {
+  return syncResourceChunk(practiceId, {
+    resourceType: RESOURCE_APPOINTMENTS,
+    entityAlias: 'appointments',
+    entityConfigOverride: {
+      extraParams: { cancelled: true },
+    },
+    dateChunking: {
+      rangeStart: APPOINTMENTS_RANGE_START,
+    },
+  });
+}
+
+module.exports = { syncAppointments };

@@ -17,6 +17,9 @@ const {
   serializePageCursor,
   getOrCreateCursor,
   updateCursor,
+  monthBounds,
+  dayAfter,
+  todayUtc,
 } = require('./cursorStore');
 const { createSyncRun, completeSyncRun, noteSyncRunRetry } = require('./syncRunStore');
 
@@ -57,11 +60,11 @@ async function markSyncFailed(practiceId, resourceType, syncRunId, errorMessage)
 }
 
 /**
- * Rate limit exhausted within chunk — keep cursor at current page, stay in_progress.
+ * Rate limit exhausted within chunk — keep cursor at current page/window, stay in_progress.
  */
-async function markSyncRateLimitRetry(practiceId, resourceType, syncRunId, page, syncRunIdValue) {
+async function markSyncRateLimitRetry(practiceId, resourceType, syncRunId, page, syncRunIdValue, dateWindow) {
   await updateCursor(practiceId, resourceType, {
-    cursor: serializePageCursor(page, syncRunIdValue),
+    cursor: serializePageCursor(page, syncRunIdValue, dateWindow),
     status: 'in_progress',
   });
   if (syncRunId) {
@@ -69,7 +72,7 @@ async function markSyncRateLimitRetry(practiceId, resourceType, syncRunId, page,
   }
 }
 
-function buildRateLimitRetryResult({ page, syncRunId, resourceType }) {
+function buildRateLimitRetryResult({ page, syncRunId, resourceType, dateWindow }) {
   return {
     success: false,
     complete: false,
@@ -80,18 +83,20 @@ function buildRateLimitRetryResult({ page, syncRunId, resourceType }) {
     syncRunId,
     cursorStatus: 'in_progress',
     resourceType,
+    chunkStart: dateWindow?.chunkStart || null,
+    chunkEnd: dateWindow?.chunkEnd || null,
     error: RATE_LIMIT_RETRY_MESSAGE,
     errorCode: 'RATE_LIMIT_RETRY',
   };
 }
 
-async function handleSyncError(err, practiceId, resourceType, syncRunId, page) {
+async function handleSyncError(err, practiceId, resourceType, syncRunId, page, dateWindow) {
   const classified = classifyDentallyFetchError(err);
   const errorMessage = classified.message;
 
   if (classified.kind === 'rate_limit') {
-    await markSyncRateLimitRetry(practiceId, resourceType, syncRunId, page, syncRunId);
-    return buildRateLimitRetryResult({ page, syncRunId, resourceType });
+    await markSyncRateLimitRetry(practiceId, resourceType, syncRunId, page, syncRunId, dateWindow);
+    return buildRateLimitRetryResult({ page, syncRunId, resourceType, dateWindow });
   }
 
   if (classified.kind === 'pat_auth') {
@@ -136,10 +141,17 @@ async function handleSyncError(err, practiceId, resourceType, syncRunId, page) {
  *   entityAlias: string,
  *   entityConfigOverride?: object|null,
  *   enrichRecords?: (records: object[], pat: string, apiEndpoint: string) => Promise<object[]>,
+ *   dateChunking?: { rangeStart: string }|null,
  * }} options
  */
 async function syncResourceChunk(practiceId, options) {
-  const { resourceType, entityAlias, entityConfigOverride = null, enrichRecords = null } = options;
+  const {
+    resourceType,
+    entityAlias,
+    entityConfigOverride = null,
+    enrichRecords = null,
+    dateChunking = null,
+  } = options;
 
   const cursorRow = await getOrCreateCursor(practiceId, resourceType);
 
@@ -155,16 +167,29 @@ async function syncResourceChunk(practiceId, options) {
       syncRunId: parsed.syncRunId,
       cursorStatus: 'complete',
       resourceType,
+      chunkStart: parsed.chunkStart,
+      chunkEnd: parsed.chunkEnd,
     };
   }
 
-  let { page, syncRunId } = parsePageCursor(cursorRow.cursor);
+  let { page, syncRunId, chunkStart, chunkEnd } = parsePageCursor(cursorRow.cursor);
+
+  let dateWindow = null;
+  if (dateChunking) {
+    if (!chunkStart || !chunkEnd) {
+      dateWindow = monthBounds(dateChunking.rangeStart);
+      chunkStart = dateWindow.chunkStart;
+      chunkEnd = dateWindow.chunkEnd;
+    } else {
+      dateWindow = { chunkStart, chunkEnd };
+    }
+  }
 
   if (cursorRow.status === 'failed') {
     await updateCursor(practiceId, resourceType, { status: 'in_progress' });
   }
 
-  if (page === 1 && !syncRunId) {
+  if (!syncRunId) {
     const run = await createSyncRun(practiceId);
     syncRunId = run.id;
   }
@@ -193,6 +218,8 @@ async function syncResourceChunk(practiceId, options) {
 
   const userId = await resolveUserIdForPractice(practiceId);
   const apiEndpoint = getDentallyBaseUrl();
+  const fetchStart = dateWindow ? dateWindow.chunkStart : null;
+  const fetchEnd = dateWindow ? dateWindow.chunkEnd : null;
 
   let responseData;
   try {
@@ -203,14 +230,14 @@ async function syncResourceChunk(practiceId, options) {
         apiEndpoint,
         entityAlias,
         page,
-        null,
-        null,
+        fetchStart,
+        fetchEnd,
         entityConfigOverride || undefined
       )
     );
   } catch (err) {
     pat = null;
-    return handleSyncError(err, practiceId, resourceType, syncRunId, page);
+    return handleSyncError(err, practiceId, resourceType, syncRunId, page, dateWindow);
   }
 
   let { records, totalPages } = extractRecords(responseData, entityAlias);
@@ -223,7 +250,7 @@ async function syncResourceChunk(practiceId, options) {
       );
     } catch (err) {
       pat = null;
-      return handleSyncError(err, practiceId, resourceType, syncRunId, page);
+      return handleSyncError(err, practiceId, resourceType, syncRunId, page, dateWindow);
     }
   }
 
@@ -244,9 +271,60 @@ async function syncResourceChunk(practiceId, options) {
     records.length === 0 ||
     (totalPages != null ? page >= totalPages : records.length < PER_PAGE);
 
+  if (isLastPage && dateWindow) {
+    const nextStart = dayAfter(dateWindow.chunkEnd);
+    const endCap = todayUtc();
+    if (nextStart > endCap) {
+      await updateCursor(practiceId, resourceType, {
+        cursor: serializePageCursor(page, syncRunId, dateWindow),
+        status: 'complete',
+      });
+      if (syncRunId) {
+        await completeSyncRun(syncRunId, 'completed');
+      }
+      return {
+        success: true,
+        complete: true,
+        hasMore: false,
+        page,
+        processed: upsertResult.processed,
+        failed: upsertResult.failed,
+        syncRunId,
+        cursorStatus: 'complete',
+        resourceType,
+        chunkStart: dateWindow.chunkStart,
+        chunkEnd: dateWindow.chunkEnd,
+        totalPages: pageCount,
+      };
+    }
+
+    const nextWindow = monthBounds(nextStart);
+    await updateCursor(practiceId, resourceType, {
+      cursor: serializePageCursor(1, syncRunId, nextWindow),
+      status: 'in_progress',
+    });
+    return {
+      success: true,
+      complete: false,
+      hasMore: true,
+      page,
+      nextPage: 1,
+      processed: upsertResult.processed,
+      failed: upsertResult.failed,
+      syncRunId,
+      cursorStatus: 'in_progress',
+      resourceType,
+      chunkStart: dateWindow.chunkStart,
+      chunkEnd: dateWindow.chunkEnd,
+      nextChunkStart: nextWindow.chunkStart,
+      nextChunkEnd: nextWindow.chunkEnd,
+      totalPages: pageCount,
+    };
+  }
+
   if (isLastPage) {
     await updateCursor(practiceId, resourceType, {
-      cursor: serializePageCursor(page, syncRunId),
+      cursor: serializePageCursor(page, syncRunId, dateWindow),
       status: 'complete',
     });
     if (syncRunId) {
@@ -269,7 +347,7 @@ async function syncResourceChunk(practiceId, options) {
 
   const nextPage = page + 1;
   await updateCursor(practiceId, resourceType, {
-    cursor: serializePageCursor(nextPage, syncRunId),
+    cursor: serializePageCursor(nextPage, syncRunId, dateWindow),
     status: 'in_progress',
   });
 
@@ -284,6 +362,8 @@ async function syncResourceChunk(practiceId, options) {
     syncRunId,
     cursorStatus: 'in_progress',
     resourceType,
+    chunkStart: dateWindow?.chunkStart || null,
+    chunkEnd: dateWindow?.chunkEnd || null,
     totalPages,
   };
 }
