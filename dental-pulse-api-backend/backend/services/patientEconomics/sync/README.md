@@ -90,14 +90,37 @@ Dentally list endpoints use **page numbers**, not opaque pagination tokens (`ref
 
 Reuse `api/dentally/client.js` (`fetchWithRetry`, `X-RateLimit-Remaining`, 403 handling). PE PAT shares the same hourly bucket as any other client using that token.
 
-**Within-chunk backoff** (`sync/rateLimitBackoff.js`): each fetch and enrich step wraps Dentally calls with exponential backoff (default 5 retries, 2s base, 60s cap). If retries are exhausted:
+**Within-chunk backoff** (`sync/rateLimitBackoff.js`): each fetch and enrich step wraps Dentally calls with exponential backoff (default 5 retries, 2s base, 60s cap). If retries are exhausted, the failure is classified as **transient** (see below): cursor stays on the current page, status becomes **`retryable`**, and the scheduler resumes after `next_retry_at`.
 
-- Cursor **stays at the current page** (no progress lost from a completed prior page)
-- `sync_cursors.status` remains **`in_progress`** (not `failed`)
-- Response `errorCode: RATE_LIMIT_RETRY` — invoke again later
-- `sync_runs.error_message` notes the pause; run stays `running`
+## Error categories & retry
 
-Hard `failed` is reserved for PAT auth errors and non-recoverable sync errors.
+All resource syncs go through `syncHelpers.syncResourceChunk` → shared `handleSyncError` / `upsertPeEntityPage`.
+
+| Category | Examples | Cursor / credentials | Auto-retry? |
+|----------|----------|----------------------|-------------|
+| **Transient** | Network timeout, Dentally 5xx, rate-limit after in-chunk backoff | `status=retryable`, `retry_count++`, `next_retry_at` backoff | Yes, until `PE_SYNC_MAX_RETRIES` (default 5) |
+| **Auth** | 401/403 invalid/expired PAT | `status=failed`; `dentally_credentials.needs_reconnection=true` | **No** — re-enter PAT in Settings |
+| **Data** | Transform/upsert of one bad record | Record logged to `sync_skipped_records`; chunk continues | N/A (skip & continue) |
+| **Unknown** | Other unexpected errors | Same as transient (capped) | Yes until max, then `failed` + `sync_runs` error |
+
+Env knobs: `PE_SYNC_MAX_RETRIES`, `PE_SYNC_RETRY_BASE_MS`, `PE_SYNC_RETRY_CAP_MS`.
+
+Successful chunks reset `retry_count` / `next_retry_at` / `last_error*`.
+
+## Scheduling (`peSyncCron.js`)
+
+`node-cron` poller (default `*/2 * * * *`) — same family as `autoSyncCron`, **no Redis**.
+
+Each tick:
+
+1. Load due `sync_cursors`: `retryable` with `next_retry_at <= now`, plus stale `in_progress` (not updated for `PE_SYNC_IN_PROGRESS_STALE_MS`, default 120s — crash/deploy resume).
+2. Skip practices with `needs_reconnection`.
+3. Claim → invoke registered sync fn from `resourceRegistry.js` (one chunk).
+4. Cap: `PE_SYNC_CRON_MAX_CHUNKS_PER_TICK` (default 10).
+
+Day 5 resources (invoices, payments, membership) register into `resourceRegistry` / `SCHEDULED_RESOURCE_TYPES` — do not rebuild scheduling.
+
+Started from `server.js` via `startPeSyncCron()`.
 
 ## Recalls (no dedicated Dentally endpoint)
 
@@ -141,12 +164,17 @@ Use lowercase slugs in `sync_cursors.resource_type`.
 - `services/patientEconomics/sync/syncTreatmentAppointments.js`
 - `services/patientEconomics/sync/syncTreatmentPlans.js`
 - `services/patientEconomics/sync/syncTreatmentItems.js`
-- `services/patientEconomics/sync/syncHelpers.js` — shared chunk logic + rate-limit handling
+- `services/patientEconomics/sync/syncHelpers.js` — shared chunk + error/retry handling
+- `services/patientEconomics/sync/upsertPePage.js` — per-record skip → `sync_skipped_records`
+- `services/patientEconomics/sync/resourceRegistry.js` — resource_type → sync fn
+- `services/patientEconomics/sync/peSyncCron.js` — scheduler
+- `services/patientEconomics/sync/retryPolicy.js` / `dentallyErrors.js` / `credentialsStatus.js`
 - `services/patientEconomics/sync/rateLimitBackoff.js`
 - `services/patientEconomics/sync/cursorStore.js`
 - `scripts/syncPeAcquisitionSources.js`, `syncPePatients.js`, `syncPeAccounts.js`, `syncPeRecalls.js`, `syncPeAppointments.js`, `syncPeTreatmentAppointments.js`, `syncPeTreatmentPlans.js`, `syncPeTreatmentItems.js`
 - `scripts/backfillPePatientAcquisitionSources.js` — catalog sync + patients cursor reset + re-page
 - `scripts/testPeRateLimitBackoff.js` — simulated 429 backoff test
+- `scripts/testPeSyncRetry.js` — error category + retry decision tests
 - `api/dentally/client.js` — shared fetch + rate limit (reuse, do not fork)
 - `services/sync/upsert.js` + `services/transformers/dentally.js`
 
@@ -155,3 +183,4 @@ Use lowercase slugs in `sync_cursors.resource_type`.
 - `20260823150001_patient_economics_sync_cursors.sql`
 - `20260823160001_add_patient_recall_columns.sql`
 - `20260823170001_acquisition_sources_and_patient_columns.sql`
+- `20260824120001_pe_sync_retry_and_scheduling.sql`

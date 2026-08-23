@@ -20,6 +20,7 @@ const { swaggerSpec } = require('./config/swagger');
 const { startCashflowThresholdCron } = require('./services/cashflowThresholdCron');
 const { startAiForecastCron } = require('./services/aiForecastCron');
 const { startAutoSyncCron } = require('./services/autoSyncCron');
+const { startPeSyncCron } = require('./services/patientEconomics/sync/peSyncCron');
 
 const authRoutes = require('./routes/auth');
 const dashboardRoutes = require('./routes/dashboard');
@@ -216,5 +217,12 @@ app.listen(PORT, async () => {
     startAutoSyncCron();
   } catch (err) {
     console.error('Failed to start auto-sync cron:', err.message);
+  }
+
+  // Patient Economics: resume in_progress / retryable sync_cursors (node-cron poller).
+  try {
+    startPeSyncCron();
+  } catch (err) {
+    console.error('Failed to start PE sync cron:', err.message);
   }
 });

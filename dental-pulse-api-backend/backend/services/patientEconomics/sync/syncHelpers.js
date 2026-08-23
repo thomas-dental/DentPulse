@@ -6,11 +6,8 @@ const {
   extractRecords,
   PER_PAGE,
 } = require('../../../api/dentally/client');
-const { upsertEntityData, invalidateMapCaches } = require('../../sync/upsert');
-const {
-  classifyDentallyFetchError,
-  RATE_LIMIT_RETRY_MESSAGE,
-} = require('./dentallyErrors');
+const { invalidateMapCaches } = require('../../sync/upsert');
+const { classifyDentallyFetchError } = require('./dentallyErrors');
 const { withRateLimitBackoff } = require('./rateLimitBackoff');
 const {
   parsePageCursor,
@@ -22,11 +19,20 @@ const {
   todayUtc,
 } = require('./cursorStore');
 const { createSyncRun, completeSyncRun, noteSyncRunRetry } = require('./syncRunStore');
+const {
+  getMaxRetries,
+  computeNextRetryAt,
+  clearRetryFields,
+} = require('./retryPolicy');
+const {
+  markCredentialsNeedReconnection,
+} = require('./credentialsStatus');
+const { upsertPeEntityPage } = require('./upsertPePage');
 
 async function loadPracticePat(practiceId) {
   const { data: row, error } = await supabaseAdmin
     .from('dentally_credentials')
-    .select('encrypted_pat, encrypted_pat_iv')
+    .select('encrypted_pat, encrypted_pat_iv, needs_reconnection')
     .eq('practice_id', practiceId)
     .maybeSingle();
 
@@ -36,6 +42,13 @@ async function loadPracticePat(practiceId) {
   if (!row) {
     const err = new Error('No Dentally PAT saved for this practice');
     err.code = 'NO_CREDENTIAL';
+    throw err;
+  }
+  if (row.needs_reconnection === true) {
+    const err = new Error(
+      'Dentally PAT needs reconnection — re-enter the PAT in Settings before syncing.'
+    );
+    err.code = 'NEEDS_RECONNECTION';
     throw err;
   }
 
@@ -52,55 +65,82 @@ async function resolveUserIdForPractice(practiceId) {
   return org?.user_id || null;
 }
 
-async function markSyncFailed(practiceId, resourceType, syncRunId, errorMessage) {
-  await updateCursor(practiceId, resourceType, { status: 'failed' });
+async function markSyncFailed(practiceId, resourceType, syncRunId, errorMessage, errorCode) {
+  await updateCursor(practiceId, resourceType, {
+    status: 'failed',
+    next_retry_at: null,
+    last_error: errorMessage,
+    last_error_code: errorCode || 'SYNC_ERROR',
+  });
   if (syncRunId) {
     await completeSyncRun(syncRunId, 'failed', errorMessage);
   }
 }
 
 /**
- * Rate limit exhausted within chunk — keep cursor at current page/window, stay in_progress.
+ * Transient / unknown failure — mark retryable with backoff, or terminal failed if capped.
+ * @returns {Promise<{ status: 'retryable'|'failed', retryCount: number, nextRetryAt: string|null }>}
  */
-async function markSyncRateLimitRetry(practiceId, resourceType, syncRunId, page, syncRunIdValue, dateWindow) {
-  await updateCursor(practiceId, resourceType, {
-    cursor: serializePageCursor(page, syncRunIdValue, dateWindow),
-    status: 'in_progress',
-  });
-  if (syncRunId) {
-    await noteSyncRunRetry(syncRunId, RATE_LIMIT_RETRY_MESSAGE);
+async function markSyncRetryable(
+  practiceId,
+  resourceType,
+  syncRunId,
+  page,
+  dateWindow,
+  errorMessage,
+  errorCode,
+  currentRetryCount = 0
+) {
+  const nextCount = (currentRetryCount || 0) + 1;
+  const maxRetries = getMaxRetries();
+
+  if (nextCount > maxRetries) {
+    await markSyncFailed(
+      practiceId,
+      resourceType,
+      syncRunId,
+      `${errorMessage} (gave up after ${maxRetries} retries)`,
+      errorCode || 'SYNC_ERROR'
+    );
+    return { status: 'failed', retryCount: nextCount, nextRetryAt: null };
   }
+
+  const nextRetryAt = computeNextRetryAt(nextCount);
+  await updateCursor(practiceId, resourceType, {
+    cursor: serializePageCursor(page, syncRunId, dateWindow),
+    status: 'retryable',
+    retry_count: nextCount,
+    next_retry_at: nextRetryAt,
+    last_error: errorMessage,
+    last_error_code: errorCode || 'TRANSIENT_RETRY',
+  });
+
+  if (syncRunId) {
+    await noteSyncRunRetry(
+      syncRunId,
+      `${errorMessage} (retry ${nextCount}/${maxRetries}, next at ${nextRetryAt})`
+    );
+  }
+
+  return { status: 'retryable', retryCount: nextCount, nextRetryAt };
 }
 
-function buildRateLimitRetryResult({ page, syncRunId, resourceType, dateWindow }) {
-  return {
-    success: false,
-    complete: false,
-    hasMore: true,
-    page,
-    processed: 0,
-    failed: 0,
-    syncRunId,
-    cursorStatus: 'in_progress',
-    resourceType,
-    chunkStart: dateWindow?.chunkStart || null,
-    chunkEnd: dateWindow?.chunkEnd || null,
-    error: RATE_LIMIT_RETRY_MESSAGE,
-    errorCode: 'RATE_LIMIT_RETRY',
-  };
-}
-
-async function handleSyncError(err, practiceId, resourceType, syncRunId, page, dateWindow) {
+async function handleSyncError(
+  err,
+  practiceId,
+  resourceType,
+  syncRunId,
+  page,
+  dateWindow,
+  currentRetryCount = 0
+) {
   const classified = classifyDentallyFetchError(err);
   const errorMessage = classified.message;
-
-  if (classified.kind === 'rate_limit') {
-    await markSyncRateLimitRetry(practiceId, resourceType, syncRunId, page, syncRunId, dateWindow);
-    return buildRateLimitRetryResult({ page, syncRunId, resourceType, dateWindow });
-  }
+  const errorCode = classified.code;
 
   if (classified.kind === 'pat_auth') {
-    await markSyncFailed(practiceId, resourceType, syncRunId, errorMessage);
+    await markCredentialsNeedReconnection(practiceId, errorMessage);
+    await markSyncFailed(practiceId, resourceType, syncRunId, errorMessage, errorCode);
     return {
       success: false,
       complete: false,
@@ -108,32 +148,54 @@ async function handleSyncError(err, practiceId, resourceType, syncRunId, page, d
       page,
       processed: 0,
       failed: 0,
+      skipped: 0,
       syncRunId,
       cursorStatus: 'failed',
       resourceType,
       error: errorMessage,
-      errorCode: 'PAT_EXPIRED_OR_INVALID',
+      errorCode,
+      autoRetry: false,
     };
   }
 
-  await markSyncFailed(practiceId, resourceType, syncRunId, errorMessage);
+  // transient + unknown → capped auto-retry
+  const marked = await markSyncRetryable(
+    practiceId,
+    resourceType,
+    syncRunId,
+    page,
+    dateWindow,
+    errorMessage,
+    errorCode,
+    currentRetryCount
+  );
+
   return {
     success: false,
     complete: false,
-    hasMore: false,
+    hasMore: marked.status === 'retryable',
     page,
     processed: 0,
     failed: 0,
+    skipped: 0,
     syncRunId,
-    cursorStatus: 'failed',
+    cursorStatus: marked.status,
     resourceType,
+    chunkStart: dateWindow?.chunkStart || null,
+    chunkEnd: dateWindow?.chunkEnd || null,
     error: errorMessage,
-    errorCode: 'SYNC_ERROR',
+    errorCode,
+    autoRetry: marked.status === 'retryable',
+    retryCount: marked.retryCount,
+    nextRetryAt: marked.nextRetryAt,
   };
 }
 
 /**
  * Process one Dentally list-resource chunk (1 API page).
+ *
+ * All PE resource syncs (patients, accounts, recalls, appointments, …) go through
+ * this helper so retry / auth / skip handling stays shared.
  *
  * @param {string} practiceId
  * @param {{
@@ -154,6 +216,7 @@ async function syncResourceChunk(practiceId, options) {
   } = options;
 
   const cursorRow = await getOrCreateCursor(practiceId, resourceType);
+  const currentRetryCount = cursorRow.retry_count || 0;
 
   if (cursorRow.status === 'complete') {
     const parsed = parsePageCursor(cursorRow.cursor);
@@ -164,6 +227,7 @@ async function syncResourceChunk(practiceId, options) {
       page: parsed.page,
       processed: 0,
       failed: 0,
+      skipped: 0,
       syncRunId: parsed.syncRunId,
       cursorStatus: 'complete',
       resourceType,
@@ -185,7 +249,9 @@ async function syncResourceChunk(practiceId, options) {
     }
   }
 
-  if (cursorRow.status === 'failed') {
+  // Manual re-invoke or scheduler claim: leave auth-failed alone until PAT works;
+  // once PAT loads, flip retryable/failed → in_progress (failed gets a fresh retry budget).
+  if (cursorRow.status === 'retryable') {
     await updateCursor(practiceId, resourceType, { status: 'in_progress' });
   }
 
@@ -198,7 +264,8 @@ async function syncResourceChunk(practiceId, options) {
   try {
     pat = await loadPracticePat(practiceId);
   } catch (err) {
-    if (err.code === 'NO_CREDENTIAL') {
+    if (err.code === 'NO_CREDENTIAL' || err.code === 'NEEDS_RECONNECTION') {
+      await markSyncFailed(practiceId, resourceType, syncRunId, err.message, err.code);
       return {
         success: false,
         complete: false,
@@ -206,14 +273,26 @@ async function syncResourceChunk(practiceId, options) {
         page,
         processed: 0,
         failed: 0,
+        skipped: 0,
         syncRunId,
-        cursorStatus: cursorRow.status,
+        cursorStatus: 'failed',
         resourceType,
         error: err.message,
-        errorCode: 'NO_CREDENTIAL',
+        errorCode: err.code,
+        autoRetry: false,
       };
     }
     throw err;
+  }
+
+  // PAT is usable — clear terminal failed so a human retry can proceed
+  let effectiveRetryCount = currentRetryCount;
+  if (cursorRow.status === 'failed') {
+    effectiveRetryCount = 0;
+    await updateCursor(practiceId, resourceType, {
+      status: 'in_progress',
+      ...clearRetryFields(),
+    });
   }
 
   const userId = await resolveUserIdForPractice(practiceId);
@@ -237,7 +316,15 @@ async function syncResourceChunk(practiceId, options) {
     );
   } catch (err) {
     pat = null;
-    return handleSyncError(err, practiceId, resourceType, syncRunId, page, dateWindow);
+    return handleSyncError(
+      err,
+      practiceId,
+      resourceType,
+      syncRunId,
+      page,
+      dateWindow,
+      effectiveRetryCount
+    );
   }
 
   let { records, totalPages } = extractRecords(responseData, entityAlias);
@@ -250,21 +337,28 @@ async function syncResourceChunk(practiceId, options) {
       );
     } catch (err) {
       pat = null;
-      return handleSyncError(err, practiceId, resourceType, syncRunId, page, dateWindow);
+      return handleSyncError(
+        err,
+        practiceId,
+        resourceType,
+        syncRunId,
+        page,
+        dateWindow,
+        effectiveRetryCount
+      );
     }
   }
 
   pat = null;
 
-  const upsertResult = await upsertEntityData(
+  const upsertResult = await upsertPeEntityPage({
     entityAlias,
     practiceId,
     userId,
-    records,
-    {},
-    null,
-    null
-  );
+    rawRecords: records,
+    syncRunId,
+    resourceType,
+  });
 
   if (entityAlias === 'acquisition_sources' || entityAlias === 'appointment_cancellation_reasons') {
     invalidateMapCaches(practiceId);
@@ -275,6 +369,10 @@ async function syncResourceChunk(practiceId, options) {
     records.length === 0 ||
     (totalPages != null ? page >= totalPages : records.length < PER_PAGE);
 
+  const successCursorFields = {
+    ...clearRetryFields(),
+  };
+
   if (isLastPage && dateWindow) {
     const nextStart = dayAfter(dateWindow.chunkEnd);
     const endCap = todayUtc();
@@ -282,6 +380,7 @@ async function syncResourceChunk(practiceId, options) {
       await updateCursor(practiceId, resourceType, {
         cursor: serializePageCursor(page, syncRunId, dateWindow),
         status: 'complete',
+        ...successCursorFields,
       });
       if (syncRunId) {
         await completeSyncRun(syncRunId, 'completed');
@@ -293,6 +392,7 @@ async function syncResourceChunk(practiceId, options) {
         page,
         processed: upsertResult.processed,
         failed: upsertResult.failed,
+        skipped: upsertResult.skipped,
         syncRunId,
         cursorStatus: 'complete',
         resourceType,
@@ -306,6 +406,7 @@ async function syncResourceChunk(practiceId, options) {
     await updateCursor(practiceId, resourceType, {
       cursor: serializePageCursor(1, syncRunId, nextWindow),
       status: 'in_progress',
+      ...successCursorFields,
     });
     return {
       success: true,
@@ -315,6 +416,7 @@ async function syncResourceChunk(practiceId, options) {
       nextPage: 1,
       processed: upsertResult.processed,
       failed: upsertResult.failed,
+      skipped: upsertResult.skipped,
       syncRunId,
       cursorStatus: 'in_progress',
       resourceType,
@@ -330,6 +432,7 @@ async function syncResourceChunk(practiceId, options) {
     await updateCursor(practiceId, resourceType, {
       cursor: serializePageCursor(page, syncRunId, dateWindow),
       status: 'complete',
+      ...successCursorFields,
     });
     if (syncRunId) {
       await completeSyncRun(syncRunId, 'completed');
@@ -342,6 +445,7 @@ async function syncResourceChunk(practiceId, options) {
       page,
       processed: upsertResult.processed,
       failed: upsertResult.failed,
+      skipped: upsertResult.skipped,
       syncRunId,
       cursorStatus: 'complete',
       resourceType,
@@ -353,6 +457,7 @@ async function syncResourceChunk(practiceId, options) {
   await updateCursor(practiceId, resourceType, {
     cursor: serializePageCursor(nextPage, syncRunId, dateWindow),
     status: 'in_progress',
+    ...successCursorFields,
   });
 
   return {
@@ -363,6 +468,7 @@ async function syncResourceChunk(practiceId, options) {
     nextPage,
     processed: upsertResult.processed,
     failed: upsertResult.failed,
+    skipped: upsertResult.skipped,
     syncRunId,
     cursorStatus: 'in_progress',
     resourceType,
@@ -376,6 +482,7 @@ module.exports = {
   loadPracticePat,
   resolveUserIdForPractice,
   markSyncFailed,
-  markSyncRateLimitRetry,
+  markSyncRetryable,
+  handleSyncError,
   syncResourceChunk,
 };

@@ -17,7 +17,8 @@ const router = express.Router();
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const CREDENTIAL_COLUMNS = 'id, label, pat_hint, validated_at, created_at, updated_at';
+const CREDENTIAL_COLUMNS =
+  'id, label, pat_hint, validated_at, needs_reconnection, auth_error_message, auth_failed_at, created_at, updated_at';
 
 function isUuid(v) {
   return typeof v === 'string' && UUID_RE.test(v);
@@ -53,6 +54,9 @@ function serializeCredential(row) {
     accountLabel: row.label || null,
     patHint: row.pat_hint && row.pat_hint !== '••••••••' ? row.pat_hint : null,
     validatedAt: row.validated_at || null,
+    needsReconnection: row.needs_reconnection === true,
+    authErrorMessage: row.auth_error_message || null,
+    authFailedAt: row.auth_failed_at || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -76,7 +80,13 @@ async function validateAndUpdateCredential(credentialId, practiceId, decryptedPa
 
   if (validation.status === 'valid') {
     const validatedAt = new Date().toISOString();
-    const updatePayload = { validated_at: validatedAt, updated_at: validatedAt };
+    const updatePayload = {
+      validated_at: validatedAt,
+      updated_at: validatedAt,
+      needs_reconnection: false,
+      auth_error_message: null,
+      auth_failed_at: null,
+    };
     if (validation.dentallyEmail) {
       updatePayload.label = validation.dentallyEmail;
     }
@@ -102,11 +112,28 @@ async function validateAndUpdateCredential(credentialId, practiceId, decryptedPa
   }
 
   if (validation.status === 'auth_error') {
+    const failedAt = new Date().toISOString();
+    const { error: authUpdateError } = await supabaseAdmin
+      .from('dentally_credentials')
+      .update({
+        needs_reconnection: true,
+        auth_error_message: validation.message || 'PAT rejected by Dentally',
+        auth_failed_at: failedAt,
+        updated_at: failedAt,
+      })
+      .eq('id', credentialId)
+      .eq('practice_id', practiceId);
+
+    if (authUpdateError) {
+      console.error('[EconomicsEngine] needs_reconnection update failed:', authUpdateError.message);
+    }
+
     return {
       httpStatus: 200,
       body: {
         success: true,
         validated: false,
+        needsReconnection: true,
         error: validation.message,
       },
     };

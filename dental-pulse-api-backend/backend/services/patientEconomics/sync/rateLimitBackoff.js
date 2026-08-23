@@ -12,7 +12,9 @@ const BASE_DELAY_MS = Number(process.env.PE_SYNC_RATE_LIMIT_BASE_MS || 2000);
 const MAX_DELAY_MS = Number(process.env.PE_SYNC_RATE_LIMIT_CAP_MS || 60000);
 
 function isRateLimitError(err) {
-  return classifyDentallyFetchError(err).kind === 'rate_limit';
+  if (err && typeof err === 'object' && err.isRateLimit) return true;
+  const classified = classifyDentallyFetchError(err);
+  return classified.code === 'RATE_LIMIT_RETRY';
 }
 
 function computeBackoffDelayMs(attempt) {
