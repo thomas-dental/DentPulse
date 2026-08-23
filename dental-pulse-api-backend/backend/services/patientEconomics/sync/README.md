@@ -104,10 +104,13 @@ Use lowercase slugs matching internal aliases where they overlap with `api/denta
 - `services/patientEconomics/patEncryption.js`
 - `services/patientEconomics/validatePat.js`
 - `services/patientEconomics/sync/syncPatients.js` — one-chunk patients sync
+- `services/patientEconomics/sync/syncAccounts.js` — one-chunk accounts sync
+- `services/patientEconomics/sync/syncHelpers.js` — shared chunk-fetch-upsert-advance logic
 - `services/patientEconomics/sync/cursorStore.js` — `sync_cursors` read/write
-- `scripts/syncPePatients.js` — manual CLI trigger
+- `scripts/syncPePatients.js` — manual CLI trigger (patients)
+- `scripts/syncPeAccounts.js` — manual CLI trigger (accounts)
 - `api/dentally/client.js` — shared fetch + rate limit (reuse, do not fork)
-- `services/sync/upsert.js` + `services/transformers/dentally.js` — upsert into existing `public.patients`
+- `services/sync/upsert.js` + `services/transformers/dentally.js` — upsert into existing `public.patients` and `public.dentally_patients_accounts`
 
 ## Migration
 

@@ -4,6 +4,7 @@ const { supabaseAdmin } = require('../config/supabase');
 const { encryptPAT, decryptPAT } = require('../services/patientEconomics/patEncryption');
 const { validatePatWithDentally } = require('../services/patientEconomics/validatePat');
 const { syncPatients } = require('../services/patientEconomics/sync/syncPatients');
+const { syncAccounts } = require('../services/patientEconomics/sync/syncAccounts');
 
 const router = express.Router();
 
@@ -333,6 +334,37 @@ router.post('/sync/patients', syncAuthMiddleware, async (req, res) => {
     return res.status(httpStatus).json({ success: result.success, ...result });
   } catch (err) {
     console.error('[EconomicsEngine] POST /sync/patients error:', err.message);
+    return res.status(500).json({ success: false, error: 'Internal error' });
+  }
+});
+
+/**
+ * POST /api/economics-engine/sync/accounts
+ * Body: { practiceId }
+ * Processes one accounts chunk (1 Dentally page). Call repeatedly while hasMore=true.
+ */
+router.post('/sync/accounts', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.body?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const result = await syncAccounts(practiceId);
+
+    if (result.errorCode === 'NO_CREDENTIAL') {
+      return res.status(404).json({ success: false, ...result });
+    }
+
+    const httpStatus = result.success ? 200 : result.errorCode === 'PAT_EXPIRED_OR_INVALID' ? 401 : 503;
+    return res.status(httpStatus).json({ success: result.success, ...result });
+  } catch (err) {
+    console.error('[EconomicsEngine] POST /sync/accounts error:', err.message);
     return res.status(500).json({ success: false, error: 'Internal error' });
   }
 });

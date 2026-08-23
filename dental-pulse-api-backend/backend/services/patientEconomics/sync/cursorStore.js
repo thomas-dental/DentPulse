@@ -1,12 +1,15 @@
 const { supabaseAdmin } = require('../../../config/supabase');
 
 const RESOURCE_PATIENTS = 'patients';
+const RESOURCE_ACCOUNTS = 'accounts';
+
+const PAGE_BASED_RESOURCES = new Set([RESOURCE_PATIENTS, RESOURCE_ACCOUNTS]);
 
 /**
- * Parse patients cursor — supports legacy plain page ("4") or JSON { page, syncRunId }.
+ * Parse page cursor — supports legacy plain page ("4") or JSON { page, syncRunId }.
  * @returns {{ page: number, syncRunId: string|null }}
  */
-function parsePatientsCursor(cursorStr) {
+function parsePageCursor(cursorStr) {
   if (!cursorStr) return { page: 1, syncRunId: null };
 
   try {
@@ -25,11 +28,16 @@ function parsePatientsCursor(cursorStr) {
   return { page: Number.isFinite(page) && page >= 1 ? page : 1, syncRunId: null };
 }
 
-function serializePatientsCursor(page, syncRunId) {
+function serializePageCursor(page, syncRunId) {
   const payload = { page };
   if (syncRunId) payload.syncRunId = syncRunId;
   return JSON.stringify(payload);
 }
+
+/** @deprecated use parsePageCursor */
+const parsePatientsCursor = parsePageCursor;
+/** @deprecated use serializePageCursor */
+const serializePatientsCursor = serializePageCursor;
 
 /**
  * Load or create the standing checkpoint for a practice resource.
@@ -48,8 +56,9 @@ async function getOrCreateCursor(practiceId, resourceType) {
 
   if (existing) return existing;
 
-  const initialCursor =
-    resourceType === RESOURCE_PATIENTS ? serializePatientsCursor(1, null) : '1';
+  const initialCursor = PAGE_BASED_RESOURCES.has(resourceType)
+    ? serializePageCursor(1, null)
+    : '1';
 
   const { data: inserted, error: insertError } = await supabaseAdmin
     .from('sync_cursors')
@@ -87,6 +96,9 @@ async function updateCursor(practiceId, resourceType, { cursor, status }) {
 
 module.exports = {
   RESOURCE_PATIENTS,
+  RESOURCE_ACCOUNTS,
+  parsePageCursor,
+  serializePageCursor,
   parsePatientsCursor,
   serializePatientsCursor,
   getOrCreateCursor,
