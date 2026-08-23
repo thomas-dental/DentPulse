@@ -585,7 +585,7 @@ export default function Settings() {
                 </div>
               </div>
 
-              <PatientEconomicsPatCard />
+              <PatientEconomicsPatCard organizationId={organizationId} />
 
               {/* Non-Dentally integrations (Implicit Accounting, etc.) */}
               {integrations.filter(int => int.integration_name !== 'Dentally').map((integration) => {
