@@ -6,7 +6,7 @@
  *   - Accepted encodings: base64 (typically 44 chars) or hex (64 chars).
  *   - Generate e.g.: openssl rand -base64 32   OR   openssl rand -hex 32
  *
- * Storage mapping (dentally_credentials):
+ * Storage mapping (public.integrations for Dentally):
  *   - encrypted_pat     ← base64(ciphertext || authTag)  [authTag is 16 bytes, appended]
  *   - encrypted_pat_iv  ← base64(12-byte IV)
  *

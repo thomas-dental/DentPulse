@@ -51,6 +51,7 @@ import { PatientEconomicsPatCard } from '@/components/settings/PatientEconomicsP
 import { PlaidSection } from '@/components/plaid/PlaidSection';
 import { LocationRegionManagement } from '@/components/settings/LocationRegionManagement';
 import { useIntegrations, Integration } from '@/hooks/useIntegrations';
+import { integrationHasPat, saveDentallyPat } from '@/services/integrations/patientEconomicsService';
 import { useOrganization } from '@/hooks/useOrganization';
 import { ORGANIZATION_DISPLAY_SETTINGS_QUERY_KEY } from '@/hooks/useOrganizationSettings';
 import { useAuth } from '@/hooks/useAuth';
@@ -237,18 +238,19 @@ export default function Settings() {
   };
 
   const handleConnect = (integration: Integration) => {
-    // Check if API key and endpoint are set
-    if (!integration.api_key || !integration.api_endpoints) {
-      toast.error("Please set API Key and API Endpoint before connecting.");
-      // Open edit dialog
+    if (integration.integration_name === 'Dentally') {
+      if (!integrationHasPat(integration)) {
+        toast.error('Please save your Dentally PAT before connecting.');
+        handleEditIntegration(integration);
+        return;
+      }
+    } else if (!integration.api_key || !integration.api_endpoints) {
+      toast.error('Please set API Key and API Endpoint before connecting.');
       handleEditIntegration(integration);
       return;
     }
 
-    // Connect using data from database
-    connectIntegration({
-      id: integration.id,
-    });
+    connectIntegration({ id: integration.id });
   };
 
   const handleDisconnect = (integrationId: string) => {
@@ -325,15 +327,47 @@ export default function Settings() {
     const desc = integration.integration_description || '';
     setEditFormData({
       apiEndpoint: integration.api_endpoints || '',
-      apiKey: integration.api_key || '',
+      apiKey: integration.integration_name === 'Dentally' ? '' : (integration.api_key || ''),
       accountLabel: desc === 'Cloud-based dental practice management software' ? '' : desc,
     });
     setShowEditApiKey(false);
     setIsEditDialogOpen(true);
   };
 
-  const handleSaveEdit = () => {
-    if (!editingIntegration) return;
+  const handleSaveEdit = async () => {
+    if (!editingIntegration || !organizationId) return;
+
+    if (editingIntegration.name === 'Dentally') {
+      const pat = editFormData.apiKey.trim();
+      if (!pat) {
+        toast.error('Please enter your Dentally PAT.');
+        return;
+      }
+      try {
+        const result = await saveDentallyPat(organizationId, pat);
+        if (result.validated === false) {
+          toast.error(result.validationError || 'Token saved but validation failed');
+        } else {
+          toast.success('Dentally PAT saved and validated.');
+        }
+        if (editFormData.accountLabel.trim()) {
+          updateIntegration({
+            id: editingIntegration.id,
+            updates: {
+              integration_description: editFormData.accountLabel.trim(),
+            },
+          });
+        }
+        refetchIntegrations();
+      } catch (error: any) {
+        toast.error(error.message || 'Failed to save Dentally PAT');
+        return;
+      }
+      setIsEditDialogOpen(false);
+      setEditingIntegration(null);
+      setEditFormData({ apiEndpoint: '', apiKey: '', accountLabel: '' });
+      return;
+    }
 
     const updates: Record<string, any> = {
       api_key: editFormData.apiKey.trim() || null,
@@ -608,9 +642,12 @@ export default function Settings() {
                     }).replace(',', '')
                   : 'Never';
 
-                const maskedApiKey = integration.api_key
-                  ? integration.api_key.substring(0, 8) + '••••••••••••••••'
-                  : 'Not set';
+                const maskedApiKey =
+                  integration.integration_name === 'Dentally'
+                    ? integration.pat_hint || 'Not set'
+                    : integration.api_key
+                      ? integration.api_key.substring(0, 8) + '••••••••••••••••'
+                      : 'Not set';
 
                 return (
                   <Card key={integration.id}>

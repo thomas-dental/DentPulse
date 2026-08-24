@@ -10,10 +10,13 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Plus, X, RefreshCw, Key, Pencil, Loader2, Link2, Database, ChevronsUpDown, X as XIcon, Eye, EyeOff, MapPin, History } from 'lucide-react';
 import { Integration } from '@/hooks/useIntegrations';
-import { DentallyService } from '@/services/integrations/dentallyService';
-import { IntegrationSyncEntityService } from '@/services/integrations/integrationSyncEntityService';
 import { SyncJobService } from '@/services/integrations/syncJobService';
 import { supabase } from '@/integrations/supabase/client';
+import {
+  connectDentallyAccount,
+  fetchDentallySites,
+  integrationHasPat,
+} from '@/services/integrations/patientEconomicsService';
 import { format, formatDistanceToNow } from 'date-fns';
 import { DatePicker, ConfigProvider } from 'antd';
 import dayjs from 'dayjs';
@@ -119,44 +122,12 @@ export function DentallyIntegrationCard({
 
     setIsSaving(true);
     try {
-      const apiEndpoint = 'https://api.dentally.co';
-
-      // Validate API key
-      toast.info('Validating API key...');
-      const userResult = await DentallyService.getUser(addApiKey.trim(), apiEndpoint);
-
-      if (!userResult.success || !userResult.data?.user) {
-        if (userResult.status === 401 || userResult.status === 403) {
-          throw new Error('API key is not valid. Please check your key and try again.');
-        }
-        if (userResult.data?.error) {
-          throw new Error(userResult.data.error.message || userResult.data.error.type || 'API key is not valid.');
-        }
-        throw new Error('API key is not valid. Please check your key and try again.');
-      }
-
-      toast.info('API key validated. Setting up integration...');
-
-      const label = addAccountLabel.trim() || 'Cloud-based dental practice management software';
-      const { data: newIntegration, error: createError } = await supabase
-        .from('integrations')
-        .insert({
-          organization_id: organizationId,
-          user_id: userId,
-          created_by: userId,
-          integration_name: 'Dentally',
-          integration_description: label,
-          is_connected: true,
-          api_endpoints: apiEndpoint,
-          api_key: addApiKey.trim(),
-          sync_frequency: '15min',
-        })
-        .select()
-        .single();
-
-      if (createError) throw createError;
-
-      await IntegrationSyncEntityService.initializeDefaultEntities(newIntegration.id, 'Dentally');
+      toast.info('Validating and saving token...');
+      const { jobCount } = await connectDentallyAccount(
+        organizationId,
+        addApiKey.trim(),
+        addAccountLabel.trim() || undefined
+      );
 
       onRefetch();
       setIsAddDialogOpen(false);
@@ -164,7 +135,11 @@ export function DentallyIntegrationCard({
       setAddAccountLabel('');
       setShowApiKey(false);
 
-      toast.success('Dentally account connected successfully!');
+      toast.success(
+        jobCount > 0
+          ? `Dentally account connected — ${jobCount} sync jobs started.`
+          : 'Dentally account connected successfully!'
+      );
     } catch (error: any) {
       console.error('Error connecting Dentally:', error);
       toast.error(error.message || 'Failed to connect. Please try again.');
@@ -176,8 +151,8 @@ export function DentallyIntegrationCard({
   // Open force sync dialog — fetch available sites from Dentally API
   const openForceSyncDialog = async (integrationId: string) => {
     const integration = dentallyIntegrations.find(i => i.id === integrationId);
-    if (!integration?.api_key) {
-      toast.error('No API key found for this integration.');
+    if (!organizationId || !integration || !integrationHasPat(integration)) {
+      toast.error('No saved Dentally token for this integration.');
       return;
     }
 
@@ -196,20 +171,12 @@ export function DentallyIntegrationCard({
     }
 
     try {
-      const result = await DentallyService.getSites(integration.api_key, integration.api_endpoints || undefined);
-      if (result.success && result.data?.sites) {
-        const sites = result.data.sites
-          .filter((s: any) => s.active !== false)
-          .map((s: any) => ({ id: String(s.id), name: s.name || s.nickname || `Site ${s.id}` }));
-        setAvailableSites(sites);
+      const sites = await fetchDentallySites(organizationId, integrationId);
+      setAvailableSites(sites);
 
-        // If "all" was selected and no saved preference, select all site ids
-        if (!savedSiteIds || savedSiteIds.length === 0) {
-          setSelectedSiteIds(sites.map((s: { id: string }) => s.id));
-          setSelectAllSites(true);
-        }
-      } else {
-        toast.error('Failed to fetch sites from Dentally.');
+      if (!savedSiteIds || savedSiteIds.length === 0) {
+        setSelectedSiteIds(sites.map((s) => s.id));
+        setSelectAllSites(true);
       }
     } catch (error: any) {
       console.error('Error fetching sites:', error);
@@ -458,7 +425,7 @@ export function DentallyIntegrationCard({
                   const lastSync = getLastSyncDate(integration);
                   const label = integration.integration_description && integration.integration_description !== 'Cloud-based dental practice management software'
                     ? integration.integration_description
-                    : integration.api_key ? `${integration.api_key.substring(0, 8)}...` : 'Dentally';
+                    : integration.pat_hint || 'Dentally';
 
                   return (
                     <div key={integration.id} className="dp-conn-row">

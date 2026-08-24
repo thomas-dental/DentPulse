@@ -30,6 +30,7 @@ const syncAuthMiddleware = require('../middleware/syncAuth');
 const authMiddleware = require('../middleware/auth');
 const { triggerSync, iplicit: iplicitQueue } = require('../queue');
 const { createSession: createIplicitSession } = require('../api/iplicit/client');
+const { encryptPatForStorage, buildPatHint, descriptionFromDentallyUser } = require('../services/patientEconomics/integrationPat');
 
 const router = express.Router();
 
@@ -280,18 +281,20 @@ router.post('/dentally', syncAuthMiddleware, async (req, res) => {
       console.log(`[Onboard] Created integration (${integrationId})`);
     }
 
-    // Set API key on the integration
+    // Set encrypted PAT on the integration (never store plaintext api_key)
     await supabaseAdmin
       .from('integrations')
       .update({
-        api_key: api_key,
+        ...encryptPatForStorage(api_key),
         api_endpoints: baseEndpoint,
+        integration_description: descriptionFromDentallyUser(userData),
         is_connected: true,
+        validated_at: new Date().toISOString(),
         user_id: userId,
       })
       .eq('id', integrationId);
 
-    console.log(`[Onboard] Set API key on integration`);
+    console.log(`[Onboard] Set encrypted PAT on integration`);
 
     // ── 8. Initialize sync entities ────────────────────────────────────────────
     const { data: existingEntities } = await supabaseAdmin
@@ -408,7 +411,7 @@ router.post('/dentally', syncAuthMiddleware, async (req, res) => {
  *
  * Returns: { success, integrationId, sitesFound, locationsCreated, jobCount }
  */
-router.post('/dentally/add-account/:orgId', authMiddleware, async (req, res) => {
+router.post('/dentally/add-account/:orgId', syncAuthMiddleware, async (req, res) => {
   try {
     const { orgId } = req.params;
     const { api_key, api_endpoint, label } = req.body || {};
@@ -418,6 +421,20 @@ router.post('/dentally/add-account/:orgId', authMiddleware, async (req, res) => 
       return res.status(400).json({ error: 'api_key is required' });
     }
     const apiKey = api_key.trim();
+
+    const { data: membership, error: membershipErr } = await supabaseAdmin
+      .from('user_roles')
+      .select('user_id')
+      .eq('user_id', req.user.id)
+      .eq('organization_id', orgId)
+      .maybeSingle();
+
+    if (membershipErr) {
+      return res.status(500).json({ error: 'Failed to verify organization access' });
+    }
+    if (!membership) {
+      return res.status(403).json({ error: 'Not authorized for this organization' });
+    }
 
     // ── 1. Verify org + resolve owner (synced records get a real user_id) ──────
     const { data: org, error: orgErr } = await supabaseAdmin
@@ -431,14 +448,15 @@ router.post('/dentally/add-account/:orgId', authMiddleware, async (req, res) => 
     const ownerUserId = org.user_id || req.user.id;
 
     // ── 2. Duplicate guard: same key already connected to this org? ────────────
+    const incomingHint = buildPatHint(apiKey);
     const { data: existingDentally } = await supabaseAdmin
       .from('integrations')
-      .select('id, api_key')
+      .select('id, pat_hint')
       .eq('organization_id', orgId)
       .ilike('integration_name', 'dentally')
       .is('deleted_at', null);
 
-    if ((existingDentally || []).some(i => i.api_key === apiKey)) {
+    if ((existingDentally || []).some((i) => i.pat_hint && i.pat_hint === incomingHint)) {
       return res.status(409).json({ error: 'This Dentally account is already connected to the organization.' });
     }
 
@@ -530,10 +548,11 @@ router.post('/dentally/add-account/:orgId', authMiddleware, async (req, res) => 
         user_id: ownerUserId,
         created_by: ownerUserId,
         integration_name: 'Dentally',
-        integration_description: (label && label.trim()) || 'Cloud-based dental practice management software',
+        integration_description: descriptionFromDentallyUser(userData, label),
         is_connected: true,
         api_endpoints: baseEndpoint,
-        api_key: apiKey,
+        ...encryptPatForStorage(apiKey),
+        validated_at: new Date().toISOString(),
         sync_frequency: '15min',
       })
       .select('id')

@@ -40,6 +40,9 @@ export type DentallyCredential = {
   accountLabel: string | null;
   patHint: string | null;
   validatedAt: string | null;
+  needsReconnection: boolean;
+  authErrorMessage: string | null;
+  authFailedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -64,6 +67,9 @@ type ApiCredential = {
   accountLabel: string | null;
   patHint: string | null;
   validatedAt: string | null;
+  needsReconnection?: boolean;
+  authErrorMessage?: string | null;
+  authFailedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -74,6 +80,9 @@ function mapCredential(row: ApiCredential): DentallyCredential {
     accountLabel: row.accountLabel,
     patHint: row.patHint,
     validatedAt: row.validatedAt,
+    needsReconnection: row.needsReconnection === true,
+    authErrorMessage: row.authErrorMessage || null,
+    authFailedAt: row.authFailedAt || null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -183,4 +192,64 @@ export async function deleteDentallyCredential(practiceId: string): Promise<void
   if (!res.ok || !body.success) {
     throw new Error(body.error || `Delete failed (${res.status})`);
   }
+}
+
+/** Add another Dentally account to an org — PAT encrypted server-side (main sync lane). */
+export async function connectDentallyAccount(
+  organizationId: string,
+  pat: string,
+  label?: string
+): Promise<{ integrationId: string; jobCount: number }> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${getBackendUrl()}/api/onboard/dentally/add-account/${organizationId}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      api_key: pat.trim(),
+      api_endpoint: 'https://api.dentally.co',
+      label: label?.trim() || undefined,
+    }),
+  });
+  const body = await res.json().catch(() => ({} as {
+    success?: boolean;
+    error?: string;
+    integrationId?: string;
+    jobCount?: number;
+  }));
+
+  if (res.status === 409) {
+    throw new Error(body.error || 'This Dentally account is already connected.');
+  }
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Connect failed (${res.status})`);
+  }
+
+  return {
+    integrationId: body.integrationId!,
+    jobCount: body.jobCount ?? 0,
+  };
+}
+
+/** Fetch Dentally sites using stored encrypted PAT (never exposes token to browser). */
+export async function fetchDentallySites(
+  organizationId: string,
+  integrationId: string
+): Promise<{ id: string; name: string }[]> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(
+    `${getBackendUrl()}/api/organizations/${organizationId}/integrations/${integrationId}/dentally-sites`,
+    { method: 'GET', headers }
+  );
+  const body = await res.json().catch(() => ({} as { success?: boolean; sites?: { id: string; name: string }[]; error?: string }));
+
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Failed to load sites (${res.status})`);
+  }
+
+  return body.sites || [];
+}
+
+/** True when integration has an encrypted PAT (pat_hint is the client-safe indicator). */
+export function integrationHasPat(integration: { pat_hint?: string | null; encrypted_pat?: string | null }): boolean {
+  return !!(integration.pat_hint || integration.encrypted_pat);
 }

@@ -297,7 +297,7 @@ async function runWorker(queueKey, job) {
     // Fetch Dentally integration details from `integrations` table
     const { data: integration, error } = await supabaseAdmin
       .from('integrations')
-      .select('id, api_key, api_endpoints, synced_site_ids')
+      .select('id, encrypted_pat, encrypted_pat_iv, api_endpoints, synced_site_ids')
       .eq('id', job.integration_id)
       .single();
 
@@ -421,7 +421,7 @@ async function triggerSync(orgId, singleEntityAlias = null, userId = null, force
   if (options.integrationId) {
     const { data, error } = await supabaseAdmin
       .from('integrations')
-      .select('id, api_key, api_endpoints')
+      .select('id, encrypted_pat, encrypted_pat_iv, api_endpoints')
       .eq('id', options.integrationId)
       .eq('organization_id', orgId)
       .is('deleted_at', null)
@@ -433,7 +433,7 @@ async function triggerSync(orgId, singleEntityAlias = null, userId = null, force
   } else {
     const { data, error } = await supabaseAdmin
       .from('integrations')
-      .select('id, api_key, api_endpoints')
+      .select('id, encrypted_pat, encrypted_pat_iv, api_endpoints')
       .eq('organization_id', orgId)
       .ilike('integration_name', 'dentally')
       .eq('is_connected', true)

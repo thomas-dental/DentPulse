@@ -28,17 +28,18 @@ const {
   markCredentialsNeedReconnection,
 } = require('./credentialsStatus');
 const { upsertPeEntityPage } = require('./upsertPePage');
+const {
+  findEncryptedDentallyCredential,
+} = require('../integrationCredentials');
 
 async function loadPracticePat(practiceId) {
-  const { data: row, error } = await supabaseAdmin
-    .from('dentally_credentials')
-    .select('encrypted_pat, encrypted_pat_iv, needs_reconnection')
-    .eq('practice_id', practiceId)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(`Failed to load PAT: ${error.message}`);
+  let row;
+  try {
+    row = await findEncryptedDentallyCredential(practiceId);
+  } catch (err) {
+    throw new Error(`Failed to load PAT: ${err.message}`);
   }
+
   if (!row) {
     const err = new Error('No Dentally PAT saved for this practice');
     err.code = 'NO_CREDENTIAL';

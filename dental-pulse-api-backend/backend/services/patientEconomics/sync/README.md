@@ -1,12 +1,12 @@
 # Patient Economics Engine — Dentally sync architecture
 
-Backend-only sync (requires decrypted PAT from `dentally_credentials`). Not an Edge Function: no execution-ceiling constraint; chunking is sized for HTTP timeouts, rate limits, and deploy/crash resilience.
+Backend-only sync (requires decrypted PAT from `integrations.encrypted_pat`). Not an Edge Function: no execution-ceiling constraint; chunking is sized for HTTP timeouts, rate limits, and deploy/crash resilience.
 
 ## Tables
 
 | Table | Role |
 |-------|------|
-| `dentally_credentials` | Encrypted PAT per `practice_id` (one row per practice) |
+| `integrations` (Dentally row) | Encrypted PAT per org (`encrypted_pat` / `encrypted_pat_iv`); `organization_id` = PE practice |
 | `sync_runs` | Append-oriented **run** audit: started/completed, overall status, error |
 | `sync_cursors` | **Standing checkpoint** per `(practice_id, resource_type)` — upserted after each chunk |
 
@@ -15,7 +15,7 @@ Backend-only sync (requires decrypted PAT from `dentally_credentials`). Not an E
 
 ### Why not `sync_jobs`?
 
-Existing Dentally sync uses `sync_jobs` + in-memory queues keyed by `integrations.id` and `integrations.api_key`. PE uses `dentally_credentials` (PAT per organization/practice). Reusing `sync_jobs` would couple PE to the integrations table and the main Dentally job queue without a clear win. Cursors are intentionally separate and practice-scoped.
+Existing Dentally sync uses `sync_jobs` + in-memory queues keyed by `integrations.id`. PE sync decrypts `integrations.encrypted_pat` for the Dentally row (`organization_id` = practice). Cursors stay practice-scoped and separate from `sync_jobs`.
 
 ## Chunk size
 
@@ -99,7 +99,7 @@ All resource syncs go through `syncHelpers.syncResourceChunk` → shared `handle
 | Category | Examples | Cursor / credentials | Auto-retry? |
 |----------|----------|----------------------|-------------|
 | **Transient** | Network timeout, Dentally 5xx, rate-limit after in-chunk backoff | `status=retryable`, `retry_count++`, `next_retry_at` backoff | Yes, until `PE_SYNC_MAX_RETRIES` (default 5) |
-| **Auth** | 401/403 invalid/expired PAT | `status=failed`; `dentally_credentials.needs_reconnection=true` | **No** — re-enter PAT in Settings |
+| **Auth** | 401/403 invalid/expired PAT | `status=failed`; `integrations.needs_reconnection=true` | **No** — re-enter PAT in Settings |
 | **Data** | Transform/upsert of one bad record | Record logged to `sync_skipped_records`; chunk continues | N/A (skip & continue) |
 | **Unknown** | Other unexpected errors | Same as transient (capped) | Yes until max, then `failed` + `sync_runs` error |
 

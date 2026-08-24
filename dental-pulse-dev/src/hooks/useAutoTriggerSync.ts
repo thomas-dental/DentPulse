@@ -71,10 +71,10 @@ export function useAutoTriggerSync() {
           // Zero jobs at all — check if any Dentally integration has API key
           const { data: integrationRows } = await supabase
             .from('integrations')
-            .select('id, api_key')
+            .select('id, pat_hint')
             .eq('organization_id', organizationId)
             .eq('integration_name', 'Dentally')
-            .not('api_key', 'is', null);
+            .not('pat_hint', 'is', null);
 
           if (integrationRows && integrationRows.length > 0) {
             console.log(`[AutoTriggerSync] Fresh account with ${integrationRows.length} Dentally integration(s) — auto-triggering full sync`);

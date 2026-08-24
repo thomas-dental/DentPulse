@@ -5,7 +5,7 @@
  * No Redis/BullMQ — polls sync_cursors and re-invokes the registered sync
  * function for each due row (one chunk per invocation).
  *
- * Skips practices with dentally_credentials.needs_reconnection = true.
+ * Skips practices with integrations.needs_reconnection = true.
  */
 
 const cron = require('node-cron');

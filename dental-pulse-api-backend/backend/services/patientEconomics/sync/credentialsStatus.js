@@ -1,19 +1,28 @@
 /**
- * dentally_credentials helpers for PE auth / reconnection state.
+ * Dentally credential status helpers — reads/writes public.integrations
+ * (encrypted_pat / encrypted_pat_iv / validated_at / needs_reconnection).
  */
 
 const { supabaseAdmin } = require('../../../config/supabase');
+const {
+  findEncryptedDentallyCredential,
+} = require('../integrationCredentials');
 
 async function markCredentialsNeedReconnection(practiceId, message) {
+  const row = await findEncryptedDentallyCredential(practiceId);
+  if (!row) return;
+
   const { error } = await supabaseAdmin
-    .from('dentally_credentials')
+    .from('integrations')
     .update({
       needs_reconnection: true,
       auth_error_message: message || null,
       auth_failed_at: new Date().toISOString(),
+      validated_at: null,
       updated_at: new Date().toISOString(),
     })
-    .eq('practice_id', practiceId);
+    .eq('id', row.id)
+    .eq('organization_id', practiceId);
 
   if (error) {
     console.error('[PE sync] Failed to mark credentials needs_reconnection:', error.message);
@@ -21,15 +30,19 @@ async function markCredentialsNeedReconnection(practiceId, message) {
 }
 
 async function clearCredentialsNeedReconnection(practiceId) {
+  const row = await findEncryptedDentallyCredential(practiceId);
+  if (!row) return;
+
   const { error } = await supabaseAdmin
-    .from('dentally_credentials')
+    .from('integrations')
     .update({
       needs_reconnection: false,
       auth_error_message: null,
       auth_failed_at: null,
       updated_at: new Date().toISOString(),
     })
-    .eq('practice_id', practiceId);
+    .eq('id', row.id)
+    .eq('organization_id', practiceId);
 
   if (error) {
     console.error('[PE sync] Failed to clear credentials needs_reconnection:', error.message);
@@ -37,17 +50,13 @@ async function clearCredentialsNeedReconnection(practiceId) {
 }
 
 async function practiceNeedsReconnection(practiceId) {
-  const { data, error } = await supabaseAdmin
-    .from('dentally_credentials')
-    .select('needs_reconnection')
-    .eq('practice_id', practiceId)
-    .maybeSingle();
-
-  if (error) {
-    console.error('[PE sync] Failed to read needs_reconnection:', error.message);
+  try {
+    const row = await findEncryptedDentallyCredential(practiceId);
+    return row?.needs_reconnection === true;
+  } catch (err) {
+    console.error('[PE sync] Failed to read needs_reconnection:', err.message);
     return false;
   }
-  return data?.needs_reconnection === true;
 }
 
 module.exports = {

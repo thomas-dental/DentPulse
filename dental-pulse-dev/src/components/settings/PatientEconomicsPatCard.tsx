@@ -19,8 +19,6 @@ import {
   Link2,
   Loader2,
   Pencil,
-  RefreshCw,
-  Settings2,
   Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -30,7 +28,6 @@ import {
   DentallyUnreachableError,
   deleteDentallyCredential,
   getDentallyCredential,
-  revalidateDentallyCredential,
   saveDentallyPat,
 } from '@/services/integrations/patientEconomicsService';
 
@@ -38,7 +35,15 @@ type PatientEconomicsPatCardProps = {
   organizationId?: string | null;
 };
 
-function HeaderStatusPill({
+type ConnectionStatus = 'connected' | 'invalid' | 'not_validated';
+
+function resolveStatus(credential: DentallyCredential): ConnectionStatus {
+  if (credential.needsReconnection) return 'invalid';
+  if (credential.validatedAt) return 'connected';
+  return 'not_validated';
+}
+
+function StatusPill({
   credential,
   isLoading,
 }: {
@@ -58,7 +63,8 @@ function HeaderStatusPill({
     return <span className="pe-status-pill pe-status-pill--idle">Not connected</span>;
   }
 
-  if (credential.validatedAt) {
+  const status = resolveStatus(credential);
+  if (status === 'connected') {
     return (
       <span className="pe-status-pill pe-status-pill--connected">
         <span className="dp-pulse-dot" />
@@ -66,8 +72,15 @@ function HeaderStatusPill({
       </span>
     );
   }
+  if (status === 'invalid') {
+    return <span className="pe-status-pill pe-status-pill--invalid">Token invalid</span>;
+  }
+  return <span className="pe-status-pill pe-status-pill--pending">Not yet validated</span>;
+}
 
-  return <span className="pe-status-pill pe-status-pill--pending">Needs validation</span>;
+function maskedDisplay(credential: DentallyCredential): string {
+  if (credential.patHint) return credential.patHint;
+  return '•••••••• Connected';
 }
 
 export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatCardProps) {
@@ -75,13 +88,16 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
-  const [connectDialogOpen, setConnectDialogOpen] = useState(false);
+  const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [pat, setPat] = useState('');
   const [showPat, setShowPat] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [isValidating, setIsValidating] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [savePhase, setSavePhase] = useState<'idle' | 'saving'>('idle');
+
+  const hasCredential = Boolean(credential);
+  const isUpdateMode = hasCredential;
 
   const loadCredential = useCallback(async () => {
     if (!organizationId) {
@@ -107,21 +123,18 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
     loadCredential();
   }, [loadCredential]);
 
-  const openConnectDialog = () => {
+  const openTokenDialog = () => {
     setPat('');
     setShowPat(false);
-    setSettingsDialogOpen(false);
-    setConnectDialogOpen(true);
-  };
-
-  const openSettingsDialog = () => {
-    setSettingsDialogOpen(true);
+    setSavePhase('idle');
+    setTokenDialogOpen(true);
   };
 
   const handleSave = async () => {
     if (!organizationId || !pat.trim() || isSaving) return;
 
     setIsSaving(true);
+    setSavePhase('saving');
     try {
       const result = await saveDentallyPat(organizationId, pat.trim());
       setCredential(result.credential ?? null);
@@ -131,45 +144,23 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
           description: result.validationError,
         });
       } else {
-        toast.success(credential ? 'PAT updated and validated' : 'PAT connected');
+        toast.success(isUpdateMode ? 'PAT updated and validated' : 'PAT connected and validated');
       }
 
-      setConnectDialogOpen(false);
+      setTokenDialogOpen(false);
       setPat('');
     } catch (err) {
       if (err instanceof DentallyUnreachableError) {
         if (err.credential) setCredential(err.credential);
         toast.warning('Token saved — Dentally unreachable', { description: err.message });
-        setConnectDialogOpen(false);
+        setTokenDialogOpen(false);
+        setPat('');
       } else {
         toast.error(err instanceof Error ? err.message : 'Could not save PAT');
       }
     } finally {
       setIsSaving(false);
-    }
-  };
-
-  const handleRevalidate = async () => {
-    if (!organizationId || isValidating) return;
-
-    setIsValidating(true);
-    try {
-      const result = await revalidateDentallyCredential(organizationId);
-      if (result.credential) setCredential(result.credential);
-
-      if ('validationError' in result) {
-        toast.error('Validation failed', { description: result.validationError });
-      } else {
-        toast.success('PAT validated with Dentally');
-      }
-    } catch (err) {
-      if (err instanceof DentallyUnreachableError) {
-        toast.warning('Dentally unreachable', { description: err.message });
-      } else {
-        toast.error(err instanceof Error ? err.message : 'Validation failed');
-      }
-    } finally {
-      setIsValidating(false);
+      setSavePhase('idle');
     }
   };
 
@@ -180,8 +171,8 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
     try {
       await deleteDentallyCredential(organizationId);
       setCredential(null);
-      setSettingsDialogOpen(false);
-      toast.success('PAT disconnected');
+      setDeleteDialogOpen(false);
+      toast.success('PAT disconnected from DentPulse');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not disconnect PAT');
     } finally {
@@ -189,12 +180,12 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
     }
   };
 
-  const accountTitle = credential?.accountLabel || 'Dentally PAT';
+  const accountTitle = credential?.accountLabel || 'Dentally';
+  const status = credential ? resolveStatus(credential) : null;
 
   return (
     <>
       <div className="space-y-5">
-        {/* Section header */}
         <div className="flex items-center gap-3 px-1">
           <div className="pe-section-icon">
             <Database className="h-5 w-5 text-white" />
@@ -204,19 +195,19 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
               <h2 className="text-lg font-bold tracking-tight text-foreground">
                 Patient Economics Engine
               </h2>
-              <HeaderStatusPill credential={credential} isLoading={isLoading} />
+              <StatusPill credential={credential} isLoading={isLoading} />
             </div>
             <p className="text-xs text-muted-foreground">
-              Store a Dentally personal access token for Patient Economics Engine sync.
+              Dentally personal access token for Patient Economics sync. Managed only here in Settings → Integrations.
             </p>
           </div>
         </div>
 
-        {/* Action card */}
         <div
           className={cn(
             'pe-action-card',
-            credential?.validatedAt && 'pe-action-card--connected',
+            status === 'connected' && 'pe-action-card--connected',
+            status === 'invalid' && 'pe-action-card--invalid',
           )}
         >
           {isLoading && (
@@ -233,25 +224,25 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
                 <p className="mt-0.5 text-sm text-muted-foreground">{loadError}</p>
               </div>
               <Button type="button" variant="outline" size="sm" onClick={loadCredential} className="shrink-0">
-                <RefreshCw className="mr-2 h-4 w-4" />
                 Retry
               </Button>
             </div>
           )}
 
+          {/* State: no credential — Connect */}
           {!isLoading && !loadError && !credential && (
             <div className="flex w-full flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
-                <p className="font-semibold text-foreground">No PAT configured yet</p>
-                <p className="mt-0.5 text-sm text-primary/80">
-                  Enter a Dentally personal access token to connect Patient Economics Engine.
+                <p className="font-semibold text-foreground">No PAT connected</p>
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  Paste a Dentally personal access token to connect Patient Economics Engine.
                 </p>
               </div>
               <Button
                 type="button"
                 size="sm"
                 className="dp-btn-primary shrink-0"
-                onClick={openConnectDialog}
+                onClick={openTokenDialog}
                 disabled={!organizationId}
               >
                 <Link2 className="h-3.5 w-3.5" />
@@ -260,118 +251,61 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
             </div>
           )}
 
+          {/* State: credential exists — Display + Update + Delete */}
           {!isLoading && !loadError && credential && (
             <div className="flex w-full flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0 space-y-1">
                 <p className="font-semibold text-foreground truncate">{accountTitle}</p>
                 <p className="font-mono text-sm tracking-wide text-muted-foreground">
-                  {credential.patHint || '••••••••••••••••'}
+                  {maskedDisplay(credential)}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {credential.validatedAt
+                  {status === 'connected' && credential.validatedAt
                     ? `Validated ${formatDistanceToNow(new Date(credential.validatedAt), { addSuffix: true })}`
-                    : 'Saved — validation pending or failed'}
+                    : status === 'invalid'
+                      ? credential.authErrorMessage || 'Dentally rejected this token — update it to reconnect.'
+                      : 'Stored — validation has not succeeded yet.'}
                 </p>
               </div>
 
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={openSettingsDialog}
-                className="dp-btn-action shrink-0"
-              >
-                <Settings2 className="h-3 w-3" />
-                Settings
-              </Button>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="dp-btn-action"
+                  onClick={openTokenDialog}
+                  disabled
+                >
+                  <Pencil className="h-3 w-3" />
+                  Update
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="dp-btn-action text-destructive hover:text-destructive hover:bg-destructive/5 border-destructive/30"
+                  onClick={() => setDeleteDialogOpen(true)}
+                  disabled
+                >
+                  <Trash2 className="h-3 w-3" />
+                  Delete
+                </Button>
+              </div>
             </div>
           )}
         </div>
       </div>
 
-      <Dialog open={settingsDialogOpen} onOpenChange={setSettingsDialogOpen}>
+      {/* Connect / Update — same upsert endpoint */}
+      <Dialog open={tokenDialogOpen} onOpenChange={setTokenDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>PAT settings</DialogTitle>
+            <DialogTitle>{isUpdateMode ? 'Update Dentally PAT' : 'Connect Dentally PAT'}</DialogTitle>
             <DialogDescription>
-              Manage the Dentally personal access token for Patient Economics Engine.
-            </DialogDescription>
-          </DialogHeader>
-
-          {credential && (
-            <div className="rounded-lg border bg-muted/30 px-4 py-3 space-y-1">
-              <p className="text-sm font-medium truncate">{accountTitle}</p>
-              <p className="font-mono text-xs text-muted-foreground">
-                {credential.patHint || '••••••••••••••••'}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {credential.validatedAt
-                  ? `Validated ${formatDistanceToNow(new Date(credential.validatedAt), { addSuffix: true })}`
-                  : 'Validation pending or failed'}
-              </p>
-            </div>
-          )}
-
-          <div className="flex flex-col gap-2 py-1">
-            {!credential?.validatedAt && (
-              <Button
-                type="button"
-                variant="outline"
-                className="dp-btn-action w-full justify-start"
-                disabled={isValidating}
-                onClick={async () => {
-                  await handleRevalidate();
-                }}
-              >
-                {isValidating ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-3 w-3" />
-                )}
-                Validate with Dentally
-              </Button>
-            )}
-            <Button
-              type="button"
-              variant="outline"
-              className="dp-btn-action w-full justify-start"
-              onClick={openConnectDialog}
-            >
-              <Pencil className="h-3 w-3" />
-              Update PAT
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="dp-btn-action w-full justify-start text-destructive hover:text-destructive hover:bg-destructive/5 border-destructive/30"
-              disabled={isDeleting}
-              onClick={handleDelete}
-            >
-              {isDeleting ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <Trash2 className="h-3 w-3" />
-              )}
-              Remove PAT
-            </Button>
-          </div>
-
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setSettingsDialogOpen(false)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={connectDialogOpen} onOpenChange={setConnectDialogOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{credential ? 'Update Dentally PAT' : 'Connect Dentally PAT'}</DialogTitle>
-            <DialogDescription>
-              {credential
-                ? 'Enter a new token to replace the current one. Only one PAT is stored per practice.'
-                : 'Paste a personal access token from Dentally. Only one PAT can be connected per practice.'}
+              {isUpdateMode
+                ? 'Enter a new token to replace the stored one. The previous DentPulse copy is overwritten; this does not revoke the old token on Dentally.'
+                : 'Paste a personal access token from Dentally. Only one encrypted token is stored per practice.'}
             </DialogDescription>
           </DialogHeader>
 
@@ -403,6 +337,13 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
               </div>
             </div>
 
+            {savePhase === 'saving' && (
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Saving and validating with Dentally…
+              </p>
+            )}
+
             {!organizationId && (
               <p className="flex items-start gap-2 text-sm text-muted-foreground">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -412,7 +353,7 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button type="button" variant="outline" onClick={() => setConnectDialogOpen(false)} disabled={isSaving}>
+            <Button type="button" variant="outline" onClick={() => setTokenDialogOpen(false)} disabled={isSaving}>
               Cancel
             </Button>
             <Button
@@ -426,13 +367,50 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
                   <Loader2 className="h-3 w-3 animate-spin" />
                   Saving…
                 </>
-              ) : credential ? (
-                'Save & validate'
+              ) : isUpdateMode ? (
+                'Update'
               ) : (
                 <>
                   <Link2 className="h-3 w-3" />
                   Connect
                 </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete stored PAT?</DialogTitle>
+            <DialogDescription className="space-y-2">
+              <span className="block">
+                This removes DentPulse&apos;s encrypted copy of the token and stops future Patient Economics syncs for this practice until you connect again.
+              </span>
+              <span className="block font-medium text-foreground">
+                It does not revoke the token on Dentally&apos;s side — only DentPulse&apos;s stored copy is cleared.
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" onClick={() => setDeleteDialogOpen(false)} disabled={isDeleting}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={isDeleting}
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Deleting…
+                </>
+              ) : (
+                'Delete'
               )}
             </Button>
           </DialogFooter>
@@ -476,6 +454,11 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
           color: #d97706;
           border: 1px solid #fde68a;
         }
+        .pe-status-pill--invalid {
+          background: #fef2f2;
+          color: #dc2626;
+          border: 1px solid #fecaca;
+        }
         .pe-action-card {
           display: flex;
           align-items: center;
@@ -490,12 +473,9 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
           border-color: #a7f3d0;
           background: linear-gradient(90deg, hsl(var(--card)) 0%, rgba(236, 253, 245, 0.35) 100%);
         }
-        .dp-conn-actions {
-          display: flex;
-          align-items: center;
-          justify-content: flex-end;
-          gap: 4px;
-          flex-wrap: wrap;
+        .pe-action-card--invalid {
+          border-color: #fecaca;
+          background: linear-gradient(90deg, hsl(var(--card)) 0%, rgba(254, 242, 242, 0.4) 100%);
         }
         .dp-btn-primary {
           background: linear-gradient(135deg, #0d9488, #0f766e) !important;
@@ -515,24 +495,6 @@ export function PatientEconomicsPatCard({ organizationId }: PatientEconomicsPatC
           gap: 6px;
           border-radius: 10px;
           font-weight: 500;
-        }
-        .dp-icon-btn {
-          height: 28px;
-          width: 28px;
-          border-radius: 8px;
-          color: hsl(var(--muted-foreground));
-          transition: all 0.15s ease;
-        }
-        .dp-icon-btn:hover {
-          background: hsl(var(--muted));
-          color: hsl(var(--foreground));
-        }
-        .dp-icon-btn--danger {
-          color: #ef4444;
-        }
-        .dp-icon-btn--danger:hover {
-          background: #fef2f2;
-          color: #dc2626;
         }
         .dp-pulse-dot {
           width: 7px;

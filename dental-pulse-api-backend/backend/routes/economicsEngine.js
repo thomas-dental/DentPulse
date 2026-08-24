@@ -3,6 +3,11 @@ const syncAuthMiddleware = require('../middleware/syncAuth');
 const { supabaseAdmin } = require('../config/supabase');
 const { encryptPAT, decryptPAT } = require('../services/patientEconomics/patEncryption');
 const { validatePatWithDentally } = require('../services/patientEconomics/validatePat');
+const {
+  DENTALLY_NAME,
+  findDentallyIntegration,
+  findEncryptedDentallyCredential,
+} = require('../services/patientEconomics/integrationCredentials');
 const { syncPatients } = require('../services/patientEconomics/sync/syncPatients');
 const { syncAccounts } = require('../services/patientEconomics/sync/syncAccounts');
 const { syncRecalls } = require('../services/patientEconomics/sync/syncRecalls');
@@ -17,8 +22,8 @@ const router = express.Router();
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const CREDENTIAL_COLUMNS =
-  'id, label, pat_hint, validated_at, needs_reconnection, auth_error_message, auth_failed_at, created_at, updated_at';
+const CREDENTIAL_SELECT =
+  'id, organization_id, integration_name, integration_description, pat_hint, validated_at, needs_reconnection, auth_error_message, auth_failed_at, created_at, updated_at, encrypted_pat';
 
 function isUuid(v) {
   return typeof v === 'string' && UUID_RE.test(v);
@@ -49,9 +54,10 @@ async function verifyPracticeAccess(userId, practiceId) {
 }
 
 function serializeCredential(row) {
+  if (!row || !row.encrypted_pat) return null;
   return {
     id: row.id,
-    accountLabel: row.label || null,
+    accountLabel: row.integration_description || null,
     patHint: row.pat_hint && row.pat_hint !== '••••••••' ? row.pat_hint : null,
     validatedAt: row.validated_at || null,
     needsReconnection: row.needs_reconnection === true,
@@ -63,16 +69,8 @@ function serializeCredential(row) {
 }
 
 async function fetchCredentialForPractice(practiceId) {
-  const { data, error } = await supabaseAdmin
-    .from('dentally_credentials')
-    .select(CREDENTIAL_COLUMNS)
-    .eq('practice_id', practiceId)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(error.message);
-  }
-  return data ? serializeCredential(data) : null;
+  const row = await findEncryptedDentallyCredential(practiceId);
+  return serializeCredential(row);
 }
 
 async function validateAndUpdateCredential(credentialId, practiceId, decryptedPat) {
@@ -86,16 +84,17 @@ async function validateAndUpdateCredential(credentialId, practiceId, decryptedPa
       needs_reconnection: false,
       auth_error_message: null,
       auth_failed_at: null,
+      is_connected: true,
     };
     if (validation.dentallyEmail) {
-      updatePayload.label = validation.dentallyEmail;
+      updatePayload.integration_description = validation.dentallyEmail;
     }
 
     const { error: validateUpdateError } = await supabaseAdmin
-      .from('dentally_credentials')
+      .from('integrations')
       .update(updatePayload)
       .eq('id', credentialId)
-      .eq('practice_id', practiceId);
+      .eq('organization_id', practiceId);
 
     if (validateUpdateError) {
       console.error('[EconomicsEngine] validated_at update failed:', validateUpdateError.message);
@@ -114,15 +113,16 @@ async function validateAndUpdateCredential(credentialId, practiceId, decryptedPa
   if (validation.status === 'auth_error') {
     const failedAt = new Date().toISOString();
     const { error: authUpdateError } = await supabaseAdmin
-      .from('dentally_credentials')
+      .from('integrations')
       .update({
+        validated_at: null,
         needs_reconnection: true,
         auth_error_message: validation.message || 'PAT rejected by Dentally',
         auth_failed_at: failedAt,
         updated_at: failedAt,
       })
       .eq('id', credentialId)
-      .eq('practice_id', practiceId);
+      .eq('organization_id', practiceId);
 
     if (authUpdateError) {
       console.error('[EconomicsEngine] needs_reconnection update failed:', authUpdateError.message);
@@ -151,7 +151,7 @@ async function validateAndUpdateCredential(credentialId, practiceId, decryptedPa
 
 /**
  * GET /api/economics-engine/credentials?practiceId=
- * Returns the single saved PAT for a practice (one per practice).
+ * Returns the Dentally credential for this practice when encrypted_pat is set.
  */
 router.get('/credentials', syncAuthMiddleware, async (req, res) => {
   try {
@@ -176,7 +176,7 @@ router.get('/credentials', syncAuthMiddleware, async (req, res) => {
 /**
  * POST /api/economics-engine/credentials
  * Body: { practiceId, pat }
- * Upserts the single PAT for a practice, then validates via Dentally GET /v1/user.
+ * Upserts encrypted PAT onto integrations (Dentally), then validates via Dentally GET /v1/user.
  */
 router.post('/credentials', syncAuthMiddleware, async (req, res) => {
   try {
@@ -207,28 +207,62 @@ router.post('/credentials', syncAuthMiddleware, async (req, res) => {
     const now = new Date().toISOString();
     const patHint = buildPatHint(pat);
 
-    const { data: savedRow, error: upsertError } = await supabaseAdmin
-      .from('dentally_credentials')
-      .upsert(
-        {
-          practice_id: practiceId,
+    let existing = await findDentallyIntegration(practiceId);
+    let savedId;
+
+    if (existing) {
+      const { data: updated, error: updateError } = await supabaseAdmin
+        .from('integrations')
+        .update({
           encrypted_pat: ciphertext,
           encrypted_pat_iv: iv,
           pat_hint: patHint,
           validated_at: null,
+          needs_reconnection: false,
+          auth_error_message: null,
+          auth_failed_at: null,
+          api_key: null,
           updated_at: now,
-        },
-        { onConflict: 'practice_id' }
-      )
-      .select('id')
-      .single();
+        })
+        .eq('id', existing.id)
+        .eq('organization_id', practiceId)
+        .select('id')
+        .single();
 
-    if (upsertError) {
-      console.error('[EconomicsEngine] upsert failed:', upsertError.message);
-      return res.status(500).json({ success: false, error: 'Failed to save credentials' });
+      if (updateError) {
+        console.error('[EconomicsEngine] update failed:', updateError.message);
+        return res.status(500).json({ success: false, error: 'Failed to save credentials' });
+      }
+      savedId = updated.id;
+    } else {
+      const { data: inserted, error: insertError } = await supabaseAdmin
+        .from('integrations')
+        .insert({
+          organization_id: practiceId,
+          user_id: req.user.id,
+          created_by: req.user.id,
+          integration_name: DENTALLY_NAME,
+          integration_description: 'Cloud-based dental practice management software',
+          is_connected: false,
+          api_endpoints: 'https://api.dentally.co',
+          api_key: null,
+          encrypted_pat: ciphertext,
+          encrypted_pat_iv: iv,
+          pat_hint: patHint,
+          validated_at: null,
+          needs_reconnection: false,
+          sync_frequency: '15min',
+          updated_at: now,
+        })
+        .select('id')
+        .single();
+
+      if (insertError) {
+        console.error('[EconomicsEngine] insert failed:', insertError.message);
+        return res.status(500).json({ success: false, error: 'Failed to save credentials' });
+      }
+      savedId = inserted.id;
     }
-
-    const savedId = savedRow.id;
 
     let decryptedPat;
     try {
@@ -269,16 +303,7 @@ router.post('/credentials/validate', syncAuthMiddleware, async (req, res) => {
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const { data: row, error: fetchError } = await supabaseAdmin
-      .from('dentally_credentials')
-      .select('id, encrypted_pat, encrypted_pat_iv')
-      .eq('practice_id', practiceId)
-      .maybeSingle();
-
-    if (fetchError) {
-      console.error('[EconomicsEngine] credential fetch failed:', fetchError.message);
-      return res.status(500).json({ success: false, error: 'Failed to load credential' });
-    }
+    const row = await findEncryptedDentallyCredential(practiceId);
     if (!row) {
       return res.status(404).json({ success: false, error: 'No credential saved for this practice' });
     }
@@ -309,7 +334,8 @@ router.post('/credentials/validate', syncAuthMiddleware, async (req, res) => {
 /**
  * DELETE /api/economics-engine/credentials
  * Body: { practiceId }
- * Removes the single stored PAT for a practice.
+ * Clears encrypted PAT fields on the Dentally integration row (does not delete the row,
+ * and does not revoke the token on Dentally's side).
  */
 router.delete('/credentials', syncAuthMiddleware, async (req, res) => {
   try {
@@ -323,13 +349,30 @@ router.delete('/credentials', syncAuthMiddleware, async (req, res) => {
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
+    const row = await findEncryptedDentallyCredential(practiceId);
+    if (!row) {
+      return res.json({ success: true });
+    }
+
+    const now = new Date().toISOString();
     const { error } = await supabaseAdmin
-      .from('dentally_credentials')
-      .delete()
-      .eq('practice_id', practiceId);
+      .from('integrations')
+      .update({
+        encrypted_pat: null,
+        encrypted_pat_iv: null,
+        validated_at: null,
+        pat_hint: null,
+        needs_reconnection: false,
+        auth_error_message: null,
+        auth_failed_at: null,
+        api_key: null,
+        updated_at: now,
+      })
+      .eq('id', row.id)
+      .eq('organization_id', practiceId);
 
     if (error) {
-      console.error('[EconomicsEngine] delete failed:', error.message);
+      console.error('[EconomicsEngine] delete/clear failed:', error.message);
       return res.status(500).json({ success: false, error: 'Failed to remove credential' });
     }
 
