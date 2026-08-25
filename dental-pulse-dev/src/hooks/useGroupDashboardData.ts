@@ -1,8 +1,7 @@
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns';
 import { useOrganization } from '@/hooks/useOrganization';
-import { usePlanAccess } from '@/hooks/usePlanAccess';
 import { useFilters } from '@/contexts/FilterContext';
 import { useLocations } from '@/hooks/useLocations';
 import { useLocationMetrics } from '@/hooks/useLocationMetrics';
@@ -238,38 +237,6 @@ export function useGroupDashboardData() {
   const trendStart = startOfMonth(subMonths(now, 23));
   const trendEnd = endOfMonth(now);
   const production = useAllProvidersNetProduction(null, trendStart, trendEnd, locationIdForIncome);
-
-  // Basic plan is intended for solo-practice orgs (one provider, one
-  // location) — for those, the org-wide aggregate this hook already computes
-  // IS the one provider's Financial Position, so no separate scoping query is
-  // needed. If a Basic-plan org unexpectedly has more than one provider or
-  // location, fail open (keep showing the org-wide aggregate) rather than
-  // guessing which one to show, but flag it instead of silently mismatching
-  // the plan's "provider only" promise.
-  const { planTier, isModuleAllowedByPlan } = usePlanAccess();
-  // Business Valuation (EBITDA × multiple) is an Accelerate-only add-on beyond
-  // Financial Position itself (see PLAN_FEATURES) — everything else on this
-  // dashboard is the "Financial Position" feature all plans above Basic get.
-  const valuationAllowed = isModuleAllowedByPlan('ebitda_to_value');
-  // "Operational Efficiency — Locations, Accounts Payable, Budget" is its own
-  // Accelerate-only PLAN_FEATURES bullet (bundled with 'locations' since
-  // essential/growth never have more than the org's single location, same as
-  // basic) — gates the per-chair-day KPIs + ranked site league zone below.
-  const operationalEfficiencyAllowed = isModuleAllowedByPlan('locations');
-  useEffect(() => {
-    if (planTier !== 'basic') return;
-    const providerGroupCount = production.data?.providers?.length ?? 0;
-    if (providerGroupCount > 1) {
-      console.warn(
-        `[useGroupDashboardData] Basic-plan org "${organization?.name ?? organizationId}" has ${providerGroupCount} providers — expected exactly one for solo-practice Financial Position scoping. Showing org-wide data instead of a single provider.`,
-      );
-    }
-    if (locations.length > 1) {
-      console.warn(
-        `[useGroupDashboardData] Basic-plan org "${organization?.name ?? organizationId}" has ${locations.length} locations — expected exactly one for solo-practice Financial Position scoping. Showing org-wide data instead of a single provider.`,
-      );
-    }
-  }, [planTier, production.data, locations.length, organization?.name, organizationId]);
 
   // Cash Flow Statement default window (PreparingCashflowStatement): today − 210 days.
   // Trend Net Cashflow / Collection (Total Received) must use this same window so months match.
@@ -1092,8 +1059,7 @@ export function useGroupDashboardData() {
       groupGrossProfitRatio: groupBreakEven.grossProfitRatio,
       benchLoading:
         benchmark.isLoading || production.isLoading || periodAccountingIncome.isLoading,
-      safeToDraw, prevNetCashFlow, estValue, groupValue, valuationAllowed,
-      operationalEfficiencyAllowed,
+      safeToDraw, prevNetCashFlow, estValue, groupValue,
       valueLoading: ebitdaValuation.isLoading || ebitdaBridge.isLoading,
       // trend
       trend,
@@ -1123,7 +1089,7 @@ export function useGroupDashboardData() {
     ebitdaBridge.data, ebitdaBridge.isLoading,
     periodScreenProfit.actualProfit,
     locations, selectedLocationId, organization?.name, periodDays,
-    dateRange.startDate, dateRange.endDate, valuationAllowed, operationalEfficiencyAllowed,
+    dateRange.startDate, dateRange.endDate,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     ymd(trendStart), ymd(trendEnd),
   ]);

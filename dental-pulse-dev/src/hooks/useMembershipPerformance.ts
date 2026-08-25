@@ -7,7 +7,6 @@ import { useOrganization } from '@/hooks/useOrganization';
 import { useFilters } from '@/contexts/FilterContext';
 import { useTreatments } from '@/hooks/useTreatments';
 import { useCostImpactData } from '@/hooks/useCostImpactData';
-import { useMembershipTreatmentSettings } from '@/hooks/useMembershipTreatmentSettings';
 import { useMembershipThresholds, getStatusFromMargin } from '@/hooks/useMembershipThresholds';
 import { ukDayStartInstant, ukDayEndInstant } from '@/utils/dateRangeUtils';
 
@@ -106,7 +105,6 @@ export function useMembershipPerformance() {
   const { allAvailableLocations } = useLocations();
   const { dateRange, selectedLocationId, selectedRegionId } = useFilters();
   const { treatments: dbTreatments } = useTreatments();
-  const { settings: membershipTreatmentSettings } = useMembershipTreatmentSettings();
   const thresholds = useMembershipThresholds();
 
   const allLocationIds = useMemo(() => allAvailableLocations.map(l => l.id), [allAvailableLocations]);
@@ -452,57 +450,6 @@ export function useMembershipPerformance() {
     return map;
   }, [dbTreatments]);
 
-  // Membership-only per-treatment cost settings (Treatments tab —
-  // membership_treatment_settings), bridged from treatments.id (how the
-  // settings are keyed) to external_id (how TPI rows refer to treatments).
-  const membershipOverrideByExternalId = useMemo(() => {
-    const byTreatmentId = new Map(membershipTreatmentSettings.map((s) => [s.treatmentId, s]));
-    const map = new Map<string, { dentistTimeMinutes: number | null; hygienistTimeMinutes: number | null; labCost: number | null; materialCost: number | null }>();
-    for (const t of dbTreatments) {
-      if (t.external_id == null) continue;
-      const s = byTreatmentId.get(t.id);
-      if (s) map.set(String(t.external_id), s);
-    }
-    return map;
-  }, [membershipTreatmentSettings, dbTreatments]);
-
-  // Direct per-treatment cost of this scope's delivered plan-member work,
-  // priced from the membership Treatments settings where a treatment is
-  // configured there (lab/material cost + dentist/hygienist time) and from
-  // the general Treatment Setup catalog otherwise — the same override-first
-  // rule the Margin tab's cost-to-serve uses. Used INSTEAD of the GL
-  // allocation below whenever the org has configured any membership
-  // treatment settings (the client's own entered costs beat a GL split of
-  // whole-practice spend); the GL path remains the fallback so orgs without
-  // the Treatments tab configured keep their existing behaviour.
-  const directCostByPlanId = useMemo(() => {
-    const directCostByPlanId = new Map<number, number>();
-    for (const row of tpiRowsForCost) {
-      const t = costFieldsByExternalId.get(String(row.tid));
-      if (!t) continue;
-      const override = membershipOverrideByExternalId.get(String(row.tid));
-      const material = override?.materialCost ?? t.material;
-      const lab = override?.labCost ?? t.lab;
-      const overrideMin =
-        override && (override.dentistTimeMinutes != null || override.hygienistTimeMinutes != null)
-          ? (override.dentistTimeMinutes ?? 0) + (override.hygienistTimeMinutes ?? 0)
-          : null;
-      const minutes = overrideMin ?? t.durationMin;
-      const cost =
-        material +
-        lab +
-        t.therapist +
-        t.hourlyRate * (minutes / 60) +
-        (row.price * t.percentFees) / 100 +
-        (row.price * t.financeFee) / 100;
-      if (row.ppid != null) {
-        directCostByPlanId.set(row.ppid, (directCostByPlanId.get(row.ppid) ?? 0) + cost);
-      }
-    }
-    return directCostByPlanId;
-  }, [tpiRowsForCost, costFieldsByExternalId, membershipOverrideByExternalId]);
-  const hasTreatmentSettings = membershipTreatmentSettings.length > 0;
-
   type BucketWeights = { material: number; lab: number; clinician: number; overhead: number };
   const emptyBucketWeights = (): BucketWeights => ({ material: 0, lab: 0, clinician: 0, overhead: 0 });
 
@@ -628,13 +575,12 @@ export function useMembershipPerformance() {
   // higher) when Cost Impact has no accounting platform connected for this
   // scope (hasGLData false) — see hasCostData below, surfaced in the UI
   // rather than silently presented as a real zero-cost month.
-  const hasGLData = costImpactQ.data?.hasGLData ?? false;
-  const hasCostData = hasTreatmentSettings || hasGLData;
+  const hasCostData = costImpactQ.data?.hasGLData ?? false;
   const planOverviewsWithCost: PlanOverview[] = useMemo(() => {
     const nameToPpid = new Map<string, number>(
       Object.entries(planNames).map(([ppidStr, name]) => [name, Number(ppidStr)]),
     );
-    const spend: BucketWeights = hasGLData
+    const spend: BucketWeights = hasCostData
       ? {
           material: costImpactQ.data!.materialCostCost,
           lab: costImpactQ.data!.labFeesCost,
@@ -647,11 +593,7 @@ export function useMembershipPerformance() {
       const ppid = nameToPpid.get(plan.planName);
       const planWeights = ppid != null ? weightsByPlanId.get(ppid) : undefined;
       let actualCost = 0;
-      if (hasTreatmentSettings) {
-        // The client's own entered treatment costs (membership Treatments
-        // tab) beat a GL split of whole-practice spend.
-        actualCost = ppid != null ? directCostByPlanId.get(ppid) ?? 0 : 0;
-      } else if (hasGLData && planWeights) {
+      if (hasCostData && planWeights) {
         (Object.keys(spend) as (keyof BucketWeights)[]).forEach((bucket) => {
           if (totalWeights[bucket] > 0) actualCost += (planWeights[bucket] / totalWeights[bucket]) * spend[bucket];
         });
@@ -674,7 +616,7 @@ export function useMembershipPerformance() {
         status,
       };
     });
-  }, [planOverviews, planNames, thresholds, hasGLData, hasTreatmentSettings, directCostByPlanId, costImpactQ.data, weightsByPlanId, totalWeights]);
+  }, [planOverviews, planNames, thresholds, hasCostData, costImpactQ.data, weightsByPlanId, totalWeights]);
 
   // Risk signals
   const riskSignals: RiskSignal[] = useMemo(() => {
@@ -733,13 +675,11 @@ export function useMembershipPerformance() {
     treatmentConsumption,
     riskSignals,
     isLoading: isLoading || costImpactQ.isLoading,
-    /** False when NEITHER cost source exists for the current scope — no
-     *  membership Treatments settings configured AND no accounting platform
-     *  connected. costsPerMonth/netProfit/utilisation/status are all 0-cost
-     *  in that case (never a fabricated positive number), so any consumer
-     *  showing these should surface this flag rather than presenting £0
-     *  costs as if they were real. When Treatments settings exist, costs are
-     *  the client's own per-treatment figures; otherwise GL allocation. */
+    /** False when no accounting platform is connected for the current scope
+     *  — costsPerMonth/netProfit/utilisation/status are all 0-cost in that
+     *  case (never a fabricated positive number), so any consumer showing
+     *  these should surface this flag rather than presenting £0 costs as if
+     *  they were real. */
     hasCostData,
   };
 }

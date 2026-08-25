@@ -44,9 +44,7 @@ const DONUT_COLORS = ['#4f46e5', '#0284c7', '#059669', '#d97706', '#e11d48', '#7
 const OTHER_COLOR = '#94a3b8';
 const MAX_DONUT_SLICES = 7;
 
-// Pence-exact tooltips (client rule 2026-08-19: never round £ off in the
-// membership module); the axis ticks stay compact — they label the scale.
-const fmtGBP = new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtGBP = new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 });
 const axisGBP = (v: number) => (Math.abs(v) >= 1000 ? `£${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}k` : `£${v}`);
 
 function CountTrendCard({ title, icon, total, color, gradientId, data }: {

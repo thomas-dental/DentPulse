@@ -7,19 +7,21 @@
  *   ta_patient_id        ↔ patients.pt_id
  *   ta_appointment_id    ↔ appointments.apmt_id (nullable until booked)
  *   ta_treatment_plan_id ↔ treatment_plans.tp_id
+ *
+ * Window: practice onboarding start_date → today (monthly updated_after/before).
  */
 
 const { RESOURCE_TREATMENT_APPOINTMENTS } = require('./cursorStore');
 const { syncResourceChunk } = require('./syncHelpers');
+const { getPracticeSyncRange } = require('./practiceSyncRange');
 
 async function syncTreatmentAppointments(practiceId) {
+  const { startDate } = await getPracticeSyncRange(practiceId);
   return syncResourceChunk(practiceId, {
     resourceType: RESOURCE_TREATMENT_APPOINTMENTS,
     entityAlias: 'treatment_appointments',
-    // Full backfill (no date window); main sync uses updated_after date chunks.
-    entityConfigOverride: {
-      dateFilter: null,
-      dateFilterEnd: null,
+    dateChunking: {
+      rangeStart: startDate,
     },
   });
 }

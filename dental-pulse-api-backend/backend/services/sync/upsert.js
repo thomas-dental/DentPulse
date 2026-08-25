@@ -1061,6 +1061,8 @@ function invalidateMapCaches(organizationId) {
 
 module.exports = {
   upsertEntityData,
+  upsertInvoicesWithLineItems,
+  upsertPaymentsWithExplanations,
   getCategoryMap,
   getLocationMap,
   getCancellationReasonMap,

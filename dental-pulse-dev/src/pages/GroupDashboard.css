@@ -173,9 +173,6 @@
 .gdb .pill { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; letter-spacing: 0.02em; }
 .gdb .pill.ind { background: var(--gdb-accent-wash); color: var(--gdb-series-1); }
 .gdb .info { color: var(--gdb-muted); font-size: 11px; border: 1px solid var(--gdb-border); border-radius: 50%; width: 15px; height: 15px; display: inline-grid; place-items: center; cursor: help; }
-.gdb .tval.locked, .gdb .sval.locked { color: var(--gdb-muted); }
-.gdb .locked-link { display: inline-block; margin-top: 8px; font-size: 12px; font-weight: 600; color: var(--gdb-series-1); text-decoration: none; }
-.gdb .locked-link:hover { text-decoration: underline; }
 
 /* ---------- Zone 2: Business Pulse ---------- */
 .gdb .pulse { padding: 16px 16px 18px; }

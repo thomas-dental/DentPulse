@@ -2221,20 +2221,16 @@ export function AccountingIntegrationsHub({ organizationId }: AccountingIntegrat
 
         /* ── Connection rows ── */
         .dp-conn-row {
-          display: flex; flex-direction: column; gap: 8px;
-          padding: 10px; border-radius: 10px;
+          display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+          padding: 8px 10px; border-radius: 10px;
           background: hsl(var(--card));
           border: 1px solid hsl(var(--border) / 0.5);
           transition: background 0.15s ease;
         }
         .dp-conn-row:hover { background: hsl(var(--muted) / 0.3); }
-        .dp-conn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+        .dp-conn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
         .dp-conn-dot--on  { background: #10b981; box-shadow: 0 0 6px rgba(16,185,129,0.4); }
         .dp-conn-dot--off { background: #d1d5db; }
-        .dp-conn-actions {
-          display: flex; align-items: center; justify-content: flex-end;
-          gap: 4px; flex-wrap: wrap;
-        }
 
         .dp-footer-label {
           font-size: 10px; font-weight: 700; letter-spacing: 0.08em;

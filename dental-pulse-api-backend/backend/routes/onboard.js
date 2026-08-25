@@ -3,12 +3,10 @@
  *
  * POST /api/onboard/dentally
  *   Body: { api_key, api_endpoint?, start_date?, end_date? }
- *   start_date/end_date (YYYY-MM-DD) scope the initial sync window for
- *   date-chunked entities (appointments, invoices, treatment plans, treatment
- *   plan items, NHS claims, payments). Reference data (locations, treatments,
- *   practitioners, etc.) and patients always sync in full regardless, since
- *   patients are looked up by date-scoped entities. Omit both to fall back to
- *   the default 365-day window (see triggerSyncForIntegration).
+ *   start_date/end_date (YYYY-MM-DD) scope the initial sync window from the
+ *   user's picker (both bounds). Persisted per practice for later PE syncs.
+ *   Omit both to fall back to the default 365-day window
+ *   (see triggerSyncForIntegration).
  *
  * Does everything the frontend onboarding used to do:
  *   1. Validate the API key (GET /v1/user)
@@ -354,9 +352,17 @@ router.post('/dentally', syncAuthMiddleware, async (req, res) => {
       .map(e => e.alias);
 
     const syncOptions = { entities: enabledAliases };
+    // Use the user's picker range as-is. Persist so PE syncs can reuse start_date.
     if (start_date && end_date) {
       syncOptions.startDate = start_date;
       syncOptions.endDate = end_date;
+      try {
+        const { savePracticeSyncRange } = require('../services/patientEconomics/sync/practiceSyncRange');
+        await savePracticeSyncRange(orgId, start_date, end_date);
+        console.log(`[Onboard] Saved practice sync range: ${start_date} → ${end_date}`);
+      } catch (err) {
+        console.warn(`[Onboard] Could not persist sync range:`, err.message);
+      }
       console.log(`[Onboard] Using requested sync date range: ${start_date} to ${end_date}`);
     }
 

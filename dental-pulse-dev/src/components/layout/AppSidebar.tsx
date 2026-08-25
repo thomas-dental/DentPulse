@@ -6,7 +6,6 @@ import { SITE_LOGOS } from "@/lib/integrationLogos";
 import { useUserRole } from "@/hooks/useUserRole";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useModuleAccess } from "@/hooks/useModuleAccess";
-import { usePlanAccess } from "@/hooks/usePlanAccess";
 
 interface SubItem {
   label: string;
@@ -485,7 +484,6 @@ export function AppSidebar({
   const { isOwner } = useUserRole();
   const { can, canAccessModule, isOwner: isOwnerPerm } = usePermissions();
   const { isModuleEnabled } = useModuleAccess();
-  const { isModuleAllowedByPlan } = usePlanAccess();
 
   // Filter a single item (top-level or nested under a section) by:
   // owner-only flag + module-level permission, then filter its subItems (if
@@ -495,8 +493,6 @@ export function AppSidebar({
     if (item.ownerOnly && !isOwner()) return null;
     // Org-wide module gate (SuperAdmin) — applies to everyone, even owners.
     if (item.moduleKey && !isModuleEnabled(item.moduleKey)) return null;
-    // Subscription plan gate — applies to everyone, even owners.
-    if (item.moduleKey && !isModuleAllowedByPlan(item.moduleKey)) return null;
     if (isOwnerPerm) return item;
     // For dropdowns with sub-items that have their own moduleKey, skip parent
     // moduleKey check and let sub-item filtering handle visibility.
@@ -518,7 +514,6 @@ export function AppSidebar({
     const filteredSubItems = item.subItems.filter((sub) => {
       // Sub-item has its own module key — check that module's access
       const effectiveModule = sub.moduleKey || parentModule;
-      if (effectiveModule && !isModuleAllowedByPlan(effectiveModule)) return false;
       if (effectiveModule && !canAccessModule(effectiveModule)) return false;
       // Card-level check within the effective module
       if (sub.cardKey && effectiveModule) {

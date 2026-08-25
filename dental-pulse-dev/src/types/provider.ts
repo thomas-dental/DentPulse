@@ -56,7 +56,6 @@ export interface Provider {
    * Bitmask of treatment options:
    *   bit 0 (1) = Does Perform NHS Treatments
    *   bit 1 (2) = Does Perform MOS Treatments
-   *   bit 2 (4) = Does Perform UOA Treatments
    * Legacy: value `1` meant "Enable as UDA Associate" (= NHS).
    */
   additional_options: number | null;
@@ -126,7 +125,7 @@ export interface ProviderInsert {
   // Contract Details tab fields
   contract_start_date?: string | null; // Contract start date
   contract_end_date?: string | null; // Contract end date
-  /** Bitmask: bit0=NHS treatments, bit1=MOS treatments, bit2=UOA treatments. */
+  /** Bitmask: bit0=NHS treatments, bit1=MOS treatments. */
   additional_options?: number | null;
   is_principal_associate?: boolean | null; // Principal Associate flag — Associate (Dentist) providers only
   split_source_method?: string | null; // Split source method (flat-percentage, sliding-scale, per-case, per-hour)
@@ -181,7 +180,7 @@ export interface ProviderUpdate {
   // Contract Details tab fields
   contract_start_date?: string | null; // Contract start date
   contract_end_date?: string | null; // Contract end date
-  /** Bitmask: bit0=NHS treatments, bit1=MOS treatments, bit2=UOA treatments. */
+  /** Bitmask: bit0=NHS treatments, bit1=MOS treatments. */
   additional_options?: number | null;
   is_principal_associate?: boolean | null; // Principal Associate flag — Associate (Dentist) providers only
   split_source_method?: string | null; // Split source method (flat-percentage, sliding-scale, per-case, per-hour)
@@ -284,8 +283,6 @@ export interface SpecialtyUpdate {
 export const PROVIDER_OPT_NHS = 1;
 /** providers.additional_options bit 1 — Does Perform MOS Treatments */
 export const PROVIDER_OPT_MOS = 2;
-/** providers.additional_options bit 2 — Does Perform UOA Treatments */
-export const PROVIDER_OPT_UOA = 4;
 
 export function providerPerformsNhs(additionalOptions: number | null | undefined): boolean {
   return ((Number(additionalOptions) || 0) & PROVIDER_OPT_NHS) !== 0;
@@ -293,10 +290,6 @@ export function providerPerformsNhs(additionalOptions: number | null | undefined
 
 export function providerPerformsMos(additionalOptions: number | null | undefined): boolean {
   return ((Number(additionalOptions) || 0) & PROVIDER_OPT_MOS) !== 0;
-}
-
-export function providerPerformsUoa(additionalOptions: number | null | undefined): boolean {
-  return ((Number(additionalOptions) || 0) & PROVIDER_OPT_UOA) !== 0;
 }
 
 // Manually-entered monthly lab/material cost values, used when
@@ -327,11 +320,6 @@ export interface ProviderMonthlyCostUpsert {
 export function encodeProviderAdditionalOptions(
   performsNhs: boolean,
   performsMos: boolean,
-  performsUoa: boolean = false,
 ): number {
-  return (
-    (performsNhs ? PROVIDER_OPT_NHS : 0) |
-    (performsMos ? PROVIDER_OPT_MOS : 0) |
-    (performsUoa ? PROVIDER_OPT_UOA : 0)
-  );
+  return (performsNhs ? PROVIDER_OPT_NHS : 0) | (performsMos ? PROVIDER_OPT_MOS : 0);
 }

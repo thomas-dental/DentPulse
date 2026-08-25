@@ -4,7 +4,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { PermissionProtectedRoute } from "@/components/auth/PermissionProtectedRoute";
-import { PlatformAdminRoute } from "@/components/auth/PlatformAdminRoute";
 import { AuthProvider } from "@/hooks/useAuth";
 import { FilterProvider } from "@/contexts/FilterContext";
 import "@/utils/triggerSyncJob"; // Make triggerSyncJob available globally for console access
@@ -107,7 +106,7 @@ import LocationHistory from "./pages/LocationHistory";
 import PlaidStatementsPage from "./pages/PlaidStatementsPage";
 import CashflowScenarioStudio from "./pages/CashflowScenarioStudio";
 import DentallyWebhookLogs from "./pages/DentallyWebhookLogs";
-import PlatformAdminOrganizations from "./pages/PlatformAdminOrganizations";
+import PeSyncInspector from "./pages/dev/PeSyncInspector";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -164,12 +163,15 @@ const App = () => (
           {/* URL-only module (not in sidebar): Week-0 model builder + 13-week scenario dashboard */}
           <Route path="/cashflow/scenario-studio" element={<ProtectedRoute><CashflowScenarioStudio /></ProtectedRoute>} />
           <Route path="/dev/dentally-webhook-logs" element={<ProtectedRoute><DentallyWebhookLogs /></ProtectedRoute>} />
+          {import.meta.env.DEV && (
+            <Route path="/dev/pe-sync-inspector" element={<ProtectedRoute><PeSyncInspector /></ProtectedRoute>} />
+          )}
           <Route path="/profitability" element={<PermissionProtectedRoute module="profitability" card="profitability_analysis"><Profitability /></PermissionProtectedRoute>} />
           <Route path="/profitability/benchmark" element={<Navigate to="/profitability" replace />} />
           <Route path="/profitability/benchmark/:category" element={<PermissionProtectedRoute module="profitability" card="profit_benchmark"><ProfitBenchmarkAction /></PermissionProtectedRoute>} />
           <Route path="/tax" element={<PermissionProtectedRoute module="tax"><Tax /></PermissionProtectedRoute>} />
           <Route path="/budget" element={<PermissionProtectedRoute module="budget"><Budget /></PermissionProtectedRoute>} />
-          <Route path="/planning/associates" element={<PermissionProtectedRoute module="providers"><ProfitPlanningByAssociates /></PermissionProtectedRoute>} />
+          <Route path="/planning/associates" element={<PermissionProtectedRoute module="budget"><ProfitPlanningByAssociates /></PermissionProtectedRoute>} />
           <Route path="/locations" element={<PermissionProtectedRoute module="locations"><Locations /></PermissionProtectedRoute>} />
           <Route path="/providers/dentist" element={<PermissionProtectedRoute module="providers" card="dentist_tab"><ProvidersDentist /></PermissionProtectedRoute>} />
           <Route path="/providers/therapist" element={<PermissionProtectedRoute module="providers" card="therapist_tab"><ProvidersTherapist /></PermissionProtectedRoute>} />
@@ -241,7 +243,6 @@ const App = () => (
           <Route path="/group-heatmap" element={<PermissionProtectedRoute module="ebitda_to_value" card="group_heatmap_tab"><GroupHeatmap /></PermissionProtectedRoute>} />
           <Route path="/generate-pdf" element={<PermissionProtectedRoute module="ebitda_to_value" card="generate_pdf_tab"><GeneratePdf /></PermissionProtectedRoute>} />
           <Route path="/roles-permissions" element={<ProtectedRoute><RolesPermissions /></ProtectedRoute>} />
-          <Route path="/platform-admin/organizations" element={<PlatformAdminRoute><PlatformAdminOrganizations /></PlatformAdminRoute>} />
 
           <Route path="/plaid/statements/:connId" element={<ProtectedRoute><PlaidStatementsPage /></ProtectedRoute>} />
           <Route path="/sage-test" element={<SageTest />} />

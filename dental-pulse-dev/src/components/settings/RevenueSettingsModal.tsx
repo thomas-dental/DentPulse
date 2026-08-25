@@ -70,12 +70,6 @@ const REVENUE_ROWS: RevenueRow[] = [
     levelKey: "mos_income_level",
     allowDentpulse: true,
   },
-  {
-    title: "UOA Income",
-    fromKey: "uoa_income_from",
-    levelKey: "uoa_income_level",
-    allowDentpulse: true,
-  },
 ];
 
 // Source = PMS or DentPulse means the figure is inherently computed per

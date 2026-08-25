@@ -1,6 +1,6 @@
 /**
  * Registry of PE sync resource_type → chunk function.
- * Day 5 resources (invoices, payments, membership) register here when added.
+ * Remaining Day 5 (membership) registers here when added.
  */
 
 const { SCHEDULED_RESOURCE_TYPES } = require('./cursorStore');
@@ -12,6 +12,8 @@ const { syncAppointments } = require('./syncAppointments');
 const { syncTreatmentAppointments } = require('./syncTreatmentAppointments');
 const { syncTreatmentPlans } = require('./syncTreatmentPlans');
 const { syncTreatmentItems } = require('./syncTreatmentItems');
+const { syncInvoices } = require('./syncInvoices');
+const { syncPayments } = require('./syncPayments');
 
 const SYNC_BY_RESOURCE = {
   acquisition_sources: syncAcquisitionSources,
@@ -22,6 +24,8 @@ const SYNC_BY_RESOURCE = {
   treatment_appointments: syncTreatmentAppointments,
   treatment_plans: syncTreatmentPlans,
   treatment_items: syncTreatmentItems,
+  invoices: syncInvoices,
+  payments: syncPayments,
 };
 
 function getSyncFn(resourceType) {

@@ -7,15 +7,16 @@
  * Dentally returns an empty list without a date filter — PE uses monthly
  * updated_after/updated_before windows in the cursor (chunkStart/chunkEnd).
  * Includes cancelled/DNA via cancelled=true (same as main Dentally sync).
+ *
+ * Full backfill starts at practice onboarding start_date (not a fixed env year).
  */
 
 const { RESOURCE_APPOINTMENTS } = require('./cursorStore');
 const { syncResourceChunk } = require('./syncHelpers');
-
-const APPOINTMENTS_RANGE_START =
-  process.env.PE_SYNC_APPOINTMENTS_START || '2020-01-01';
+const { getPracticeSyncRange } = require('./practiceSyncRange');
 
 async function syncAppointments(practiceId) {
+  const { startDate } = await getPracticeSyncRange(practiceId);
   return syncResourceChunk(practiceId, {
     resourceType: RESOURCE_APPOINTMENTS,
     entityAlias: 'appointments',
@@ -23,7 +24,7 @@ async function syncAppointments(practiceId) {
       extraParams: { cancelled: true },
     },
     dateChunking: {
-      rangeStart: APPOINTMENTS_RANGE_START,
+      rangeStart: startDate,
     },
   });
 }

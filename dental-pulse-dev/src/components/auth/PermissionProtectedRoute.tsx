@@ -2,7 +2,6 @@ import { ReactNode, useMemo, useEffect } from 'react';
 import { ProtectedRoute } from './ProtectedRoute';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useModuleAccess } from '@/hooks/useModuleAccess';
-import { usePlanAccess } from '@/hooks/usePlanAccess';
 import { Shield } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -10,9 +9,7 @@ import { Button } from '@/components/ui/button';
 // Module-to-route mapping for finding the first accessible page
 const MODULE_ROUTES: { module: string; path: string; label: string }[] = [
   { module: 'dashboard', path: '/', label: 'Dashboard' },
-  // 'performance' deliberately omitted — that page has no sidebar nav entry
-  // (removed from AppSidebar a while back), so redirecting there strands the
-  // user on a page they can't navigate back to.
+  { module: 'performance', path: '/performance', label: 'Performance' },
   { module: 'locations', path: '/locations', label: 'Locations' },
   { module: 'providers', path: '/providers/dentist', label: 'Providers' },
   { module: 'cash_flow', path: '/cashflow/preparing-statement', label: 'Cash Flow' },
@@ -44,31 +41,27 @@ export function PermissionProtectedRoute({ children, module, card }: PermissionP
 function ModuleGuard({ module, card, children }: { module: string; card?: string; children: ReactNode }) {
   const { can, canAccessModule, isOwner, loading } = usePermissions();
   const { isModuleEnabled, loading: moduleAccessLoading } = useModuleAccess();
-  const { isModuleAllowedByPlan, loading: planAccessLoading } = usePlanAccess();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const ready = !loading && !moduleAccessLoading && !planAccessLoading;
+  const ready = !loading && !moduleAccessLoading;
 
-  // First route that is both enabled org-wide, plan-allowed, AND accessible to this user.
+  // First route that is both enabled org-wide AND accessible to this user.
   const firstAccessibleRoute = useMemo(() => {
     if (!ready) return null;
     for (const route of MODULE_ROUTES) {
       if (!isModuleEnabled(route.module)) continue;
-      if (!isModuleAllowedByPlan(route.module)) continue;
       if (isOwner || canAccessModule(route.module)) return route;
     }
     return null;
-  }, [canAccessModule, isModuleEnabled, isModuleAllowedByPlan, isOwner, ready]);
+  }, [canAccessModule, isModuleEnabled, isOwner, ready]);
 
   // Org-wide module gate (SuperAdmin) — applies to everyone, even owners.
   const moduleDisabled = ready && !isModuleEnabled(module);
-  // Subscription plan gate — applies to everyone, even owners.
-  const planRestricted = ready && !isModuleAllowedByPlan(module);
   const lacksPermission = ready && !isOwner && !canAccessModule(module);
 
   // Auto-redirect silently to a page the user can actually open.
-  const shouldRedirect = (moduleDisabled || planRestricted || lacksPermission) && !!firstAccessibleRoute;
+  const shouldRedirect = (moduleDisabled || lacksPermission) && !!firstAccessibleRoute;
 
   useEffect(() => {
     if (shouldRedirect && firstAccessibleRoute) {
@@ -98,17 +91,6 @@ function ModuleGuard({ module, card, children }: { module: string; card?: string
     return (
       <AccessDenied
         message="This module has been disabled for your organization. Contact your administrator if you need access."
-        firstAccessibleRoute={firstAccessibleRoute}
-        navigate={navigate}
-      />
-    );
-  }
-
-  // Not included in the org's subscription plan and nowhere to redirect — block outright.
-  if (planRestricted) {
-    return (
-      <AccessDenied
-        message="This feature isn't included in your current plan. Upgrade to unlock it."
         firstAccessibleRoute={firstAccessibleRoute}
         navigate={navigate}
       />

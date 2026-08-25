@@ -13,7 +13,6 @@ export interface Organization {
   created_by: string | null;
   created_at: string;
   updated_at: string;
-  plan_tier: string;
 }
 
 export function useOrganization(organizationId?: string) {

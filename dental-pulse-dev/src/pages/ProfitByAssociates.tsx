@@ -23,11 +23,9 @@ import {
   Line,
 } from "recharts";
 import { useOrganizationSettings } from "@/hooks/useOrganizationSettings";
-import { usePlanAccess } from "@/hooks/usePlanAccess";
 import { formatCurrency as formatCurrencyBase } from "@/lib/currency";
 
 export default function ProfitByAssociates() {
-  const { planTier } = usePlanAccess();
   const { showDecimals } = useOrganizationSettings();
   const formatCurrency = (value: number) =>
     formatCurrencyBase(value, showDecimals);
@@ -163,7 +161,7 @@ export default function ProfitByAssociates() {
   );
 
   return (
-    <MainLayout locked={planTier === "basic"}>
+    <MainLayout>
       <Helmet>
         <title>Insights</title>
         <meta

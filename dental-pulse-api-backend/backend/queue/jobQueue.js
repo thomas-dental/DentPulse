@@ -675,15 +675,15 @@ async function triggerSyncForIntegration(orgId, integration, singleEntityAlias, 
     });
   }
 
-  // Step 2: Single-date entities (one job each, only start date, no end date)
-  // On initial sync (never synced before OR force), fetch ALL historical data (no date filter)
-  // On incremental sync, use the configured start date to only get new records
+  // Step 2: Single-date entities (one job each, start_date only — e.g. patients
+  // updated_after). Always scope from the configured sync start (onboarding /
+  // request override) through "now"; never pull unbounded historical data.
   for (const entity of singleDateEntities) {
     const isInitialSync = force || neverSyncedEntities.has(entity.alias);
-    const jobStartDate = isInitialSync ? null : syncStartDate;
-
     if (isInitialSync) {
-      console.log(`[JobQueue] ${entity.alias}: initial sync — fetching all historical data (no date filter)`);
+      console.log(
+        `[JobQueue] ${entity.alias}: initial sync — from ${syncStartDate} (updated_after)`
+      );
     }
 
     if (activeSet.has(entity.alias)) {
@@ -704,7 +704,7 @@ async function triggerSyncForIntegration(orgId, integration, singleEntityAlias, 
       records_failed: 0,
       retry_count: 0,
       max_retries: 3,
-      start_date: jobStartDate,
+      start_date: syncStartDate,
       end_date: null,
     });
   }

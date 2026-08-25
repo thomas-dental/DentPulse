@@ -186,7 +186,6 @@ const REVENUE_GROUP_LEVEL_KEY: Record<string, keyof RevenueSettings> = {
   MembershipIncome: "membership_income_level",
   NHSIncome: "nhs_income_level",
   MOSIncome: "mos_income_level",
-  UOAIncome: "uoa_income_level",
 };
 
 // Maps group_account_master.group_code (Revenue groups) to the matching
@@ -199,7 +198,6 @@ const REVENUE_GROUP_FROM_KEY: Record<string, keyof RevenueSettings> = {
   MembershipIncome: "membership_income_from",
   NHSIncome: "nhs_income_from",
   MOSIncome: "mos_income_from",
-  UOAIncome: "uoa_income_from",
 };
 
 // Maps group_account_master.group_code (Revenue groups) to the matching
@@ -211,7 +209,6 @@ const REVENUE_GROUP_INCOME_KEY: Record<string, keyof IncomeTypes> = {
   MembershipIncome: "membershipIncome",
   NHSIncome: "nhsIncome",
   MOSIncome: "mosIncome",
-  UOAIncome: "uoaIncome",
 };
 
 /**
@@ -1492,10 +1489,10 @@ export default function SetupCategories() {
                         Revenue
                       </h3>
                       <p className="text-xs text-muted-foreground">
-                        Private, membership, NHS, MOS, and UOA income accounts
-                        that make up production income. Groups set to "By
-                        Provider" in Revenue Settings are tracked per-associate
-                        and don't need a mapping here.
+                        Private, membership, NHS, and MOS income accounts that
+                        make up production income. Groups set to "By Provider"
+                        in Revenue Settings are tracked per-associate and don't
+                        need a mapping here.
                       </p>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {visibleRevenueGroupOptions.map((g) => {

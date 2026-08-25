@@ -132,63 +132,6 @@ async function overlayTrackingScopedActuals(
   return { ...response, rows: nextRows };
 }
 
-/**
- * Profit-benchmark fetch WITH Xero practice-tracking scoping — the exact path
- * the Profitability screen uses, extracted so non-hook callers can reuse it.
- *
- * Both steps matter and both are easy to miss:
- *   1. `trackingOptionId` on the request, resolved from the location.
- *   2. `overlayTrackingScopedActuals` afterwards, which recomputes actual £
- *      from xero_journal_details for that tracking option.
- *
- * Skip either one on a location that is a tracking-option split inside a
- * SHARED Xero tenant (e.g. Appoline Dental Care inside A&R AQUISITIONS LTD)
- * and you get the WHOLE TENANT's figures — several practices' costs summed
- * together — rather than the one practice. Always go through this function
- * instead of calling getProfitBenchmark directly.
- */
-export async function fetchScopedProfitBenchmark(
-  organizationId: string,
-  fromDate: string,
-  toDate: string,
-  locationId?: string | null,
-  filters?: Partial<ProfitBenchmarkRequest>,
-): Promise<ProfitBenchmarkResponse> {
-  const normalizedLocationId = normalizeLocationIdForRequest(locationId);
-
-  const journalScope = normalizedLocationId
-    ? await resolveLocationXeroJournalScope(organizationId, [normalizedLocationId])
-    : null;
-
-  const request: ProfitBenchmarkRequest = {
-    fromDate,
-    toDate,
-    comparisonType: null,
-    entityId: null,
-    revenueMin: null,
-    revenueMax: null,
-    ebitdaMarginMin: null,
-    ebitdaMarginMax: null,
-    ...filters,
-    locationId: normalizedLocationId ?? filters?.locationId ?? null,
-    trackingOptionId: journalScope?.trackingOptionId ?? filters?.trackingOptionId ?? null,
-  };
-
-  const response = await getProfitBenchmark(organizationId, request);
-
-  if (normalizedLocationId && journalScope && journalScope.trackingOptionIds.length > 0) {
-    return overlayTrackingScopedActuals(
-      organizationId,
-      normalizedLocationId,
-      fromDate,
-      toDate,
-      journalScope,
-      response,
-    );
-  }
-  return response;
-}
-
 export function useProfitBenchmark(
   fromDate?: string,
   toDate?: string,
@@ -231,13 +174,36 @@ export function useProfitBenchmark(
         };
       }
 
-      return fetchScopedProfitBenchmark(
-        organizationId,
+      const journalScope = locationId
+        ? await resolveLocationXeroJournalScope(organizationId, [locationId])
+        : null;
+
+      const request: ProfitBenchmarkRequest = {
         fromDate,
         toDate,
-        locationId,
-        filters,
-      );
+        comparisonType: null,
+        entityId: null,
+        revenueMin: null,
+        revenueMax: null,
+        ebitdaMarginMin: null,
+        ebitdaMarginMax: null,
+        ...filters,
+        locationId: locationId ?? filters?.locationId ?? null,
+        trackingOptionId: journalScope?.trackingOptionId ?? filters?.trackingOptionId ?? null,
+      };
+
+      const response = await getProfitBenchmark(organizationId, request);
+      if (locationId && journalScope && journalScope.trackingOptionIds.length > 0) {
+        return overlayTrackingScopedActuals(
+          organizationId,
+          locationId,
+          fromDate,
+          toDate,
+          journalScope,
+          response,
+        );
+      }
+      return response;
     },
     enabled: !!organizationId && !!fromDate && !!toDate,
     staleTime: 1000 * 60 * 5, // 5 minutes

@@ -12,6 +12,8 @@ const { withRateLimitBackoff } = require('./rateLimitBackoff');
 const {
   parsePageCursor,
   serializePageCursor,
+  cursorMetaFromParsed,
+  completionStampsForParsed,
   getOrCreateCursor,
   updateCursor,
   monthBounds,
@@ -90,7 +92,8 @@ async function markSyncRetryable(
   dateWindow,
   errorMessage,
   errorCode,
-  currentRetryCount = 0
+  currentRetryCount = 0,
+  cursorMeta = null
 ) {
   const nextCount = (currentRetryCount || 0) + 1;
   const maxRetries = getMaxRetries();
@@ -108,7 +111,7 @@ async function markSyncRetryable(
 
   const nextRetryAt = computeNextRetryAt(nextCount);
   await updateCursor(practiceId, resourceType, {
-    cursor: serializePageCursor(page, syncRunId, dateWindow),
+    cursor: serializePageCursor(page, syncRunId, dateWindow, cursorMeta),
     status: 'retryable',
     retry_count: nextCount,
     next_retry_at: nextRetryAt,
@@ -133,7 +136,8 @@ async function handleSyncError(
   syncRunId,
   page,
   dateWindow,
-  currentRetryCount = 0
+  currentRetryCount = 0,
+  cursorMeta = null
 ) {
   const classified = classifyDentallyFetchError(err);
   const errorMessage = classified.message;
@@ -168,7 +172,8 @@ async function handleSyncError(
     dateWindow,
     errorMessage,
     errorCode,
-    currentRetryCount
+    currentRetryCount,
+    cursorMeta
   );
 
   return {
@@ -237,7 +242,9 @@ async function syncResourceChunk(practiceId, options) {
     };
   }
 
-  let { page, syncRunId, chunkStart, chunkEnd } = parsePageCursor(cursorRow.cursor);
+  const parsedCursor = parsePageCursor(cursorRow.cursor);
+  let { page, syncRunId, chunkStart, chunkEnd } = parsedCursor;
+  let cursorMeta = cursorMetaFromParsed(parsedCursor);
 
   let dateWindow = null;
   if (dateChunking) {
@@ -324,7 +331,8 @@ async function syncResourceChunk(practiceId, options) {
       syncRunId,
       page,
       dateWindow,
-      effectiveRetryCount
+      effectiveRetryCount,
+      cursorMeta
     );
   }
 
@@ -345,7 +353,8 @@ async function syncResourceChunk(practiceId, options) {
         syncRunId,
         page,
         dateWindow,
-        effectiveRetryCount
+        effectiveRetryCount,
+        cursorMeta
       );
     }
   }
@@ -378,8 +387,9 @@ async function syncResourceChunk(practiceId, options) {
     const nextStart = dayAfter(dateWindow.chunkEnd);
     const endCap = todayUtc();
     if (nextStart > endCap) {
+      const doneMeta = completionStampsForParsed({ ...parsedCursor, ...cursorMeta });
       await updateCursor(practiceId, resourceType, {
-        cursor: serializePageCursor(page, syncRunId, dateWindow),
+        cursor: serializePageCursor(page, syncRunId, dateWindow, doneMeta),
         status: 'complete',
         ...successCursorFields,
       });
@@ -405,7 +415,7 @@ async function syncResourceChunk(practiceId, options) {
 
     const nextWindow = monthBounds(nextStart);
     await updateCursor(practiceId, resourceType, {
-      cursor: serializePageCursor(1, syncRunId, nextWindow),
+      cursor: serializePageCursor(1, syncRunId, nextWindow, cursorMeta),
       status: 'in_progress',
       ...successCursorFields,
     });
@@ -430,8 +440,9 @@ async function syncResourceChunk(practiceId, options) {
   }
 
   if (isLastPage) {
+    const doneMeta = completionStampsForParsed({ ...parsedCursor, ...cursorMeta });
     await updateCursor(practiceId, resourceType, {
-      cursor: serializePageCursor(page, syncRunId, dateWindow),
+      cursor: serializePageCursor(page, syncRunId, dateWindow, doneMeta),
       status: 'complete',
       ...successCursorFields,
     });
@@ -456,7 +467,7 @@ async function syncResourceChunk(practiceId, options) {
 
   const nextPage = page + 1;
   await updateCursor(practiceId, resourceType, {
-    cursor: serializePageCursor(nextPage, syncRunId, dateWindow),
+    cursor: serializePageCursor(nextPage, syncRunId, dateWindow, cursorMeta),
     status: 'in_progress',
     ...successCursorFields,
   });

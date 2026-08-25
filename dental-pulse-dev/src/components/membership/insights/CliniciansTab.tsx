@@ -1,7 +1,6 @@
 import { Info } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ScopeBar } from "./ScopeBar";
-import { LedgerLabel } from "./LedgerLabel";
 import { nn } from "./format";
 import { useCliniciansData } from "./useCliniciansData";
 
@@ -20,7 +19,7 @@ export function CliniciansTab() {
   if (!d.isLoading && !d.hasUploadData) {
     return (
       <div className="mpi space-y-6">
-        <ScopeBar title="Clinicians" subtitle="Conversion and utilisation delivered — per dentist" />
+        <ScopeBar title="Clinicians" subtitle="Conversion, utilisation delivered and plan margin — per dentist" />
         <div className="mpi-card text-sm text-center py-8" style={{ color: "var(--mpi-t3)" }}>
           Upload membership data on the Plan Revenue tab to see this breakdown.
         </div>
@@ -30,7 +29,7 @@ export function CliniciansTab() {
 
   return (
     <div className="mpi space-y-6">
-      <ScopeBar title="Clinicians" subtitle="Conversion and utilisation delivered — per dentist, same definitions" />
+      <ScopeBar title="Clinicians" subtitle="Conversion, utilisation delivered and plan margin — per dentist, same definitions" />
 
       <div className="mpi-card">
         <table className="mpi-tb">
@@ -59,6 +58,25 @@ export function CliniciansTab() {
                   </TooltipProvider>
                 </span>
               </th>
+              <th>
+                <span className="inline-flex items-center gap-1">
+                  Margin
+                  <TooltipProvider delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="w-3 h-3 shrink-0 cursor-default" style={{ color: "var(--mpi-t3)" }} />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-[280px]">
+                        (Membership revenue − allocated cost) ÷ revenue. Cost is your real accounting spend
+                        (materials, lab, clinician time, overhead) for the period, split across dentists by their
+                        plan members' share of all delivered treatment — not just their plan's covered visits, so
+                        a member who also buys extra private treatment adds to cost here without adding to this
+                        revenue figure. Shows "—" when no accounting platform is connected for this scope.
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -75,22 +93,17 @@ export function CliniciansTab() {
                 <td style={{ color: toneColor(r.existingConversionPct, 15, 5) }}>
                   {r.existingConversionPct != null ? `${r.existingConversionPct}%` : "—"}
                 </td>
-                <td style={{ color: toneColor(r.seenPct6m, 80, 50) }}>
-                  {r.seenPct6m != null ? (
-                    <LedgerLabel
-                      label={`${r.seenPct6m}%`}
-                      calc={[
-                        { label: "Plan members matched to a Dentally patient", value: nn(r.matchedCount ?? 0) },
-                        { label: "With a real visit in the last 6 months", value: nn(r.seenCount6m ?? 0) },
-                        { label: "= Seen in 6 months", value: `${r.seenPct6m}%`, isTotal: true },
-                        { label: "Seen in 12 months", value: r.seenPct12m != null ? `${r.seenPct12m}%` : "—" },
-                        { label: "Not seen in 6 months", value: nn(r.unredeemedCount ?? 0) },
-                      ]}
-                    />
-                  ) : (
-                    "—"
-                  )}
+                <td
+                  style={{ color: toneColor(r.seenPct6m, 80, 50) }}
+                  title={
+                    r.seenPct6m != null
+                      ? `${r.seenPct12m}% in the last 12 months · ${nn(r.unredeemedCount ?? 0)} not seen in 6 months`
+                      : undefined
+                  }
+                >
+                  {r.seenPct6m != null ? `${r.seenPct6m}%` : "—"}
                 </td>
+                <td>{r.marginPct != null ? `${r.marginPct}%` : "—"}</td>
               </tr>
             ))}
           </tbody>

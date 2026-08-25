@@ -21,13 +21,11 @@ import { Card, CardContent } from '@/components/ui/card';
 import { ConfigProvider, DatePicker } from 'antd';
 import dayjs from 'dayjs';
 import { useFilters } from '@/contexts/FilterContext';
-import { usePlanAccess } from '@/hooks/usePlanAccess';
 import { usePractitionerActivityReport, type PractitionerActivityRow } from '@/hooks/usePractitionerActivityReport';
 import { toDateStr, fmtDate, fmtCurrency } from '@/lib/activityReportUtils';
 import { type ColumnDef, useTableState, MultiFilterSelect, DataTable } from '@/components/reports/ActivityDataTable';
 
 export default function PractitionerActivityReport() {
-  const { planTier } = usePlanAccess();
   const { dateRange } = useFilters();
   const [from, setFrom] = useState(toDateStr(dateRange.startDate));
   const [to, setTo] = useState(toDateStr(dateRange.endDate));
@@ -65,22 +63,7 @@ export default function PractitionerActivityReport() {
     (paymentPlans.length === 0 || paymentPlans.includes(r.paymentPlan))
   ), [rows, practitioners, treatments, categories, paymentPlans]);
 
-  // Reconciliation totals - deliberately mirror the four figures Dentally's own
-  // practitioner_activity report prints in its footer ("N found", "N Patients",
-  // "H hours", total price) so a mismatch can be localised at a glance instead
-  // of guessed at: equal rows + unequal money means a price problem on rows we
-  // already hold; fewer rows means treatments are missing from DentPulse.
-  const stats = useMemo(() => {
-    const patients = new Set<string>();
-    let minutes = 0;
-    let money = 0;
-    for (const r of filtered) {
-      patients.add(r.patientId != null ? String(r.patientId) : r.patient);
-      minutes += r.duration;
-      money += r.price;
-    }
-    return { rows: filtered.length, patients: patients.size, hours: minutes / 60, money };
-  }, [filtered]);
+  const totalMoneyIn = useMemo(() => filtered.reduce((s, r) => s + r.price, 0), [filtered]);
 
   const columns: ColumnDef<PractitionerActivityRow>[] = [
     { key: 'completedAt', label: 'Completed On', sortable: true, render: r => <span className="whitespace-nowrap">{fmtDate(r.completedAt)}</span>, sortVal: r => r.completedAt, csv: r => fmtDate(r.completedAt) },
@@ -139,7 +122,7 @@ export default function PractitionerActivityReport() {
   ];
 
   return (
-    <MainLayout userRole="admin" aiContext={{ page: 'practitioner-activity-report' }} locked={planTier === 'basic'}>
+    <MainLayout userRole="admin" aiContext={{ page: 'practitioner-activity-report' }}>
       <Helmet><title>Practitioner Activity</title></Helmet>
 
       <div className="space-y-5 pt-6">
@@ -154,23 +137,9 @@ export default function PractitionerActivityReport() {
         <Card>
           <CardContent className="p-4 space-y-4">
             <div className="flex flex-wrap items-end justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
-                <span>
-                  <span className="text-muted-foreground mr-2">Total Money In:</span>
-                  <span className="font-bold text-lg">{fmtCurrency(stats.money)}</span>
-                </span>
-                <span>
-                  <span className="text-muted-foreground mr-2">Rows:</span>
-                  <span className="font-semibold">{stats.rows.toLocaleString('en-GB')}</span>
-                </span>
-                <span>
-                  <span className="text-muted-foreground mr-2">Patients:</span>
-                  <span className="font-semibold">{stats.patients.toLocaleString('en-GB')}</span>
-                </span>
-                <span>
-                  <span className="text-muted-foreground mr-2">Hours:</span>
-                  <span className="font-semibold">{stats.hours.toFixed(1)}</span>
-                </span>
+              <div className="text-sm">
+                <span className="text-muted-foreground mr-2">Total Money In:</span>
+                <span className="font-bold text-lg">{fmtCurrency(totalMoneyIn)}</span>
               </div>
               <ConfigProvider
                 theme={{

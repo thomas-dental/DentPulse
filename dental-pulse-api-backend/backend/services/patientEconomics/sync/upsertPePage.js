@@ -15,6 +15,8 @@ const {
   getLocationMap,
   getCancellationReasonMap,
   getAcquisitionSourceMap,
+  upsertInvoicesWithLineItems,
+  upsertPaymentsWithExplanations,
 } = require('../../sync/upsert');
 const { logSkippedRecords } = require('./skippedRecordStore');
 
@@ -107,6 +109,76 @@ async function upsertPeEntityPage({
   let failed = 0;
 
   if (transformed.length > 0) {
+    // Invoices: header + nested invoice_items (from detail enrich). Strip
+    // _invoice_items and write line items via shared JobQueue helper.
+    if (entityAlias === 'invoices') {
+      const rows = transformed.map((t) => t.row);
+      try {
+        const result = await upsertInvoicesWithLineItems(
+          tableName,
+          onConflict,
+          rows,
+          practiceId,
+          null
+        );
+        if (skips.length > 0) await logSkippedRecords(skips);
+        return {
+          processed: result.processed,
+          failed: result.failed,
+          skipped: skips.length,
+        };
+      } catch (err) {
+        console.error(`[PE sync] Invoice upsert failed: ${err.message}`);
+        for (const { record } of transformed) {
+          skips.push({
+            practiceId,
+            syncRunId,
+            resourceType,
+            entityAlias,
+            reason: 'upsert_error',
+            errorMessage: err.message,
+            record,
+          });
+        }
+        if (skips.length > 0) await logSkippedRecords(skips);
+        return { processed: 0, failed: transformed.length, skipped: skips.length };
+      }
+    }
+
+    // Payments: header + nested explanations (invoice allocations).
+    if (entityAlias === 'payments') {
+      const rows = transformed.map((t) => t.row);
+      try {
+        const result = await upsertPaymentsWithExplanations(
+          tableName,
+          onConflict,
+          rows,
+          practiceId
+        );
+        if (skips.length > 0) await logSkippedRecords(skips);
+        return {
+          processed: result.processed,
+          failed: result.failed,
+          skipped: skips.length,
+        };
+      } catch (err) {
+        console.error(`[PE sync] Payment upsert failed: ${err.message}`);
+        for (const { record } of transformed) {
+          skips.push({
+            practiceId,
+            syncRunId,
+            resourceType,
+            entityAlias,
+            reason: 'upsert_error',
+            errorMessage: err.message,
+            record,
+          });
+        }
+        if (skips.length > 0) await logSkippedRecords(skips);
+        return { processed: 0, failed: transformed.length, skipped: skips.length };
+      }
+    }
+
     const rows = transformed.map((t) => t.row);
     const { error } = await supabaseAdmin.from(tableName).upsert(rows, { onConflict });
 

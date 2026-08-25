@@ -101,7 +101,7 @@ export default function Profile() {
       // Broadcast password change to Central Auth via backend (non-blocking)
       if (user?.email) {
         const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname);
-        const backendUrl = isLocal ? 'http://localhost:4000' : 'https://dent-enterprise-api.dentpulse.com';
+        const backendUrl = import.meta.env.VITE_BACKEND_URL || (isLocal ? 'http://localhost:4000' : 'https://dent-enterprise-api.dentpulse.com');
         const { data: { session: sess } } = await supabase.auth.getSession();
         if (sess?.access_token) {
           const centralAuthToken = localStorage.getItem('central_auth_token');

@@ -109,18 +109,46 @@ Successful chunks reset `retry_count` / `next_retry_at` / `last_error*`.
 
 ## Scheduling (`peSyncCron.js`)
 
-`node-cron` poller (default `*/2 * * * *`) — same family as `autoSyncCron`, **no Redis**.
+`node-cron` (same family as `autoSyncCron`, **no Redis**). Three jobs:
 
-Each tick:
+| Job | Env | Default | Behavior |
+|-----|-----|---------|----------|
+| **Resume** | `PE_SYNC_CRON_SCHEDULE` | every 2 min | Drain `retryable` / stale `in_progress` (1 chunk each, cap `PE_SYNC_CRON_MAX_CHUNKS_PER_TICK`) |
+| **Incremental kickoff** | `PE_SYNC_INCREMENTAL_SCHEDULE` | every 15 min | For each practice with encrypted PAT: if valid (`validated_at`, `!needs_reconnection`) reset all scheduled cursors to `in_progress` with lookback window (`PE_SYNC_INCREMENTAL_LOOKBACK_DAYS`, default 3) on date-chunked resources; resume drains |
+| **Full kickoff** | `PE_SYNC_FULL_SCHEDULE` | `0 2 * * *` UTC | Same reset without lookback — date-chunked resources start from `PE_SYNC_*_START` (default 2020-01-01) |
 
-1. Load due `sync_cursors`: `retryable` with `next_retry_at <= now`, plus stale `in_progress` (not updated for `PE_SYNC_IN_PROGRESS_STALE_MS`, default 120s — crash/deploy resume).
-2. Skip practices with `needs_reconnection`.
-3. Claim → invoke registered sync fn from `resourceRegistry.js` (one chunk).
-4. Cap: `PE_SYNC_CRON_MAX_CHUNKS_PER_TICK` (default 10).
+**PAT skip:** missing / needs reconnection / not validated → `sync_runs` row `status=failed`, `error_message=skipped_no_valid_credential:…` (not silent).
 
-Day 5 resources (invoices, payments, membership) register into `resourceRegistry` / `SCHEDULED_RESOURCE_TYPES` — do not rebuild scheduling.
+**Overlap:** kickoff skips a practice if any scheduled resource has non-stale `in_progress` (`PE_SYNC_IN_PROGRESS_STALE_MS`, default 120s).
+
+**Date-window resources (lookback):** `appointments`, `treatment_plans`, `treatment_items`, `invoices`, `payments`. Others (`acquisition_sources`, `patients`, `accounts`, `recalls`, `treatment_appointments`) reset to page 1 full list.
+
+**Ops:**
+- `GET /api/economics-engine/sync/status?practiceId=`
+- `GET /api/economics-engine/sync/dev/overview?practiceId=` — PAT + cursors + counts (eng inspector)
+- `GET /api/economics-engine/sync/dev/ticks` — in-memory recent scheduler ticks
+- `POST /api/economics-engine/sync/kickoff-incremental` / `kickoff-full` — JWT + `{ practiceId }`, or `x-service-key` (= service role) with optional practiceId (omit → all candidates)
+- Frontend (DEV only): `/dev/pe-sync-inspector` — owner/admin gated
+- `node backend/scripts/peSyncStatus.js <practice_id>`
+- `node backend/scripts/testPeScheduleKickoff.js [practice_id]`
+
+Membership import is **not** scheduled (upload-triggered Edge Function).
 
 Started from `server.js` via `startPeSyncCron()`.
+
+Env knobs:
+
+```
+PE_SYNC_CRON_SCHEDULE=*/2 * * * *
+PE_SYNC_INCREMENTAL_SCHEDULE=*/15 * * * *
+PE_SYNC_FULL_SCHEDULE=0 2 * * *
+PE_SYNC_INCREMENTAL_LOOKBACK_DAYS=3
+PE_SYNC_CRON_MAX_CHUNKS_PER_TICK=10
+PE_SYNC_IN_PROGRESS_STALE_MS=120000
+PE_SYNC_KICKOFF_MAX_PRACTICES=20
+```
+
+Day 5 remaining (membership) registers into `resourceRegistry` / `SCHEDULED_RESOURCE_TYPES` — do not rebuild scheduling.
 
 ## Recalls (no dedicated Dentally endpoint)
 
@@ -150,12 +178,14 @@ That script syncs the catalog, resets the `patients` cursor, and re-pages patien
 - `treatment_appointments` → `public.treatment_appointments` (`GET /v1/treatment_appointments`; distinct resource — links to patient, optional appointment, treatment plan)
 - `treatment_plans` → `public.treatment_plans` (`GET /v1/treatment_plans`; `tp_patient_id` ↔ `patients.pt_id`). Monthly `created_after`/`created_before` windows. Raw Dentally completion fields synced as-is (Economic Journey derivation is M3).
 - `treatment_items` → `public.treatment_plan_items` (`GET /v1/treatment_plan_items`; cursor slug `treatment_items`). Links: `tpi_treatment_plan_id` ↔ `tp_id`, `tpi_patient_id` ↔ `pt_id`. Monthly `updated_after`/`updated_before`. Raw `tpi_price` / charged / completed synced as-is (Contribution Engine is M4).
+- `invoices` → `platform_integration_invoices` + nested items → `platform_integration_invoice_line_items` (`GET /v1/invoices` + per-id detail). Monthly `dated_on_*` windows. Links: `patient_id`↔`pt_id`, `account_id`↔`da_id`, `treatment_plan_item_id`↔`tpi_id`. Raw fields as-is (leakage = M6). No separate `invoice_items` cursor — `/sync/invoice-items` aliases `/sync/invoices`.
+- `payments` → `dentally_payments` + explanations → `dentally_payment_explanations` (`GET /v1/payments`). Monthly `dated_after`/`dated_before`. Invoice link: `dpe_invoice_id` ↔ `platform_invoice_id`. Raw fields as-is (collection/aged debt = M7).
 
 Use lowercase slugs in `sync_cursors.resource_type`.
 
 ## Related files
 
-- `routes/economicsEngine.js` — PAT CRUD + `POST /sync/{acquisition-sources,patients,accounts,recalls,appointments,treatment-appointments,treatment-plans,treatment-items}`
+- `routes/economicsEngine.js` — PAT CRUD + sync chunk routes + kickoff/status
 - `services/patientEconomics/sync/syncAcquisitionSources.js`
 - `services/patientEconomics/sync/syncPatients.js`
 - `services/patientEconomics/sync/syncAccounts.js`
@@ -164,14 +194,19 @@ Use lowercase slugs in `sync_cursors.resource_type`.
 - `services/patientEconomics/sync/syncTreatmentAppointments.js`
 - `services/patientEconomics/sync/syncTreatmentPlans.js`
 - `services/patientEconomics/sync/syncTreatmentItems.js`
+- `services/patientEconomics/sync/syncInvoices.js`
+- `services/patientEconomics/sync/syncPayments.js`
 - `services/patientEconomics/sync/syncHelpers.js` — shared chunk + error/retry handling
 - `services/patientEconomics/sync/upsertPePage.js` — per-record skip → `sync_skipped_records`
 - `services/patientEconomics/sync/resourceRegistry.js` — resource_type → sync fn
-- `services/patientEconomics/sync/peSyncCron.js` — scheduler
+- `services/patientEconomics/sync/peScheduleKickoff.js` — incremental/full cursor reset
+- `services/patientEconomics/sync/peSyncCron.js` — resume + kickoff schedules
 - `services/patientEconomics/sync/retryPolicy.js` / `dentallyErrors.js` / `credentialsStatus.js`
 - `services/patientEconomics/sync/rateLimitBackoff.js`
 - `services/patientEconomics/sync/cursorStore.js`
-- `scripts/syncPeAcquisitionSources.js`, `syncPePatients.js`, `syncPeAccounts.js`, `syncPeRecalls.js`, `syncPeAppointments.js`, `syncPeTreatmentAppointments.js`, `syncPeTreatmentPlans.js`, `syncPeTreatmentItems.js`
+- `scripts/syncPeAcquisitionSources.js`, `syncPePatients.js`, `syncPeAccounts.js`, `syncPeRecalls.js`, `syncPeAppointments.js`, `syncPeTreatmentAppointments.js`, `syncPeTreatmentPlans.js`, `syncPeTreatmentItems.js`, `syncPeInvoices.js`, `syncPePayments.js`
+- `scripts/peSyncStatus.js` — cursor status dump
+- `scripts/testPeScheduleKickoff.js` — kickoff smoke test
 - `scripts/backfillPePatientAcquisitionSources.js` — catalog sync + patients cursor reset + re-page
 - `scripts/testPeRateLimitBackoff.js` — simulated 429 backoff test
 - `scripts/testPeSyncRetry.js` — error category + retry decision tests

@@ -5,15 +5,41 @@
  * preferred contact method live on GET /v1/patients. This sync uses a separate
  * sync_cursors track (resource_type: recalls) so recall refresh can be scheduled
  * independently from the full patients backfill.
+ *
+ * Window: practice onboarding start_date → today (same as patients).
  */
 
-const { RESOURCE_RECALLS } = require('./cursorStore');
+const {
+  RESOURCE_RECALLS,
+  getOrCreateCursor,
+  parsePageCursor,
+} = require('./cursorStore');
 const { syncResourceChunk } = require('./syncHelpers');
+const { getPracticeSyncRange } = require('./practiceSyncRange');
 
 async function syncRecalls(practiceId) {
+  const { startDate } = await getPracticeSyncRange(practiceId);
+  const cursorRow = await getOrCreateCursor(practiceId, RESOURCE_RECALLS);
+  const { kickoffMode } = parsePageCursor(cursorRow.cursor);
+  const incremental = kickoffMode === 'incremental';
+
   return syncResourceChunk(practiceId, {
     resourceType: RESOURCE_RECALLS,
     entityAlias: 'patients',
+    entityConfigOverride: incremental
+      ? {
+          dateFilter: 'updated_after',
+          dateFilterEnd: null,
+          sortBy: 'created_at',
+        }
+      : {
+          dateFilter: 'created_after',
+          dateFilterEnd: 'created_before',
+          sortBy: 'created_at',
+        },
+    dateChunking: {
+      rangeStart: startDate,
+    },
   });
 }
 

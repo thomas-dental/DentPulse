@@ -58,25 +58,14 @@ export function usePractitionerActivityReport(from: string, to: string) {
     queryFn: async (): Promise<PractitionerActivityRow[]> => {
       if (!organizationId) return [];
 
-      // 1. Practitioner roster (same pattern as usePractitionerHistoryList).
+      // 1. Location-scoped practitioner roster (same pattern as usePractitionerHistoryList).
       // Include inactive providers so leavers still show their historical completed treatments.
-      //
-      // Do NOT filter providers by location_id. providers.location_id is the
-      // practitioner's HOME site, not where the treatment was delivered, and the
-      // two disagree whenever a practitioner works across sites (or holds a
-      // second Dentally practitioner record at another practice). Scoping the
-      // roster by home site both drops cross-site work done AT the selected
-      // location and pulls in work done ELSEWHERE by a locally-homed
-      // practitioner — the exact mis-tagging fixed for net production in
-      // 20260817000002_net_production_use_appointment_location.sql. Site scoping
-      // belongs on the TPI rows below, whose location_id the sync backfills from
-      // the appointment site (queue/processor.js Method 1) — which is what
-      // Dentally's own site-filtered Practitioner Activity report uses.
-      const provQuery = (supabase as any)
+      let provQuery = (supabase as any)
         .from('providers')
         .select('id, name, external_id, integration_id, location_id')
         .eq('organization_id', organizationId)
         .is('deleted_at', null);
+      if (specificLocation) provQuery = provQuery.eq('location_id', selectedLocationId);
       const { data: providersData, error: provErr } = await provQuery;
       if (provErr) { console.error('[usePractitionerActivityReport] providers error:', provErr); return []; }
 
@@ -102,99 +91,6 @@ export function usePractitionerActivityReport(from: string, to: string) {
 
       const { start, endExclusive } = localDayRange(from, to);
 
-      // ── DEV-ONLY reconciliation probe ────────────────────────────────────
-      // Re-runs the window with NO gates applied and reports which predicate
-      // removes each row, so a disagreement with Dentally's own
-      // practitioner_activity totals can be attributed to a specific filter
-      // instead of guessed at. Logs once per query to the browser console.
-      // Safe to delete once the reconciliation is closed.
-      if (import.meta.env.DEV) {
-        void (async () => {
-          try {
-            const probeRows = await fetchAll<any>(() =>
-              (supabase as any)
-                .from('treatment_plan_items')
-                .select('tpi_id, tpi_price, tpi_patient_id, tpi_practitioner_id, tpi_payment_plan_id, tpi_treatment_appointment_id, location_id, duration, integration_id')
-                .eq('organization_id', organizationId)
-                .eq('tpi_completed', true)
-                .not('tpi_completed_at', 'is', null)
-                .gte('tpi_completed_at', start)
-                .lt('tpi_completed_at', endExclusive),
-            );
-
-            const bucket: Record<string, { rows: number; money: number; minutes: number; patients: Set<number> }> = {};
-            const add = (name: string, r: any) => {
-              const b = bucket[name] ?? (bucket[name] = { rows: 0, money: 0, minutes: 0, patients: new Set() });
-              b.rows += 1;
-              b.money += Number(r.tpi_price) || 0;
-              b.minutes += Number(r.duration) || 0;
-              if (r.tpi_patient_id != null) b.patients.add(Number(r.tpi_patient_id));
-            };
-
-            for (const r of probeRows) {
-              // Collect EVERY failing predicate, not just the first. A row cut by
-              // two gates cannot be recovered by relaxing one of them, so only the
-              // "ONLY:" buckets below name a gate that is actually load-bearing for
-              // the row count we still differ from Dentally on.
-              const fails: string[] = [];
-              if (!extIdToProvider.has(Number(r.tpi_practitioner_id))) fails.push('practitioner not in providers roster');
-              if (r.tpi_payment_plan_id == null) fails.push('no payment plan');
-              if (r.tpi_treatment_appointment_id == null) fails.push('charting entry (no treatment appointment)');
-              if (specificLocation && r.location_id !== selectedLocationId) {
-                fails.push(r.location_id == null ? 'location_id is NULL' : 'location_id is another site');
-              }
-
-              if (fails.length === 0) add('INCLUDED in report', r);
-              else if (fails.length === 1) add(`ONLY cut by: ${fails[0]}`, r);
-              else add(`cut by ${fails.length}: ${fails.join(' + ')}`, r);
-            }
-
-            const summary = Object.entries(bucket)
-              .map(([reason, b]) => ({
-                reason,
-                rows: b.rows,
-                patients: b.patients.size,
-                money: Math.round(b.money * 100) / 100,
-                hours: Math.round((b.minutes / 60) * 10) / 10,
-              }))
-              .sort((a, b) => b.rows - a.rows);
-
-            console.log(
-              `[ActivityProbe] ${from}..${to} — ${probeRows.length} completed TPIs in window before any gate`,
-            );
-            console.table(summary);
-
-            // Of the rows that pass every gate, which would the real query still
-            // miss? It scopes each practitioner's TPIs by that practitioner's own
-            // providers.integration_id, so a TPI stamped with a different (or no)
-            // integration is unreachable even though the treatment is ours.
-            let lostRows = 0;
-            let lostMoney = 0;
-            const lostIntegrationValues = new Map<string, number>();
-            for (const r of probeRows) {
-              const prov = extIdToProvider.get(Number(r.tpi_practitioner_id));
-              if (!prov) continue;
-              if (r.tpi_payment_plan_id == null) continue;
-              if (r.tpi_treatment_appointment_id == null) continue;
-              if (specificLocation && r.location_id !== selectedLocationId) continue;
-              const provInt = prov.integration_id ?? null;
-              if (provInt && r.integration_id !== provInt) {
-                lostRows += 1;
-                lostMoney += Number(r.tpi_price) || 0;
-                const k = r.integration_id == null ? '(null)' : String(r.integration_id);
-                lostIntegrationValues.set(k, (lostIntegrationValues.get(k) ?? 0) + 1);
-              }
-            }
-            console.log(
-              `[ActivityProbe] pass all gates but unreachable via integration scoping: ${lostRows} rows, money ${Math.round(lostMoney * 100) / 100}`,
-            );
-            console.log('[ActivityProbe] their integration_id values:', [...lostIntegrationValues.entries()]);
-          } catch (err) {
-            console.error('[ActivityProbe] failed:', err);
-          }
-        })();
-      }
-
       // 2. Completed TPIs for each integration's practitioners, in range.
       const tpiGroups = await Promise.all(
         [...extIdsByIntegration.entries()].map(async ([integrationId, extIds]) => {
@@ -210,15 +106,7 @@ export function usePractitionerActivityReport(from: string, to: string) {
               .gte('tpi_completed_at', start)
               .lt('tpi_completed_at', endExclusive)
               .in('tpi_practitioner_id', extIds);
-            // Scope to this practitioner's integration, but keep TPIs that carry
-            // no integration stamp at all. Dentally ids are only unique per
-            // integration, so the scoping matters — yet rows synced before
-            // integration_id was populated have NULL, and an .eq() silently drops
-            // them, losing completed treatments the practitioner really did.
-            if (integrationId) q = q.or(`integration_id.eq.${integrationId},integration_id.is.null`);
-            // Site scope on the treatment row (appointment site), not the
-            // practitioner's home site — see the roster comment above.
-            if (specificLocation) q = q.eq('location_id', selectedLocationId);
+            if (integrationId) q = q.eq('integration_id', integrationId);
             return q;
           });
           return rows.map((r) => ({ ...r, __integrationId: integrationId || null }));

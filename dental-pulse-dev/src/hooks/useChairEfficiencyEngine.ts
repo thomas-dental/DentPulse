@@ -34,22 +34,7 @@ export async function fetchApptDurationByTa(
   taIds: number[],
   organizationId: string,
 ): Promise<Map<number, number>> {
-  const info = await fetchApptInfoByTa(taIds, organizationId);
-  return new Map([...info].map(([taId, i]) => [taId, i.minutes]));
-}
-
-/**
- * Same chain as fetchApptDurationByTa, but keeps the physical appointment id
- * alongside the window minutes — for callers that must count each visit's
- * chair window ONCE (several TPI rows can share a ta_id, and several ta_ids
- * can share an apmt_id; deduping needs the apmt_id, which the minutes-only
- * map cannot express).
- */
-export async function fetchApptInfoByTa(
-  taIds: number[],
-  organizationId: string,
-): Promise<Map<number, { apmtId: number; minutes: number }>> {
-  const out = new Map<number, { apmtId: number; minutes: number }>();
+  const out = new Map<number, number>();
   if (taIds.length === 0) return out;
 
   // ta_id → ta_appointment_id (apmt_id)
@@ -95,7 +80,7 @@ export async function fetchApptInfoByTa(
 
   for (const [taId, apmtId] of taToAppt) {
     const mins = apptDuration.get(apmtId);
-    if (mins != null) out.set(taId, { apmtId, minutes: mins });
+    if (mins != null) out.set(taId, mins);
   }
   return out;
 }

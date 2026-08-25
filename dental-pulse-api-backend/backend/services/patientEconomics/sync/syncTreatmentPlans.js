@@ -6,22 +6,21 @@
  * Raw Dentally completion fields (completed_at → tp_completed_at / tp_is_completed)
  * are stored as-is; Economic Journey state derivation is M3 / Event Ledger work.
  *
- * Uses monthly created_after/created_before windows (same pattern as appointments)
- * so backfill stays resumable against large practice volumes.
+ * Uses monthly created_after/created_before windows from practice onboarding
+ * start_date → today so backfill stays resumable against large practice volumes.
  */
 
 const { RESOURCE_TREATMENT_PLANS } = require('./cursorStore');
 const { syncResourceChunk } = require('./syncHelpers');
-
-const TREATMENT_PLANS_RANGE_START =
-  process.env.PE_SYNC_TREATMENT_PLANS_START || '2020-01-01';
+const { getPracticeSyncRange } = require('./practiceSyncRange');
 
 async function syncTreatmentPlans(practiceId) {
+  const { startDate } = await getPracticeSyncRange(practiceId);
   return syncResourceChunk(practiceId, {
     resourceType: RESOURCE_TREATMENT_PLANS,
     entityAlias: 'treatment_plans',
     dateChunking: {
-      rangeStart: TREATMENT_PLANS_RANGE_START,
+      rangeStart: startDate,
     },
   });
 }

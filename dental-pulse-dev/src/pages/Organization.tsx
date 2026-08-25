@@ -17,7 +17,6 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { useOrganization, Organization as OrganizationType } from '@/hooks/useOrganization';
-import { PLAN_TIERS, PLAN_LABELS, PLAN_FEATURES, PlanTier } from '@/lib/planRegistry';
 import { LocationDetailContent } from '@/components/organization/LocationDetailContent';
 import { useAuth } from '@/hooks/useAuth';
 import { usePaymentPlans } from '@/hooks/usePaymentPlans';
@@ -27,7 +26,7 @@ import { useFilters } from '@/contexts/FilterContext';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { Loader2, Building2, MapPin, Phone, Mail, Users, Calendar, Edit, ArrowLeft, Settings, Plus, Save, ChevronsUpDown, Trash2, Pencil, FileText, FolderIcon, Check, CheckCircle2 } from 'lucide-react';
+import { Loader2, Building2, MapPin, Phone, Mail, Users, Calendar, Edit, ArrowLeft, Settings, Plus, Save, ChevronsUpDown, Trash2, Pencil, FileText, FolderIcon } from 'lucide-react';
 import { ImageUpload } from '@/components/ui/image-upload';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
@@ -962,63 +961,6 @@ export default function Organization() {
             </Button>
           )}
         </div>
-
-        {/* Subscription Plan */}
-        {organization && (() => {
-          const currentPlan = (organization.plan_tier as PlanTier) || 'basic';
-          return (
-            <div>
-              <div className="mb-4">
-                <h2 className="text-lg font-semibold">Subscription Plan</h2>
-                <p className="text-muted-foreground text-sm">
-                  Your plan controls which features are available to your organization. Contact your DentPulse account manager to change your plan.
-                </p>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                {PLAN_TIERS.map((tier) => {
-                  const isActive = tier === currentPlan;
-                  return (
-                    <Card
-                      key={tier}
-                      className={cn(
-                        'relative flex flex-col',
-                        isActive && 'border-primary ring-1 ring-primary',
-                      )}
-                    >
-                      {isActive && (
-                        <Badge className="absolute -top-2.5 right-4">Active</Badge>
-                      )}
-                      <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                          {PLAN_LABELS[tier]}
-                          {tier === 'basic' && (
-                            <Badge variant="secondary" className="font-normal">Free</Badge>
-                          )}
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent className="flex flex-col flex-1 gap-4">
-                        <ul className="space-y-2 flex-1">
-                          {PLAN_FEATURES[tier].map((feature) => (
-                            <li key={feature} className="flex items-start gap-2 text-sm">
-                              <Check className="w-4 h-4 text-primary shrink-0 mt-0.5" />
-                              <span>{feature}</span>
-                            </li>
-                          ))}
-                        </ul>
-                        {isActive && (
-                          <Button disabled variant="outline" className="w-full">
-                            <CheckCircle2 className="w-4 h-4 mr-2" />
-                            Current Plan
-                          </Button>
-                        )}
-                      </CardContent>
-                    </Card>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })()}
 
         {/* Organization Details - Card view when "All" locations selected */}
         {showAllOrganizations && displayOrganizations.length > 0 && (

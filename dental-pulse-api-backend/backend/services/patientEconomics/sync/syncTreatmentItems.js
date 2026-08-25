@@ -16,16 +16,15 @@
 
 const { RESOURCE_TREATMENT_ITEMS } = require('./cursorStore');
 const { syncResourceChunk } = require('./syncHelpers');
-
-const TREATMENT_ITEMS_RANGE_START =
-  process.env.PE_SYNC_TREATMENT_ITEMS_START || '2020-01-01';
+const { getPracticeSyncRange } = require('./practiceSyncRange');
 
 async function syncTreatmentItems(practiceId) {
+  const { startDate } = await getPracticeSyncRange(practiceId);
   return syncResourceChunk(practiceId, {
     resourceType: RESOURCE_TREATMENT_ITEMS,
     entityAlias: 'treatment_plan_items',
     dateChunking: {
-      rangeStart: TREATMENT_ITEMS_RANGE_START,
+      rangeStart: startDate,
     },
   });
 }

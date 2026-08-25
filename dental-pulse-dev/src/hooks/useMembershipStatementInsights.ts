@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useOrganization } from '@/hooks/useOrganization';
-import { useFilters } from '@/contexts/FilterContext';
 import { ukDayStartInstant } from '@/utils/dateRangeUtils';
 
 /**
@@ -91,12 +90,11 @@ export type StatementMonthPair = { month: number; year: number };
  */
 export function useMembershipStatementInsights(pairs: StatementMonthPair[]) {
   const { organizationId } = useOrganization();
-  const { selectedLocationId } = useFilters();
   const validPairs = pairs.filter(p => p.month >= 1 && p.month <= 12);
   const pairsKey = validPairs.map(p => `${p.year}-${p.month}`).sort().join(',');
 
   return useQuery<StatementInsights>({
-    queryKey: ['membership_statement_insights', organizationId, pairsKey, selectedLocationId ?? 'all'],
+    queryKey: ['membership_statement_insights', organizationId, pairsKey],
     enabled: !!organizationId && validPairs.length > 0,
     queryFn: async () => {
       const orFilter = validPairs
@@ -105,20 +103,12 @@ export function useMembershipStatementInsights(pairs: StatementMonthPair[]) {
       // Every lookup THROWS on error — a swallowed failure here would let
       // React Query cache an empty result as fresh (the "hard refresh to get
       // data" class of bug).
-      let stmtQ = (supabase as any)
+      const { data: statements, error: stmtErr } = await (supabase as any)
         .from('membership_statement_summaries')
         .select('id, treating_dentist, total_collected_value, new_patient_value, existing_patient_value, failed_collection_count, failed_collection_value, cancelled_patient_count, plan_breakdown')
         .eq('organization_id', organizationId)
         .or(orFilter)
         .is('deleted_at', null);
-      if (selectedLocationId) {
-        // Ownership rule (2026-08-20, "other location data not show in
-        // other location"): a statement belongs to the location it was
-        // uploaded under. Legacy summaries with no stamp stay visible
-        // under any location — there is nothing to scope them by.
-        stmtQ = stmtQ.or(`upload_location_id.eq.${selectedLocationId},upload_location_id.is.null`);
-      }
-      const { data: statements, error: stmtErr } = await stmtQ;
       if (stmtErr) throw stmtErr;
       if (!statements || statements.length === 0) return EMPTY;
 

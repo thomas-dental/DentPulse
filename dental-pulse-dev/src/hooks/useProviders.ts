@@ -3,7 +3,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 import { Provider, ProviderInsert, ProviderUpdate, ProviderType } from '@/types/provider';
-import { providerMatchesSelectedLocation } from '@/lib/providerRosterFilters';
 import { useProviderTypes } from './useProviderTypes';
 import { toast } from 'sonner';
 
@@ -112,11 +111,10 @@ export function useProviders(
   const providers = useMemo(() => {
     let filteredProviders = allProviders;
 
-    // Filter by location if provided. Unassigned home clinics stay in the
-    // pool — a null location_id must not hide someone from every site list.
+    // Filter by location if provided
     if (locationId && locationId !== 'all') {
-      const locationFilteredProviders = allProviders.filter((p) =>
-        providerMatchesSelectedLocation(p, locationId),
+      const locationFilteredProviders = allProviders.filter(
+        (p) => p.location_id === locationId || p.practice_id === locationId
       );
       // If no providers match the location, use all providers as fallback
       filteredProviders = locationFilteredProviders.length > 0 ? locationFilteredProviders : allProviders;

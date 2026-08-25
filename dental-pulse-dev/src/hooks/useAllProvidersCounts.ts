@@ -1,11 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useOrganization } from './useOrganization';
-import { filterProvidersByManagementType } from '@/lib/providerRosterFilters';
 import { startOfMonth, endOfMonth, format } from 'date-fns';
 import dayjs from 'dayjs';
 
-export type CountField = 'uda_count' | 'mos_count' | 'uoa_count';
+export type CountField = 'uda_count' | 'mos_count';
 
 export interface ProviderMonthlyCount {
   providerId: string;
@@ -17,10 +16,10 @@ export interface ProviderMonthlyCount {
 
 /**
  * Fetches a manually-entered appointment_summary count column (uda_count = NHS
- * Count, mos_count = MOS Count, uoa_count = UOA Count) for ALL providers of a
- * given type, aggregated by month. Mirrors useAllProvidersWorkingHours's "all
- * locations" path — these fields have no location dimension on
- * appointment_summary, so there's no per-location RPC branch needed here.
+ * Count, mos_count = MOS Count) for ALL providers of a given type, aggregated by
+ * month. Mirrors useAllProvidersWorkingHours's "all locations" path — these
+ * fields have no location dimension on appointment_summary, so there's no
+ * per-location RPC branch needed here.
  */
 export function useAllProvidersCounts(
   providerType: string | null,
@@ -32,7 +31,7 @@ export function useAllProvidersCounts(
 
   return useQuery({
     queryKey: [
-      'all-providers-counts-v3',
+      'all-providers-counts-v2',
       field,
       organizationId,
       providerType,
@@ -56,13 +55,24 @@ export function useAllProvidersCounts(
         .eq('organization_id', organizationId)
         .is('deleted_at', null);
 
+      if (providerType === 'Dentist') {
+        providersQuery = providersQuery.or('provider_role.ilike.%dentist%,provider_role.ilike.%dental surgeon%,provider_role.ilike.%principal dentist%');
+      } else if (providerType === 'Hygienist') {
+        providersQuery = providersQuery.or('provider_role.ilike.%hygienist%,provider_role.ilike.%dental hygienist%,provider_role.ilike.%hygiene%');
+      } else if (providerType === 'Therapist') {
+        providersQuery = providersQuery.or('provider_role.ilike.%therapist%,provider_role.ilike.%dental therapist%,provider_role.ilike.%therapy%');
+      } else if (providerType === 'Other') {
+        providersQuery = providersQuery
+          .filter('provider_role', 'not.ilike', '%dentist%')
+          .filter('provider_role', 'not.ilike', '%hygienist%')
+          .filter('provider_role', 'not.ilike', '%hygiene%')
+          .filter('provider_role', 'not.ilike', '%therapist%')
+          .filter('provider_role', 'not.ilike', '%therapy%');
+      }
+
       const { data: rawProviderRows, error: providersError } = await providersQuery;
       if (providersError) throw providersError;
-      const typedProviderRows = filterProvidersByManagementType(
-        rawProviderRows,
-        providerType,
-      );
-      if (!typedProviderRows.length) return { providers: [], months: [] };
+      if (!rawProviderRows?.length) return { providers: [], months: [] };
 
       const months: string[] = [];
       let cur = new Date(rangeStart);
@@ -72,7 +82,7 @@ export function useAllProvidersCounts(
       }
 
       const emailGroupMap = new Map<string, { displayName: string; providerId: string; externalIds: number[] }>();
-      for (const p of typedProviderRows) {
+      for (const p of rawProviderRows) {
         const key = (p.email ?? p.name ?? '').toLowerCase();
         if (!emailGroupMap.has(key)) {
           emailGroupMap.set(key, { displayName: p.name, providerId: p.id, externalIds: [] });

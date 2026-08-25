@@ -16,6 +16,17 @@ const { syncTreatmentAppointments } = require('../services/patientEconomics/sync
 const { syncTreatmentPlans } = require('../services/patientEconomics/sync/syncTreatmentPlans');
 const { syncTreatmentItems } = require('../services/patientEconomics/sync/syncTreatmentItems');
 const { syncAcquisitionSources } = require('../services/patientEconomics/sync/syncAcquisitionSources');
+const { syncInvoices, syncInvoiceItems } = require('../services/patientEconomics/sync/syncInvoices');
+const { syncPayments } = require('../services/patientEconomics/sync/syncPayments');
+const {
+  kickoffIncremental,
+  kickoffFull,
+  runIncrementalKickoffTick,
+  runFullKickoffTick,
+} = require('../services/patientEconomics/sync/peScheduleKickoff');
+const { getSyncStatusByPractice } = require('../services/patientEconomics/sync/cursorStore');
+const { getDevOverview, getDevCounts, browseDevRows } = require('../services/patientEconomics/sync/peDevOverview');
+const { listTicks } = require('../services/patientEconomics/sync/peTickHistory');
 
 const router = express.Router();
 
@@ -482,5 +493,235 @@ router.post('/sync/treatment-plans', syncAuthMiddleware, (req, res) =>
 router.post('/sync/treatment-items', syncAuthMiddleware, (req, res) =>
   handleSyncChunkRoute(req, res, syncTreatmentItems, '/sync/treatment-items')
 );
+
+/**
+ * POST /api/economics-engine/sync/invoices
+ * Body: { practiceId }
+ * One invoices page (+ detail enrich for invoice_items). Call while hasMore=true.
+ */
+router.post('/sync/invoices', syncAuthMiddleware, (req, res) =>
+  handleSyncChunkRoute(req, res, syncInvoices, '/sync/invoices')
+);
+
+/**
+ * POST /api/economics-engine/sync/invoice-items
+ * Alias of /sync/invoices — items are nested under invoice detail, same cursor.
+ */
+router.post('/sync/invoice-items', syncAuthMiddleware, (req, res) =>
+  handleSyncChunkRoute(req, res, syncInvoiceItems, '/sync/invoice-items')
+);
+
+/**
+ * POST /api/economics-engine/sync/payments
+ * Body: { practiceId }
+ * One payments page (+ nested explanations → invoices). Call while hasMore=true.
+ */
+router.post('/sync/payments', syncAuthMiddleware, (req, res) =>
+  handleSyncChunkRoute(req, res, syncPayments, '/sync/payments')
+);
+
+function isServiceKeyAuth(req) {
+  const serviceKey = req.headers['x-service-key'];
+  return (
+    typeof serviceKey === 'string' &&
+    serviceKey.length > 0 &&
+    serviceKey === process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+}
+
+/**
+ * JWT or x-service-key (pg_cron / machine). Service key may omit practiceId
+ * to kick off all candidate practices.
+ */
+async function handleKickoffRoute(req, res, mode) {
+  try {
+    const serviceAuth = isServiceKeyAuth(req);
+    if (!serviceAuth) {
+      // Fall through to JWT if Authorization present — caller used syncAuthMiddleware
+      if (!req.user?.id) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
+    }
+
+    const practiceId = req.body?.practiceId || req.query?.practiceId || null;
+
+    if (practiceId) {
+      if (!isUuid(practiceId)) {
+        return res.status(400).json({ success: false, error: 'practiceId must be a UUID' });
+      }
+      if (!serviceAuth) {
+        const access = await verifyPracticeAccess(req.user.id, practiceId);
+        if (!access.ok) {
+          return res.status(access.status).json({ success: false, error: access.error });
+        }
+      }
+      const result =
+        mode === 'incremental'
+          ? await kickoffIncremental(practiceId)
+          : await kickoffFull(practiceId);
+      return res.json({ success: true, ...result });
+    }
+
+    if (!serviceAuth) {
+      return res.status(400).json({
+        success: false,
+        error: 'practiceId (UUID) is required',
+      });
+    }
+
+    const tick =
+      mode === 'incremental'
+        ? await runIncrementalKickoffTick()
+        : await runFullKickoffTick();
+    return res.json({ success: true, ...tick });
+  } catch (err) {
+    console.error(`[EconomicsEngine] kickoff-${mode} error:`, err.message);
+    return res.status(500).json({ success: false, error: 'Internal error' });
+  }
+}
+
+/**
+ * GET /api/economics-engine/sync/status?practiceId=
+ * Per-resource cursor status for ops visibility.
+ */
+router.get('/sync/status', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const resources = await getSyncStatusByPractice(practiceId);
+    return res.json({ success: true, practiceId, resources });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /sync/status error:', err.message);
+    return res.status(500).json({ success: false, error: 'Internal error' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/sync/dev/counts?practiceId=
+ * Row counts only — fast first paint for the inspector.
+ */
+router.get('/sync/dev/counts', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const result = await getDevCounts(practiceId);
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /sync/dev/counts error:', err.message);
+    return res.status(500).json({ success: false, error: 'Internal error' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/sync/dev/overview?practiceId=
+ * Eng inspector: PAT + sync_cursors status (no row counts — use /dev/counts).
+ */
+router.get('/sync/dev/overview', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const overview = await getDevOverview(practiceId);
+    return res.json({ success: true, ...overview });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /sync/dev/overview error:', err.message);
+    return res.status(500).json({ success: false, error: 'Internal error' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/sync/dev/browse?practiceId=&resource=&page=&pageSize=
+ * Paginated synced rows (service-role) — includes data written by onboarding sync.
+ */
+router.get('/sync/dev/browse', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    const resource = req.query?.resource;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+    if (!resource || typeof resource !== 'string') {
+      return res.status(400).json({ success: false, error: 'resource is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const result = await browseDevRows(
+      practiceId,
+      resource,
+      req.query?.page,
+      req.query?.pageSize
+    );
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    const status = err.status || 500;
+    console.error('[EconomicsEngine] GET /sync/dev/browse error:', err.message);
+    return res.status(status).json({
+      success: false,
+      error: status === 400 ? err.message : 'Internal error',
+    });
+  }
+});
+
+/**
+ * GET /api/economics-engine/sync/dev/ticks
+ * In-memory recent scheduler tick summaries (cleared on process restart).
+ */
+router.get('/sync/dev/ticks', syncAuthMiddleware, async (req, res) => {
+  try {
+    return res.json({ success: true, ticks: listTicks() });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /sync/dev/ticks error:', err.message);
+    return res.status(500).json({ success: false, error: 'Internal error' });
+  }
+});
+
+/**
+ * POST /api/economics-engine/sync/kickoff-incremental
+ * Body: { practiceId } (required for JWT; optional for x-service-key → all practices)
+ */
+router.post('/sync/kickoff-incremental', async (req, res, next) => {
+  if (isServiceKeyAuth(req)) {
+    return handleKickoffRoute(req, res, 'incremental');
+  }
+  return syncAuthMiddleware(req, res, () => handleKickoffRoute(req, res, 'incremental'));
+});
+
+/**
+ * POST /api/economics-engine/sync/kickoff-full
+ * Body: { practiceId } (required for JWT; optional for x-service-key → all practices)
+ */
+router.post('/sync/kickoff-full', async (req, res, next) => {
+  if (isServiceKeyAuth(req)) {
+    return handleKickoffRoute(req, res, 'full');
+  }
+  return syncAuthMiddleware(req, res, () => handleKickoffRoute(req, res, 'full'));
+});
 
 module.exports = router;

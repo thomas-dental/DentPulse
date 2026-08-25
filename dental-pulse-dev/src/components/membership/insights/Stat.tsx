@@ -20,9 +20,8 @@ export function Stat({
   note: string;
   tone?: "up" | "down";
   /** Plain-language "how is this worked out" text shown behind an ⓘ icon.
-   *  When `calc` is ALSO given, this renders as a muted caveat line under
-   *  the calculation rows (e.g. a methodology proxy warning) — prefer
-   *  `calc` for anything with real, checkable numbers behind it. */
+   *  Ignored when `calc` is given — prefer `calc` for anything with real,
+   *  checkable numbers behind it. */
   tooltip?: string;
   /** The live numbers this figure is built from, as calculation rows (not
    *  prose) — e.g. count → rate → total. Takes priority over `tooltip`. */
@@ -51,9 +50,6 @@ export function Stat({
                         <span className="whitespace-nowrap tabular-nums text-popover-foreground">{row.value}</span>
                       </div>
                     ))}
-                    {tooltip && (
-                      <div className="mt-1 pt-1 border-t border-border text-muted-foreground max-w-[260px]">{tooltip}</div>
-                    )}
                   </div>
                 ) : (
                   tooltip
