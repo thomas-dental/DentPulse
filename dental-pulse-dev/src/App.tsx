@@ -163,9 +163,7 @@ const App = () => (
           {/* URL-only module (not in sidebar): Week-0 model builder + 13-week scenario dashboard */}
           <Route path="/cashflow/scenario-studio" element={<ProtectedRoute><CashflowScenarioStudio /></ProtectedRoute>} />
           <Route path="/dev/dentally-webhook-logs" element={<ProtectedRoute><DentallyWebhookLogs /></ProtectedRoute>} />
-          {import.meta.env.DEV && (
-            <Route path="/dev/pe-sync-inspector" element={<ProtectedRoute><PeSyncInspector /></ProtectedRoute>} />
-          )}
+          <Route path="/dev/pe-sync-inspector" element={<ProtectedRoute><PeSyncInspector /></ProtectedRoute>} />
           <Route path="/profitability" element={<PermissionProtectedRoute module="profitability" card="profitability_analysis"><Profitability /></PermissionProtectedRoute>} />
           <Route path="/profitability/benchmark" element={<Navigate to="/profitability" replace />} />
           <Route path="/profitability/benchmark/:category" element={<PermissionProtectedRoute module="profitability" card="profit_benchmark"><ProfitBenchmarkAction /></PermissionProtectedRoute>} />

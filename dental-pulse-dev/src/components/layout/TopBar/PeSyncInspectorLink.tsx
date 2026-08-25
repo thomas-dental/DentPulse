@@ -11,7 +11,6 @@ export function PeSyncInspectorLink() {
   const navigate = useNavigate();
   const { isOwner, isAdmin, loading } = useUserRole();
 
-  if (!import.meta.env.DEV) return null;
   if (loading) return null;
   if (!isOwner() && !isAdmin()) return null;
 

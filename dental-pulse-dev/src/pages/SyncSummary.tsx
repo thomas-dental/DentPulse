@@ -1121,16 +1121,14 @@ export function SyncSummary() {
               <RefreshCw className={cn('w-4 h-4 mr-2', isRefreshing && 'animate-spin')} />
               Refresh
             </Button>
-            {import.meta.env.DEV && (
               <Button
                 variant="secondary"
                 size="sm"
                 onClick={() => navigate('/dev/pe-sync-inspector')}
               >
                 <Database className="w-4 h-4 mr-2" />
-                PE Sync (dev)
-              </Button>
-            )}
+              PE Sync
+            </Button>
           </div>
         </div>
 
