@@ -289,7 +289,22 @@ const navItems: NavItem[] = [
         icon: UserCheck,
         label: "Patients",
         path: "/patients",
+        dropdown: true,
         moduleKey: "patients",
+        subItems: [
+          { label: "Economic Pulse", path: "/patients" },
+          { label: "Growth Levers", path: "/patients?tab=growth-levers" },
+          { label: "Value & Leakage", path: "/patients?tab=value-leakage" },
+          {
+            label: "Retention & Reactivation",
+            path: "/patients?tab=retention",
+          },
+          { label: "Patient List", path: "/patients?tab=patient-list" },
+          { label: "Patient Records", path: "/patients?tab=patient-records" },
+          { label: "Invoices", path: "/patients?tab=invoices" },
+          { label: "Goal Settings", path: "/patients?tab=goal-settings" },
+          { label: "Settings", path: "/patients?tab=settings" },
+        ],
       },
       {
         icon: Megaphone,
@@ -590,11 +605,14 @@ export function AppSidebar({
   const subItemMatchesLocation = (subItemPath: string | undefined) => {
     if (!subItemPath) return false;
     const [basePath, query] = subItemPath.split("?");
+    const tabParam = new URLSearchParams(location.search).get("tab");
     if (query) {
-      return (
-        location.pathname === basePath &&
-        location.search.includes(query.split("=")[1])
-      );
+      const itemTabParam = new URLSearchParams(query).get("tab");
+      return location.pathname === basePath && tabParam === itemTabParam;
+    }
+    // Bare /patients = Economic Pulse only (not when another ?tab= is selected)
+    if (basePath === "/patients") {
+      return location.pathname === "/patients" && !tabParam;
     }
     return (
       location.pathname === basePath ||
@@ -685,8 +703,11 @@ export function AppSidebar({
       // dropdown header, then a section header) over shallower ones — same
       // class is applied at every level when a descendant is active.
       const active =
+        nav.querySelector<HTMLElement>("ul ul ul .sidebar-sub-item-active") ||
         nav.querySelector<HTMLElement>("ul ul ul .sidebar-item-active") ||
+        nav.querySelector<HTMLElement>("ul ul .sidebar-sub-item-active") ||
         nav.querySelector<HTMLElement>("ul ul .sidebar-item-active") ||
+        nav.querySelector<HTMLElement>(".sidebar-sub-item-active") ||
         nav.querySelector<HTMLElement>(".sidebar-item-active");
       if (active) active.scrollIntoView({ block: "nearest" });
     });
@@ -737,7 +758,7 @@ export function AppSidebar({
             )}
           </button>
           {!collapsed && isOpen && (
-            <ul className="ml-4 mt-1 space-y-1">
+            <ul className="sidebar-sub">
               {item.children.map((child, childIndex) =>
                 renderNavItem(child, childIndex),
               )}
@@ -785,14 +806,14 @@ export function AppSidebar({
             )}
           </button>
           {!collapsed && isOpen && item.subItems && (
-            <ul className="ml-4 mt-1 space-y-1">
+            <ul className="sidebar-sub">
               {item.subItems.map((subItem) => {
                 const isSubItemActive = subItemMatchesLocation(subItem.path);
                 if (!subItem.path) {
                   return (
                     <li key={subItem.label}>
-                      <span className="sidebar-item text-xs cursor-default opacity-50 select-none">
-                        <span className="ml-6">{subItem.label}</span>
+                      <span className="sidebar-sub-item cursor-default opacity-50 select-none">
+                        {subItem.label}
                       </span>
                     </li>
                   );
@@ -802,12 +823,12 @@ export function AppSidebar({
                     <NavLink
                       to={subItem.path}
                       className={cn(
-                        "sidebar-item text-xs",
-                        isSubItemActive && "sidebar-item-active",
+                        "sidebar-sub-item",
+                        isSubItemActive && "sidebar-sub-item-active",
                       )}
                       title={subItem.label}
                     >
-                      <span className="ml-6">{subItem.label}</span>
+                      {subItem.label}
                     </NavLink>
                   </li>
                 );
@@ -861,7 +882,7 @@ export function AppSidebar({
       {/* Navigation */}
       <nav
         ref={navRef}
-        className="flex-1 py-4 px-3 overflow-y-auto sidebar-scrollbar"
+        className="flex-1 overflow-y-auto px-3 py-3.5 sidebar-scrollbar"
       >
         {firstNavItem && (
           <ul className="space-y-1">{renderNavItem(firstNavItem, 0)}</ul>

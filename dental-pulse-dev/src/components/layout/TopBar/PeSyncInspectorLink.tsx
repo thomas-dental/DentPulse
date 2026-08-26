@@ -1,5 +1,5 @@
 /**
- * DEV-only TopBar link to the Patient Economics sync inspector.
+ * TopBar link to the Patient Economics sync inspector (owner/admin).
  */
 
 import { useNavigate } from 'react-router-dom';

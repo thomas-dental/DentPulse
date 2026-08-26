@@ -4,6 +4,9 @@
  * Distinct from treatment_appointments: diary/calendar slots via GET /v1/appointments.
  * Links to patients via apmt_patient_id ↔ patients.pt_id (Dentally numeric patient id).
  *
+ * Note: APPOINTMENT_LINKED / UNLINKED Event Ledger hooks attach to
+ * syncTreatmentAppointments (ta_appointment_id), not this diary sync.
+ *
  * Dentally returns an empty list without a date filter — PE uses monthly
  * updated_after/updated_before windows in the cursor (chunkStart/chunkEnd).
  * Includes cancelled/DNA via cancelled=true (same as main Dentally sync).

@@ -1,6 +1,6 @@
 /**
  * Internal/dev PE sync inspector — not a product Settings screen.
- * URL: /dev/pe-sync-inspector (DEV builds + owner/admin only)
+ * URL: /dev/pe-sync-inspector (owner/admin only)
  *
  * Loads row counts first; browse rows load only when a resource tab is clicked.
  */

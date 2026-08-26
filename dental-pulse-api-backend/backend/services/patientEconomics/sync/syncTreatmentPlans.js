@@ -6,6 +6,12 @@
  * Raw Dentally completion fields (completed_at → tp_completed_at / tp_is_completed)
  * are stored as-is; Economic Journey state derivation is M3 / Event Ledger work.
  *
+ * Event Ledger (via upsertPePage → eventLedgerWriter):
+ *   PLAN_CREATED — first upsert of a plan (or heal if source row exists without
+ *   ledger key after a mid-chunk resume).
+ *   TREATMENT_STARTED — when Dentally start_date lands as tp_start_date
+ *   (null → set); not an inferred presented/accepted/committed status.
+ *
  * Uses monthly created_after/created_before windows from practice onboarding
  * start_date → today so backfill stays resumable against large practice volumes.
  */

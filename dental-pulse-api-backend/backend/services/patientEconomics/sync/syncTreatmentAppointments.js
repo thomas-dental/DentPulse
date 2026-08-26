@@ -8,6 +8,10 @@
  *   ta_appointment_id    ↔ appointments.apmt_id (nullable until booked)
  *   ta_treatment_plan_id ↔ treatment_plans.tp_id
  *
+ * Event Ledger (via upsertPePage → eventLedgerWriter):
+ *   APPOINTMENT_LINKED / UNLINKED — from ta_appointment_id transitions
+ *   (not diary syncAppointments).
+ *
  * Window: practice onboarding start_date → today (monthly updated_after/before).
  */
 

@@ -19,6 +19,11 @@ const {
   upsertPaymentsWithExplanations,
 } = require('../../sync/upsert');
 const { logSkippedRecords } = require('./skippedRecordStore');
+const {
+  isLedgerEntity,
+  loadLedgerExistingState,
+  writeLedgerEventsFromUpsert,
+} = require('./eventLedgerWriter');
 
 async function buildMaps(entityAlias, organizationId) {
   const maps = {
@@ -180,10 +185,18 @@ async function upsertPeEntityPage({
     }
 
     const rows = transformed.map((t) => t.row);
+
+    const ledgerState = isLedgerEntity(entityAlias)
+      ? await loadLedgerExistingState(practiceId, entityAlias, rows)
+      : null;
+
     const { error } = await supabaseAdmin.from(tableName).upsert(rows, { onConflict });
+
+    let upsertedRows = [];
 
     if (!error) {
       processed = rows.length;
+      upsertedRows = rows;
     } else {
       // Fall back to individual upserts — skip only the bad ones
       console.warn(
@@ -193,6 +206,7 @@ async function upsertPeEntityPage({
         try {
           await upsertOne(tableName, onConflict, row);
           processed += 1;
+          upsertedRows.push(row);
         } catch (err) {
           failed += 1;
           skips.push({
@@ -206,6 +220,19 @@ async function upsertPeEntityPage({
           });
         }
       }
+    }
+
+    // Ledger write after source upsert. Failure throws → chunk is not silently
+    // successful. Idempotency keys + heal-on-resume prevent duplicates/misses.
+    if (ledgerState && upsertedRows.length > 0) {
+      await writeLedgerEventsFromUpsert({
+        practiceId,
+        entityAlias,
+        syncRunId,
+        newRows: upsertedRows,
+        existingByEntityId: ledgerState.existingByEntityId,
+        existingLedgerKeys: ledgerState.existingLedgerKeys,
+      });
     }
   }
 

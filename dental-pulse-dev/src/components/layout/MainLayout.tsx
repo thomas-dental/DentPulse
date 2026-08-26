@@ -7,14 +7,22 @@ import { useChatbot } from '@/hooks/useChatbot';
 import { useActivityTracker } from '@/hooks/useActivityTracker';
 import { useAuth } from '@/hooks/useAuth';
 import { useFilters } from '@/contexts/FilterContext';
+import { cn } from '@/lib/utils';
 
 interface MainLayoutProps {
   children: ReactNode;
   userRole?: string;
   aiContext?: Record<string, any>;
+  /** Override main content padding (defaults to p-6 pt-[4.5rem]). */
+  contentClassName?: string;
 }
 
-export function MainLayout({ children, userRole = 'admin', aiContext }: MainLayoutProps) {
+export function MainLayout({
+  children,
+  userRole = 'admin',
+  aiContext,
+  contentClassName,
+}: MainLayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { profile } = useAuth();
   useActivityTracker(profile?.user_id || null); // Platform-wide activity detection (user-scoped)
@@ -45,7 +53,13 @@ export function MainLayout({ children, userRole = 'admin', aiContext }: MainLayo
     <div className="min-h-screen bg-background">
       <AppSidebar collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} />
       <TopBar sidebarCollapsed={sidebarCollapsed} />
-      <main className={`p-6 pt-[4.5rem] transition-all duration-300 ${sidebarCollapsed ? 'ml-16' : 'ml-[17.5rem]'}`}>
+      <main
+        className={cn(
+          'pt-[4.5rem] transition-all duration-300',
+          sidebarCollapsed ? 'ml-16' : 'ml-[17.5rem]',
+          contentClassName ?? 'p-6',
+        )}
+      >
         {children}
       </main>
 
