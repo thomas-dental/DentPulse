@@ -1,4 +1,8 @@
 import { supabase } from '@/integrations/supabase/client';
+import type {
+  PractitionerRatesListResponse,
+  PractitionerWithRates,
+} from '@/types/patientEconomicsAssumptions';
 
 function getBackendUrl(): string {
   if (typeof window !== 'undefined') {
@@ -252,4 +256,101 @@ export async function fetchDentallySites(
 /** True when integration has an encrypted PAT (pat_hint is the client-safe indicator). */
 export function integrationHasPat(integration: { pat_hint?: string | null; encrypted_pat?: string | null }): boolean {
   return !!(integration.pat_hint || integration.encrypted_pat);
+}
+
+/** List practitioners with current effective private-share rate (or explicit not-configured). */
+export async function listPractitionerPrivateShareRates(
+  practiceId: string,
+  options?: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    sortBy?: 'name' | 'private_share' | 'role';
+    sortDir?: 'asc' | 'desc';
+  },
+): Promise<PractitionerRatesListResponse> {
+  const headers = await getAuthHeaders();
+  const params = new URLSearchParams({ practiceId });
+  if (options?.page != null) params.set('page', String(options.page));
+  if (options?.pageSize != null) params.set('pageSize', String(options.pageSize));
+  if (options?.search) params.set('search', options.search);
+  if (options?.sortBy) params.set('sortBy', options.sortBy);
+  if (options?.sortDir) params.set('sortDir', options.sortDir);
+  const res = await fetch(
+    `${getBackendUrl()}/api/economics-engine/assumptions/practitioner-rates?${params}`,
+    { method: 'GET', headers },
+  );
+  const body = await res.json().catch(() => ({} as {
+    success?: boolean;
+    error?: string;
+    code?: string;
+    practitioners?: PractitionerWithRates[];
+    summary?: PractitionerRatesListResponse['summary'];
+    pagination?: PractitionerRatesListResponse['pagination'];
+  }));
+
+  if (!res.ok || !body.success) {
+    const err = new Error(body.error || `Failed to load practitioner rates (${res.status})`);
+    if (body.code) (err as Error & { code?: string }).code = body.code;
+    throw err;
+  }
+
+  return {
+    practitioners: body.practitioners || [],
+    summary: body.summary || {
+      totalPractitioners: 0,
+      configuredCount: 0,
+      notConfiguredCount: 0,
+      hasMissingRate: false,
+    },
+    pagination: body.pagination || {
+      page: 1,
+      pageSize: options?.pageSize ?? 10,
+      totalPages: 1,
+      totalCount: 0,
+    },
+  };
+}
+
+/** Append a new effective-dated private-share rate (never updates existing rows). */
+export async function createPractitionerPrivateShareRate(
+  practiceId: string,
+  practitionerId: string,
+  rate: number,
+  effectiveFrom: string,
+): Promise<PractitionerWithRates & { inserted: { id: string; rate: number; effectiveFrom: string; createdAt: string } }> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${getBackendUrl()}/api/economics-engine/assumptions/practitioner-rates`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ practiceId, practitionerId, rate, effectiveFrom }),
+  });
+  const body = await res.json().catch(() => ({} as {
+    success?: boolean;
+    error?: string;
+    code?: string;
+    practitionerId?: string;
+    practitionerName?: string;
+    rateConfigured?: boolean;
+    currentRate?: number | null;
+    currentEffectiveFrom?: string | null;
+    history?: PractitionerWithRates['history'];
+    inserted?: { id: string; rate: number; effectiveFrom: string; createdAt: string };
+  }));
+
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Failed to save rate (${res.status})`);
+  }
+
+  return {
+    id: practitionerId,
+    name: body.practitionerName || '',
+    providerRole: null,
+    isActive: true,
+    rateConfigured: body.rateConfigured === true,
+    currentRate: body.currentRate ?? null,
+    currentEffectiveFrom: body.currentEffectiveFrom ?? null,
+    history: body.history || [],
+    inserted: body.inserted!,
+  };
 }

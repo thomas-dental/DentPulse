@@ -116,22 +116,20 @@ async function upsertPeEntityPage({
   if (transformed.length > 0) {
     // Invoices: header + nested invoice_items (from detail enrich). Strip
     // _invoice_items and write line items via shared JobQueue helper.
+    // Ledger (INVOICE_RAISED) mirrors Day 1: prefetch before write, emit after
+    // successful upsert; ledger failure throws so the chunk is not marked complete.
     if (entityAlias === 'invoices') {
       const rows = transformed.map((t) => t.row);
+      const ledgerState = await loadLedgerExistingState(practiceId, entityAlias, rows);
+      let result;
       try {
-        const result = await upsertInvoicesWithLineItems(
+        result = await upsertInvoicesWithLineItems(
           tableName,
           onConflict,
           rows,
           practiceId,
           null
         );
-        if (skips.length > 0) await logSkippedRecords(skips);
-        return {
-          processed: result.processed,
-          failed: result.failed,
-          skipped: skips.length,
-        };
       } catch (err) {
         console.error(`[PE sync] Invoice upsert failed: ${err.message}`);
         for (const { record } of transformed) {
@@ -148,24 +146,47 @@ async function upsertPeEntityPage({
         if (skips.length > 0) await logSkippedRecords(skips);
         return { processed: 0, failed: transformed.length, skipped: skips.length };
       }
+
+      if (result.processed > 0) {
+        await writeLedgerEventsFromUpsert({
+          practiceId,
+          entityAlias,
+          syncRunId,
+          newRows: rows,
+          existingByEntityId: ledgerState.existingByEntityId,
+          existingLedgerKeys: ledgerState.existingLedgerKeys,
+        });
+      }
+      if (skips.length > 0) await logSkippedRecords(skips);
+      return {
+        processed: result.processed,
+        failed: result.failed,
+        skipped: skips.length,
+      };
     }
 
     // Payments: header + nested explanations (invoice allocations).
+    // Ledger (PAYMENT_ALLOCATED) mirrors invoices: snapshot explanations before
+    // upsert mutates them away; write after successful upsert.
     if (entityAlias === 'payments') {
       const rows = transformed.map((t) => t.row);
+      const ledgerRows = rows.map((r) => ({
+        ...r,
+        _explanations: Array.isArray(r._explanations) ? [...r._explanations] : [],
+      }));
+      const ledgerState = await loadLedgerExistingState(
+        practiceId,
+        entityAlias,
+        ledgerRows,
+      );
+      let result;
       try {
-        const result = await upsertPaymentsWithExplanations(
+        result = await upsertPaymentsWithExplanations(
           tableName,
           onConflict,
           rows,
           practiceId
         );
-        if (skips.length > 0) await logSkippedRecords(skips);
-        return {
-          processed: result.processed,
-          failed: result.failed,
-          skipped: skips.length,
-        };
       } catch (err) {
         console.error(`[PE sync] Payment upsert failed: ${err.message}`);
         for (const { record } of transformed) {
@@ -182,6 +203,23 @@ async function upsertPeEntityPage({
         if (skips.length > 0) await logSkippedRecords(skips);
         return { processed: 0, failed: transformed.length, skipped: skips.length };
       }
+
+      if (result.processed > 0) {
+        await writeLedgerEventsFromUpsert({
+          practiceId,
+          entityAlias,
+          syncRunId,
+          newRows: ledgerRows,
+          existingByEntityId: ledgerState.existingByEntityId,
+          existingLedgerKeys: ledgerState.existingLedgerKeys,
+        });
+      }
+      if (skips.length > 0) await logSkippedRecords(skips);
+      return {
+        processed: result.processed,
+        failed: result.failed,
+        skipped: skips.length,
+      };
     }
 
     const rows = transformed.map((t) => t.row);

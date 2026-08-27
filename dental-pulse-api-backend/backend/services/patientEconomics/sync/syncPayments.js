@@ -7,6 +7,9 @@
  * Also: dp_patient_id ↔ pt_id, dp_account_id ↔ da_id.
  *
  * Raw amounts/dates/status/method synced as-is. Collection-rate / aged debt = M7.
+ *
+ * Event Ledger (via upsertPePage → eventLedgerWriter):
+ *   PAYMENT_ALLOCATED — explanation with invoice_id (new payment or heal).
  */
 
 const { RESOURCE_PAYMENTS } = require('./cursorStore');

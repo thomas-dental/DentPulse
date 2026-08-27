@@ -121,7 +121,7 @@ Successful chunks reset `retry_count` / `next_retry_at` / `last_error*`.
 
 **Overlap:** kickoff skips a practice if any scheduled resource has non-stale `in_progress` (`PE_SYNC_IN_PROGRESS_STALE_MS`, default 120s).
 
-**Date-window resources (lookback):** `appointments`, `treatment_plans`, `treatment_items`, `invoices`, `payments`. Others (`acquisition_sources`, `patients`, `accounts`, `recalls`, `treatment_appointments`) reset to page 1 full list.
+**Date-window resources (lookback):** `appointments`, `treatment_plans`, `treatment_items`, `invoices`, `payments`. Others (`acquisition_sources`, `practitioners`, `patients`, `accounts`, `recalls`, `treatment_appointments`) reset to page 1 full list.
 
 **Ops:**
 - `GET /api/economics-engine/sync/status?practiceId=`
@@ -171,6 +171,7 @@ That script syncs the catalog, resets the `patients` cursor, and re-pages patien
 ## Resource types
 
 - `acquisition_sources` → `public.acquisition_sources` (catalog; resolve patient source names)
+- `practitioners` → `public.providers` (Dentally clinicians; `external_id` = practitioner id)
 - `patients` → `public.patients`
 - `accounts` → `public.dentally_patients_accounts`
 - `recalls` → `public.patients` (recall columns, via patients API)
@@ -187,6 +188,7 @@ Use lowercase slugs in `sync_cursors.resource_type`.
 
 - `routes/economicsEngine.js` — PAT CRUD + sync chunk routes + kickoff/status
 - `services/patientEconomics/sync/syncAcquisitionSources.js`
+- `services/patientEconomics/sync/syncPractitioners.js`
 - `services/patientEconomics/sync/syncPatients.js`
 - `services/patientEconomics/sync/syncAccounts.js`
 - `services/patientEconomics/sync/syncRecalls.js`
@@ -204,7 +206,7 @@ Use lowercase slugs in `sync_cursors.resource_type`.
 - `services/patientEconomics/sync/retryPolicy.js` / `dentallyErrors.js` / `credentialsStatus.js`
 - `services/patientEconomics/sync/rateLimitBackoff.js`
 - `services/patientEconomics/sync/cursorStore.js`
-- `scripts/syncPeAcquisitionSources.js`, `syncPePatients.js`, `syncPeAccounts.js`, `syncPeRecalls.js`, `syncPeAppointments.js`, `syncPeTreatmentAppointments.js`, `syncPeTreatmentPlans.js`, `syncPeTreatmentItems.js`, `syncPeInvoices.js`, `syncPePayments.js`
+- `scripts/syncPeAcquisitionSources.js`, `syncPePractitioners.js`, `syncPePatients.js`, `syncPeAccounts.js`, `syncPeRecalls.js`, `syncPeAppointments.js`, `syncPeTreatmentAppointments.js`, `syncPeTreatmentPlans.js`, `syncPeTreatmentItems.js`, `syncPeInvoices.js`, `syncPePayments.js`
 - `scripts/peSyncStatus.js` — cursor status dump
 - `scripts/testPeScheduleKickoff.js` — kickoff smoke test
 - `scripts/backfillPePatientAcquisitionSources.js` — catalog sync + patients cursor reset + re-page

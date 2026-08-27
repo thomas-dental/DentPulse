@@ -7,6 +7,11 @@
  * independently from the full patients backfill.
  *
  * Window: practice onboarding start_date → today (same as patients).
+ *
+ * Event Ledger (via upsertPePage → eventLedgerWriter, entityAlias patients):
+ *   RECALL_DUE / RECALL_OVERDUE — dentist/hygienist recall dates vs UTC today
+ *   (no Dentally status field; overdue = due_date < today).
+ *   PATIENT_REACTIVATED — is_active false→true (transition-only).
  */
 
 const {

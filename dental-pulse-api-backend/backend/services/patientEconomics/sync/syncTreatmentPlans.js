@@ -11,6 +11,8 @@
  *   ledger key after a mid-chunk resume).
  *   TREATMENT_STARTED — when Dentally start_date lands as tp_start_date
  *   (null → set); not an inferred presented/accepted/committed status.
+ *   PLAN_COMPLETED — when Dentally completed_at lands as tp_completed_at /
+ *   tp_is_completed (unset → set); heal-on-resume if ledger key missing.
  *
  * Uses monthly created_after/created_before windows from practice onboarding
  * start_date → today so backfill stays resumable against large practice volumes.

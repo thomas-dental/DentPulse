@@ -1,6 +1,8 @@
 -- ============================================================================
--- Patient Economics — v_patient_contribution
---
+-- Patient Economics — v_patient_contribution (Day 2 — SUPERSEDED)
+-- Superseded by 20260827130001_v_invoice_contribution.sql (invoice grain).
+-- Do not re-apply this file on environments that already have v_invoice_contribution.
+-- ============================================================================
 -- Contribution = private/plan invoice revenue − clinician cost − lab cost.
 -- Queryable directly by the frontend under RLS (security_invoker → underlying
 -- patients / invoice / payment table policies via user_in_org).

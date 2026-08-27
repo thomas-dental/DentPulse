@@ -16,6 +16,7 @@ const { syncTreatmentAppointments } = require('../services/patientEconomics/sync
 const { syncTreatmentPlans } = require('../services/patientEconomics/sync/syncTreatmentPlans');
 const { syncTreatmentItems } = require('../services/patientEconomics/sync/syncTreatmentItems');
 const { syncAcquisitionSources } = require('../services/patientEconomics/sync/syncAcquisitionSources');
+const { syncPractitioners } = require('../services/patientEconomics/sync/syncPractitioners');
 const { syncInvoices, syncInvoiceItems } = require('../services/patientEconomics/sync/syncInvoices');
 const { syncPayments } = require('../services/patientEconomics/sync/syncPayments');
 const {
@@ -27,6 +28,10 @@ const {
 const { getSyncStatusByPractice } = require('../services/patientEconomics/sync/cursorStore');
 const { getDevOverview, getDevCounts, browseDevRows } = require('../services/patientEconomics/sync/peDevOverview');
 const { listTicks } = require('../services/patientEconomics/sync/peTickHistory');
+const {
+  listPractitionerRates,
+  insertPractitionerRate,
+} = require('../services/patientEconomics/practitionerPrivateShareRates');
 
 const router = express.Router();
 
@@ -432,6 +437,15 @@ router.post('/sync/acquisition-sources', syncAuthMiddleware, (req, res) =>
 );
 
 /**
+ * POST /api/economics-engine/sync/practitioners
+ * Body: { practiceId }
+ * Processes one practitioners chunk (1 Dentally page). Call repeatedly while hasMore=true.
+ */
+router.post('/sync/practitioners', syncAuthMiddleware, (req, res) =>
+  handleSyncChunkRoute(req, res, syncPractitioners, '/sync/practitioners')
+);
+
+/**
  * POST /api/economics-engine/sync/patients
  * Body: { practiceId }
  * Processes one patients chunk (1 Dentally page). Call repeatedly while hasMore=true.
@@ -722,6 +736,89 @@ router.post('/sync/kickoff-full', async (req, res, next) => {
     return handleKickoffRoute(req, res, 'full');
   }
   return syncAuthMiddleware(req, res, () => handleKickoffRoute(req, res, 'full'));
+});
+
+/**
+ * GET /api/economics-engine/assumptions/practitioner-rates?practiceId=
+ * Lists practitioners with current effective private-share rate or explicit not-configured state.
+ */
+router.get('/assumptions/practitioner-rates', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const page = Math.max(1, parseInt(req.query?.page, 10) || 1);
+    const pageSize = Math.min(50, Math.max(5, parseInt(req.query?.pageSize, 10) || 10));
+    const search = typeof req.query?.search === 'string' ? req.query.search : '';
+    const sortBy = typeof req.query?.sortBy === 'string' ? req.query.sortBy : 'name';
+    const sortDir = req.query?.sortDir === 'desc' ? 'desc' : 'asc';
+
+    const payload = await listPractitionerRates(practiceId, {
+      page,
+      pageSize,
+      search,
+      sortBy,
+      sortDir,
+    });
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    if (err.code === 'TABLE_NOT_FOUND') {
+      return res.status(503).json({ success: false, error: err.message, code: err.code });
+    }
+    console.error('[EconomicsEngine] GET /assumptions/practitioner-rates error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load practitioner rates' });
+  }
+});
+
+/**
+ * POST /api/economics-engine/assumptions/practitioner-rates
+ * Body: { practiceId, practitionerId, rate, effectiveFrom }
+ * Append-only INSERT — never updates an existing rate row.
+ */
+router.post('/assumptions/practitioner-rates', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.body?.practiceId;
+    const practitionerId = req.body?.practitionerId;
+    const { rate, effectiveFrom } = req.body || {};
+
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+    if (!practitionerId || !isUuid(practitionerId)) {
+      return res.status(400).json({ success: false, error: 'practitionerId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const result = await insertPractitionerRate({
+      practiceId,
+      practitionerId,
+      rate,
+      effectiveFrom,
+      createdBy: req.user.id,
+    });
+
+    return res.status(201).json({ success: true, ...result });
+  } catch (err) {
+    if (err.code === 'TABLE_NOT_FOUND') {
+      return res.status(503).json({ success: false, error: err.message, code: err.code });
+    }
+    if (err.status === 400 || err.status === 404 || err.status === 409) {
+      return res.status(err.status).json({ success: false, error: err.message });
+    }
+    console.error('[EconomicsEngine] POST /assumptions/practitioner-rates error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to save practitioner rate' });
+  }
 });
 
 module.exports = router;

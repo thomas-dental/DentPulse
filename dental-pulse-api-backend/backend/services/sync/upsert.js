@@ -911,6 +911,7 @@ async function upsertInvoicesWithLineItems(tableName, onConflict, records, organ
         treatment_id: treatmentIdNum,
         treatment_category: treatmentCategory,
         practitioner_id: item.practitioner_id ? String(item.practitioner_id) : null,
+        is_nhs: item.nhs_charge === true || item.nhs_charge === 'true',
         sundry_id: item.sundry_id ? String(item.sundry_id) : null,
         treatment_plan_id: item.treatment_plan_id ? String(item.treatment_plan_id) : null,
         treatment_plan_item_id: item.treatment_plan_item_id ? String(item.treatment_plan_item_id) : null,

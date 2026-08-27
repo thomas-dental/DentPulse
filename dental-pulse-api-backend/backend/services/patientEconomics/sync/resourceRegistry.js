@@ -5,6 +5,7 @@
 
 const { SCHEDULED_RESOURCE_TYPES } = require('./cursorStore');
 const { syncAcquisitionSources } = require('./syncAcquisitionSources');
+const { syncPractitioners } = require('./syncPractitioners');
 const { syncPatients } = require('./syncPatients');
 const { syncAccounts } = require('./syncAccounts');
 const { syncRecalls } = require('./syncRecalls');
@@ -17,6 +18,7 @@ const { syncPayments } = require('./syncPayments');
 
 const SYNC_BY_RESOURCE = {
   acquisition_sources: syncAcquisitionSources,
+  practitioners: syncPractitioners,
   patients: syncPatients,
   accounts: syncAccounts,
   recalls: syncRecalls,

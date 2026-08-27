@@ -13,6 +13,10 @@
  *   treatment_plan_id       ↔ treatment_plans.tp_id
  *
  * Raw amounts/status/dates synced as-is. Charged-not-collected / leakage = M6.
+ *
+ * Event Ledger (via upsertPePage → eventLedgerWriter):
+ *   INVOICE_RAISED — first insert of an invoice (or heal if source row exists
+ *   without ledger key after a mid-chunk resume).
  */
 
 const { fetchInvoiceDetailsBatch } = require('../../../api/dentally/client');

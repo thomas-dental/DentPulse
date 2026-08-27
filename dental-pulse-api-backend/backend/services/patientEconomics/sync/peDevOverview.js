@@ -12,6 +12,7 @@ const { getPracticePatValidity } = require('./credentialsStatus');
 /** UI resource rows (invoice_items shares invoices cursor). */
 const INSPECTOR_RESOURCES = [
   'acquisition_sources',
+  'practitioners',
   'patients',
   'accounts',
   'recalls',
@@ -30,6 +31,7 @@ const RECALL_ROWS_OR =
 
 const COUNT_SPECS = [
   { key: 'acquisition_sources', table: 'acquisition_sources' },
+  { key: 'practitioners', table: 'providers' },
   { key: 'patients', table: 'patients' },
   { key: 'accounts', table: 'dentally_patients_accounts' },
   {
@@ -166,6 +168,11 @@ async function getDevOverviewWithCounts(practiceId) {
 
 /** Browse configs — same tables/columns as the inspector UI. */
 const BROWSE_SPECS = {
+  practitioners: {
+    table: 'providers',
+    columns: ['external_id', 'name', 'email', 'is_active', 'location_id', 'provider_role'],
+    order: 'external_id',
+  },
   patients: {
     table: 'patients',
     columns: [
@@ -257,10 +264,13 @@ const BROWSE_SPECS = {
   invoices: {
     table: 'platform_integration_invoices',
     columns: [
+      'id',
       'platform_invoice_id',
       'patient_id',
       'account_id',
       'total',
+      'subtotal',
+      'nhs_amount',
       'invoice_date',
       'is_paid',
     ],
@@ -271,9 +281,12 @@ const BROWSE_SPECS = {
     columns: [
       'id',
       'invoice_id',
+      'dentally_invoice_id',
+      'practitioner_id',
       'treatment_plan_item_id',
       'description',
       'line_amount',
+      'is_nhs',
       'gross',
       'net',
     ],

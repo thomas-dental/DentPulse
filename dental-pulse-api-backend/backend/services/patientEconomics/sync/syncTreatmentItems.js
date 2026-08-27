@@ -12,6 +12,10 @@
  *
  * Raw pricing/completion fields (tpi_price, tpi_charged, tpi_completed, …)
  * stored as-is; Contribution Engine cost allocation is M4 work.
+ *
+ * Event Ledger (via upsertPePage → eventLedgerWriter):
+ *   ITEM_COMPLETED — when Dentally completed / completed_at lands as
+ *   tpi_completed / tpi_completed_at (unset → set); heal-on-resume if key missing.
  */
 
 const { RESOURCE_TREATMENT_ITEMS } = require('./cursorStore');
