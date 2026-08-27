@@ -77,7 +77,23 @@ type RevenueMixSegment = {
   label: string;
   value: number;
   barClass: string;
+  /** Short in-bar label when the slice is too narrow for full text. */
+  shortLabel: string;
 };
+
+function mixBarLabel(segment: RevenueMixSegment, pct: number): string | null {
+  if (segment.key === 'empty') return null;
+  // Wide enough for full copy
+  if (pct >= 18) {
+    return `${segment.label} ${formatGbpCompact(segment.value)} · ${pct}%`;
+  }
+  // Medium: keep amount + %
+  if (pct >= 10) {
+    return `${formatGbpCompact(segment.value)} · ${pct}%`;
+  }
+  // Narrow: letter(s) still flow in the slice (P / Pl / N)
+  return segment.shortLabel;
+}
 
 function RevenueMixCard({
   isLoading,
@@ -117,20 +133,44 @@ function RevenueMixCard({
   const totalMix = engineRevenue + revenueNhs;
 
   const segments: RevenueMixSegment[] = [
-    { key: 'private', label: 'Private', value: revenuePrivate, barClass: 'bg-primary' },
-    { key: 'plan', label: 'Plan', value: revenuePlan, barClass: 'bg-[hsl(var(--chart-2))]' },
+    {
+      key: 'private',
+      label: 'Private',
+      shortLabel: 'P',
+      value: revenuePrivate,
+      barClass: 'bg-primary',
+    },
+    {
+      key: 'plan',
+      label: 'Plan',
+      shortLabel: 'Pl',
+      value: revenuePlan,
+      barClass: 'bg-[hsl(var(--chart-2))]',
+    },
     {
       key: 'nhs',
       label: 'NHS/UDA',
+      shortLabel: 'N',
       value: revenueNhs,
       barClass: 'bg-muted-foreground',
     },
-  ].filter((s) => s.value > 0);
+  ];
+
+  // Bar only draws positive slices; legend always includes Plan so the mix sides stay visible.
+  const barSegments = segments.filter((s) => s.value > 0);
 
   const visibleSegments =
-    segments.length > 0
-      ? segments
-      : [{ key: 'empty', label: 'No invoice mix yet', value: 1, barClass: 'bg-muted' }];
+    barSegments.length > 0
+      ? barSegments
+      : [
+          {
+            key: 'empty',
+            label: 'No invoice mix yet',
+            shortLabel: '—',
+            value: 1,
+            barClass: 'bg-muted',
+          },
+        ];
 
   const isMixed = engineRevenue > 0 && revenueNhs > 0;
   const badgeLabel = isMixed
@@ -203,21 +243,39 @@ function RevenueMixCard({
               : segment.key === 'empty'
                 ? 100
                 : 0;
-          // Small slices (e.g. NHS ~8%) can't fit in-bar text — legend below covers them.
-          const showLabel = pct >= 12 && segment.key !== 'empty';
+          const label = mixBarLabel(segment, pct);
+          const isShort = pct > 0 && pct < 10 && segment.key !== 'empty';
           return (
             <div
               key={segment.key}
               className={cn(
-                'flex min-w-0 items-center justify-center px-1',
+                'relative flex min-w-0 items-center justify-center overflow-hidden px-0.5',
                 segment.barClass,
               )}
-              style={{ width: `${Math.max(pct, segment.key === 'empty' ? 100 : 0)}%` }}
+              style={
+                segment.key === 'empty'
+                  ? { width: '100%' }
+                  : {
+                      flexGrow: Math.max(segment.value, 0.0001),
+                      flexBasis: 0,
+                      // Short slices keep enough width for letter flow (P / Pl / N).
+                      minWidth: isShort ? '1.35rem' : undefined,
+                    }
+              }
               title={`${segment.label} ${formatGbp(segment.value)} (${pct}%)`}
             >
-              {showLabel && (
-                <span className="truncate">
-                  {segment.label} {formatGbpCompact(segment.value)} · {pct}%
+              {label != null && (
+                <span
+                  className={cn(
+                    'whitespace-nowrap tracking-wide',
+                    isShort
+                      ? 'text-[10px] font-extrabold'
+                      : pct < 18
+                        ? 'truncate text-[10px]'
+                        : 'truncate',
+                  )}
+                >
+                  {label}
                 </span>
               )}
             </div>

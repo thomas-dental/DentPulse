@@ -79,7 +79,7 @@ async function loadMembershipPlanIds(practiceId: string): Promise<Set<number>> {
 
   if (error) {
     console.warn('[PE mix] membership plan lookup failed:', error.message);
-    return new Set();
+    return loadMembershipPlanIdsFromDentallyPlans(practiceId);
   }
 
   const ids = new Set<number>();
@@ -99,6 +99,54 @@ async function loadMembershipPlanIds(practiceId: string): Promise<Set<number>> {
     )) {
       ids.add(id);
     }
+  }
+
+  // When Setup Categories use accounting COA (or nothing configured), fall back to
+  // Dentally payment_plans that look like membership / Practice Plan / Denplan.
+  if (ids.size === 0) {
+    return loadMembershipPlanIdsFromDentallyPlans(practiceId);
+  }
+  return ids;
+}
+
+/** Infer membership plan ids from synced Dentally payment_plans. */
+async function loadMembershipPlanIdsFromDentallyPlans(
+  practiceId: string,
+): Promise<Set<number>> {
+  const ids = new Set<number>();
+  const pageSize = 1000;
+  for (let from = 0; from < 20_000; from += pageSize) {
+    const { data, error } = await (supabase as any)
+      .from('payment_plans')
+      .select('pp_id, pp_patient_friendly_name, pp_monthly_memberhsip_fee')
+      .eq('organization_id', practiceId)
+      .is('deleted_at', null)
+      .range(from, from + pageSize - 1);
+
+    if (error) {
+      console.warn('[PE mix] payment_plans membership fallback:', error.message);
+      break;
+    }
+    const rows = (data ?? []) as Array<{
+      pp_id: number | string | null;
+      pp_patient_friendly_name: string | null;
+      pp_monthly_memberhsip_fee: number | string | null;
+    }>;
+    if (rows.length === 0) break;
+
+    for (const row of rows) {
+      const fee = num(row.pp_monthly_memberhsip_fee);
+      const name = String(row.pp_patient_friendly_name || '').toLowerCase();
+      const looksMembership =
+        fee > 0 ||
+        /practice\s*plan|denplan|membership|member\s*plan|capitation|subscription/.test(
+          name,
+        );
+      if (!looksMembership) continue;
+      const id = num(row.pp_id);
+      if (id) ids.add(id);
+    }
+    if (rows.length < pageSize) break;
   }
   return ids;
 }
@@ -367,7 +415,7 @@ export function useInvoiceContributionSummary() {
   const { organizationId } = useOrganization();
 
   return useQuery({
-    queryKey: ['v_invoice_contribution', 'summary', 'mix-uda-claims', organizationId],
+    queryKey: ['v_invoice_contribution', 'summary', 'mix-uda-claims-plan', organizationId],
     enabled: !!organizationId,
     queryFn: () => fetchInvoiceContributionSummary(organizationId!),
   });
