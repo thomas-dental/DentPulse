@@ -25,11 +25,14 @@
 -- APPOINTMENT_LINKED
 --   appointment_id / ta_appointment_id (diary appointment id),
 --   plan_id / ta_treatment_plan_id, ta_id, ta_patient_id,
+--   planned_value / tp_private_treatment_value (copied from treatment_plans
+--   at write time so Journey Scheduled can chart £),
 --   source_table='treatment_appointments', source_record_id
 --
 -- APPOINTMENT_UNLINKED
 --   previous appointment_id / previous_ta_appointment_id, plan_id /
 --   ta_treatment_plan_id, ta_id, ta_patient_id (ta_appointment_id null),
+--   optional planned_value (same copy when available),
 --   source_table='treatment_appointments', source_record_id
 --
 -- TREATMENT_STARTED

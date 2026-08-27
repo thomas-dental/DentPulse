@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { format, parseISO } from 'date-fns';
+import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -25,6 +26,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/integrations/supabase/client';
+import { ukDentalFinancialYear } from '@/utils/dentpulseNhsIncome';
 import type {
   PractitionerRatesSortBy,
   PractitionerRatesSortDir,
@@ -34,6 +37,8 @@ import {
   createPractitionerPrivateShareRate,
   listPractitionerPrivateShareRates,
 } from '@/services/integrations/patientEconomicsService';
+
+export const PE_PRACTICE_UDA_RATE_QUERY_KEY = 'pe-practice-uda-rate';
 
 const PAGE_SIZE = 10;
 
@@ -54,6 +59,67 @@ function formatRatePct(rate: number): string {
   return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(2)}%`;
 }
 
+function formatUdaGbpRate(rate: number | null): string {
+  if (rate == null || !Number.isFinite(rate) || rate <= 0) return '—';
+  return `£${rate.toLocaleString('en-GB', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+async function loadPracticeUdaRate(organizationId: string): Promise<number | null> {
+  const fy = ukDentalFinancialYear(new Date());
+
+  const { data: orgRow, error: orgErr } = await (supabase as any)
+    .from('uda_settings')
+    .select('uda_rate, nhs_contract_value, total_uda_obligation')
+    .eq('organization_id', organizationId)
+    .eq('financial_year', fy)
+    .eq('contract_type', 'NHS')
+    .is('location_id', null)
+    .maybeSingle();
+
+  if (orgErr) {
+    console.warn('[PE clinician UDA rate]', orgErr.message);
+    return null;
+  }
+
+  if (orgRow) {
+    const stored = Number(orgRow.uda_rate);
+    if (Number.isFinite(stored) && stored > 0) return stored;
+    const cv = Number(orgRow.nhs_contract_value) || 0;
+    const ob = Number(orgRow.total_uda_obligation) || 0;
+    if (ob > 0) return cv / ob;
+  }
+
+  const { data: locRows, error: locErr } = await (supabase as any)
+    .from('uda_settings')
+    .select('nhs_contract_value, total_uda_obligation, uda_rate')
+    .eq('organization_id', organizationId)
+    .eq('financial_year', fy)
+    .eq('contract_type', 'NHS')
+    .not('location_id', 'is', null);
+
+  if (locErr) {
+    console.warn('[PE clinician UDA rate]', locErr.message);
+    return null;
+  }
+
+  if (!locRows?.length) return null;
+
+  let cv = 0;
+  let ob = 0;
+  for (const r of locRows as Array<{
+    nhs_contract_value: number | string | null;
+    total_uda_obligation: number | string | null;
+  }>) {
+    cv += Number(r.nhs_contract_value) || 0;
+    ob += Number(r.total_uda_obligation) || 0;
+  }
+  if (ob <= 0) return null;
+  return cv / ob;
+}
+
 function practitionerLabel(p: PractitionerWithRates): string {
   const role = p.providerRole?.replace(/_/g, ' ');
   if (role) return `${p.name} · ${role}`;
@@ -65,6 +131,16 @@ function formatPrivateShare(p: PractitionerWithRates): string {
     return formatRatePct(p.currentRate);
   }
   return '—';
+}
+
+/** Mockup-style lab treatment label from providers.lab_split_percentage. */
+function formatLabTreatment(p: PractitionerWithRates): string {
+  const pct = p.labSplitPercentage;
+  if (pct == null || !Number.isFinite(pct)) return '—';
+  if (pct === 0) return 'Lab pre-split';
+  if (pct === 50) return '50/50 split';
+  const rounded = Math.round(pct * 100) / 100;
+  return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(2)}% split`;
 }
 
 function SortIcon({
@@ -142,6 +218,12 @@ export function ClinicianRemunerationProfiles({ organizationId }: ClinicianRemun
   const [rateInput, setRateInput] = useState('');
   const [effectiveFromInput, setEffectiveFromInput] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+
+  const { data: practiceUdaRate = null } = useQuery({
+    queryKey: [PE_PRACTICE_UDA_RATE_QUERY_KEY, organizationId],
+    enabled: !!organizationId,
+    queryFn: () => loadPracticeUdaRate(organizationId!),
+  });
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedSearch(searchInput.trim()), 250);
@@ -366,8 +448,24 @@ export function ClinicianRemunerationProfiles({ organizationId }: ClinicianRemun
                       >
                         {formatPrivateShare(p)}
                       </td>
-                      <td className="py-2.5 px-3.5 text-muted-foreground">n/a</td>
-                      <td className="py-2.5 pl-3.5 pr-0 text-right text-muted-foreground">n/a</td>
+                      <td
+                        className={cn(
+                          'py-2.5 px-3.5',
+                          p.labSplitPercentage == null
+                            ? 'text-muted-foreground'
+                            : 'font-medium text-foreground',
+                        )}
+                      >
+                        {formatLabTreatment(p)}
+                      </td>
+                      <td
+                        className={cn(
+                          'py-2.5 pl-3.5 pr-0 text-right font-semibold',
+                          practiceUdaRate == null && 'font-normal text-muted-foreground',
+                        )}
+                      >
+                        {formatUdaGbpRate(practiceUdaRate)}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

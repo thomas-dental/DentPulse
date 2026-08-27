@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/select';
 import { useOrganization } from '@/hooks/useOrganization';
 import { ClinicianRemunerationProfiles } from '@/components/patient-economics/ClinicianRemunerationProfiles';
+import { PeNhsUdaContractSettings } from '@/components/patient-economics/PeNhsUdaContractSettings';
 import { cn } from '@/lib/utils';
 
 function SettingsCard({
@@ -264,6 +265,13 @@ export function PatientEconomicsSettingsTab() {
               description="Delivered vs contracted UDAs in its own lens."
               control={<Switch disabled defaultChecked />}
             />
+          </div>
+
+          <div className="mt-2 border-t border-border pt-1">
+            <div className="pt-3 text-[13px] font-semibold text-foreground">
+              NHS contract (this practice)
+            </div>
+            <PeNhsUdaContractSettings organizationId={organizationId} />
           </div>
         </SettingsCard>
       </div>

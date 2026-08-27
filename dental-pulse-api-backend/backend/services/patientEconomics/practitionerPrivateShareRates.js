@@ -110,6 +110,10 @@ function attachRates(providerRows, ratesByProvider, asOf) {
       rateConfigured: current != null,
       currentRate: current ? current.rate : null,
       currentEffectiveFrom: current ? current.effectiveFrom : null,
+      labSplitPercentage:
+        p.lab_split_percentage != null && Number.isFinite(Number(p.lab_split_percentage))
+          ? Number(p.lab_split_percentage)
+          : null,
       history,
     };
   });
@@ -151,7 +155,7 @@ async function listPractitionerRates(practiceId, options = {}) {
 
   const { data: providers, error: provErr } = await supabaseAdmin
     .from('providers')
-    .select('id, name, provider_role, is_active, external_id, updated_at')
+    .select('id, name, provider_role, is_active, external_id, updated_at, lab_split_percentage')
     .eq('organization_id', practiceId)
     .is('deleted_at', null)
     .order('name', { ascending: true });

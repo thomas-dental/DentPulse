@@ -527,13 +527,32 @@ test('APPOINTMENT_LINKED when ta_appointment_id set from null', () => {
       ta_patient_id: 9,
       ta_treatment_plan_id: 101,
       ta_updated_at: '2024-02-01T12:00:00Z',
+      planned_value: 250,
     },
   );
   assert.strictEqual(events.length, 1);
   assert.strictEqual(events[0].event_type, 'APPOINTMENT_LINKED');
   assert.strictEqual(events[0].idempotency_key, 'appointment_linked:50:9001');
   assert.strictEqual(events[0].payload.appointment_id, 9001);
+  assert.strictEqual(events[0].payload.planned_value, 250);
+  assert.strictEqual(events[0].payload.tp_private_treatment_value, 250);
   assert.strictEqual(events[0].payload.source_table, 'treatment_appointments');
+});
+
+test('APPOINTMENT_LINKED copies tp_private_treatment_value when planned_value absent', () => {
+  const events = diffTreatmentAppointmentEvents(
+    null,
+    {
+      ta_id: 51,
+      ta_appointment_id: 9002,
+      ta_patient_id: 9,
+      ta_treatment_plan_id: 202,
+      ta_updated_at: '2024-02-01T12:00:00Z',
+      tp_private_treatment_value: 180.5,
+    },
+  );
+  assert.strictEqual(events.length, 1);
+  assert.strictEqual(events[0].payload.planned_value, 180.5);
 });
 
 test('APPOINTMENT_UNLINKED when ta_appointment_id cleared', () => {

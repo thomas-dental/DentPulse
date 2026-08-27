@@ -23,6 +23,8 @@ export type PractitionerWithRates = {
   rateConfigured: boolean;
   currentRate: number | null;
   currentEffectiveFrom: string | null;
+  /** From providers.lab_split_percentage — null when not configured. */
+  labSplitPercentage?: number | null;
   history: PractitionerRateHistoryEntry[];
 };
 

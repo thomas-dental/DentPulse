@@ -142,7 +142,12 @@ function RevenueMixCard({
   let udaDeliveryLabel: ReactNode;
   if (!hasNhsContract) {
     udaDeliveryLabel = (
-      <span className="text-muted-foreground/80">— · no NHS contract</span>
+      <span className="text-muted-foreground/80">
+        — · no NHS contract ·{' '}
+        <Link to="/patients?tab=settings" className="underline underline-offset-2 hover:text-foreground">
+          set contract
+        </Link>
+      </span>
     );
   } else if (udaDeliveryPct == null) {
     udaDeliveryLabel = <span className="text-muted-foreground/80">—</span>;
@@ -198,6 +203,7 @@ function RevenueMixCard({
               : segment.key === 'empty'
                 ? 100
                 : 0;
+          // Small slices (e.g. NHS ~8%) can't fit in-bar text — legend below covers them.
           const showLabel = pct >= 12 && segment.key !== 'empty';
           return (
             <div
@@ -218,6 +224,24 @@ function RevenueMixCard({
           );
         })}
       </div>
+
+      {segments.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
+          {segments.map((segment) => {
+            const pct =
+              totalMix > 0 ? Math.round((segment.value / totalMix) * 100) : 0;
+            return (
+              <span key={segment.key} className="inline-flex items-center gap-1.5">
+                <span className={cn('h-2 w-2 shrink-0 rounded-sm', segment.barClass)} />
+                <span className="font-medium text-foreground">{segment.label}</span>
+                <span>
+                  {formatGbpCompact(segment.value)} · {pct}%
+                </span>
+              </span>
+            );
+          })}
+        </div>
+      )}
 
       <div className="mt-3.5 grid gap-0 sm:grid-cols-3">
         <div className="flex items-baseline justify-between border-b border-dashed border-border py-2 sm:border-b-0 sm:border-r sm:border-dashed sm:pr-3">

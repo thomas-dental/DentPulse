@@ -69,6 +69,9 @@ async function fetchTreatmentEconomicJourney(
   for (const t of FUNNEL_EVENT_TYPES) {
     byType.set(t, { eventCount: 0, valueGbp: 0 });
   }
+  // Scheduled £ is plan-scoped: one plan may have many APPOINTMENT_LINKED rows.
+  // Use max planned_value per plan_id so £ is not inflated by re-links.
+  const scheduledPlanValue = new Map<string, number>();
 
   const pageSize = 1000;
   let offset = 0;
@@ -89,11 +92,34 @@ async function fetchTreatmentEconomicJourney(
       const bucket = byType.get(row.event_type);
       if (!bucket) continue;
       bucket.eventCount += 1;
-      bucket.valueGbp += payloadGbp(row.payload);
+      const gbp = payloadGbp(row.payload);
+
+      if (row.event_type === 'APPOINTMENT_LINKED') {
+        const p =
+          row.payload && typeof row.payload === 'object'
+            ? (row.payload as Record<string, unknown>)
+            : {};
+        const planKey = String(p.plan_id ?? p.ta_treatment_plan_id ?? '');
+        if (planKey && planKey !== 'null' && planKey !== 'undefined') {
+          const prev = scheduledPlanValue.get(planKey) ?? 0;
+          if (gbp > prev) scheduledPlanValue.set(planKey, gbp);
+        } else {
+          bucket.valueGbp += gbp;
+        }
+      } else {
+        bucket.valueGbp += gbp;
+      }
     }
 
     if (rows.length < pageSize) break;
     offset += pageSize;
+  }
+
+  const scheduledBucket = byType.get('APPOINTMENT_LINKED');
+  if (scheduledBucket) {
+    let planSum = 0;
+    for (const v of scheduledPlanValue.values()) planSum += v;
+    scheduledBucket.valueGbp += planSum;
   }
 
   const stages: JourneyStage[] = JOURNEY_STAGES.map((s) => {
@@ -119,7 +145,7 @@ export function useTreatmentEconomicJourney() {
   const { organizationId } = useOrganization();
 
   return useQuery({
-    queryKey: ['event_ledger', 'treatment-economic-journey', organizationId],
+    queryKey: ['event_ledger', 'treatment-economic-journey', 'scheduled-plan-value', organizationId],
     enabled: !!organizationId,
     queryFn: () => fetchTreatmentEconomicJourney(organizationId!),
   });

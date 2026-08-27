@@ -145,14 +145,25 @@ function diffTreatmentAppointmentEvents(oldRow, newRow, existingLedgerKeys = nul
   const oldApptId = normalizeBigInt(oldRow?.ta_appointment_id);
   const newApptId = normalizeBigInt(newRow.ta_appointment_id);
 
+  const planId = normalizeBigInt(newRow.ta_treatment_plan_id);
+  const plannedValue =
+    newRow.planned_value != null
+      ? Number(newRow.planned_value)
+      : newRow.tp_private_treatment_value != null
+        ? Number(newRow.tp_private_treatment_value)
+        : null;
+
   const basePayload = {
     source_record_id: String(taId),
     source_table: 'treatment_appointments',
     ta_id: taId,
     ta_patient_id: normalizeBigInt(newRow.ta_patient_id),
-    ta_treatment_plan_id: normalizeBigInt(newRow.ta_treatment_plan_id),
-    plan_id: normalizeBigInt(newRow.ta_treatment_plan_id),
+    ta_treatment_plan_id: planId,
+    plan_id: planId,
     previous_ta_appointment_id: oldApptId,
+    // Option 2: copy plan £ onto LINKED so Journey Scheduled can chart value.
+    planned_value: Number.isFinite(plannedValue) ? plannedValue : null,
+    tp_private_treatment_value: Number.isFinite(plannedValue) ? plannedValue : null,
   };
 
   const eventTime = toEventTimestamp(newRow.ta_updated_at, newRow.updated_at);

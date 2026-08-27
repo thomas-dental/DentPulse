@@ -261,6 +261,54 @@ async function loadLedgerExistingState(practiceId, entityAlias, rows) {
   return { existingByEntityId, existingLedgerKeys };
 }
 
+async function loadPlanPrivateValues(practiceId, planIds) {
+  const map = new Map();
+  const ids = [...new Set(planIds.filter((id) => id != null))];
+  if (ids.length === 0) return map;
+
+  const chunkSize = 200;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize);
+    const { data, error } = await supabaseAdmin
+      .from('treatment_plans')
+      .select('tp_id, tp_private_treatment_value')
+      .eq('organization_id', practiceId)
+      .in('tp_id', chunk);
+
+    if (error) {
+      throw new Error(`[PE ledger] Plan value lookup failed: ${error.message}`);
+    }
+    for (const row of data || []) {
+      const tpId = normalizeBigInt(row.tp_id);
+      if (tpId == null) continue;
+      const v = row.tp_private_treatment_value;
+      if (v == null) continue;
+      const n = Number(v);
+      if (Number.isFinite(n)) map.set(tpId, n);
+    }
+  }
+  return map;
+}
+
+/**
+ * Attach treatment_plans.tp_private_treatment_value onto appointment rows so
+ * APPOINTMENT_LINKED payloads can carry planned_value (Journey Scheduled £).
+ */
+async function enrichAppointmentRowsWithPlanValue(practiceId, rows) {
+  const planIds = rows.map((r) => normalizeBigInt(r.ta_treatment_plan_id));
+  const values = await loadPlanPrivateValues(practiceId, planIds);
+  return rows.map((row) => {
+    const planId = normalizeBigInt(row.ta_treatment_plan_id);
+    const planned = planId != null ? values.get(planId) : undefined;
+    if (planned == null) return row;
+    return {
+      ...row,
+      planned_value: planned,
+      tp_private_treatment_value: planned,
+    };
+  });
+}
+
 /**
  * Diff + insert ledger events. Throws if the ledger write fails so the sync
  * chunk is not treated as successful without durable ledger rows.
@@ -275,15 +323,20 @@ async function writeLedgerEventsFromUpsert({
 }) {
   if (!isLedgerEntity(entityAlias) || newRows.length === 0) return { written: 0 };
 
+  let rows = newRows;
+  if (entityAlias === 'treatment_appointments') {
+    rows = await enrichAppointmentRowsWithPlanValue(practiceId, newRows);
+  }
+
   const patientField = ENTITY_PATIENT_FIELD[entityAlias];
   const idField = ENTITY_ID_FIELD[entityAlias];
-  const ptIds = newRows.map((row) => normalizeBigInt(row[patientField]));
+  const ptIds = rows.map((row) => normalizeBigInt(row[patientField]));
   const patientUuidByPtId = await resolvePatientUuidMap(practiceId, ptIds);
 
   const inserts = [];
   let skippedNoPatient = 0;
 
-  for (const newRow of newRows) {
+  for (const newRow of rows) {
     const entityId = normalizeEntityId(entityAlias, newRow[idField]);
     const oldRow = existingByEntityId.get(entityId) ?? null;
     const ptId = normalizeBigInt(newRow[patientField]);
@@ -339,4 +392,5 @@ module.exports = {
   isLedgerEntity,
   loadLedgerExistingState,
   writeLedgerEventsFromUpsert,
+  enrichAppointmentRowsWithPlanValue,
 };

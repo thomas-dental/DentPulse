@@ -183,37 +183,43 @@ async function loadUdaLens(practiceId: string): Promise<{
 
   if (obligation <= 0 && contractValue <= 0) return empty;
 
-  // YTD within UK dental FY (1 Apr → today). appointment_summary.month = 'MMM-yy'.
-  const months: string[] = [];
-  const cursor = new Date(fy, 3, 1);
+  // Delivered UDAs = SUM(Dentally expected_uda) from completed NHS claims in
+  // the UK dental FY YTD (1 Apr → today). Same source as chatbot NHS performance.
+  const fyStart = `${fy}-04-01`;
   const now = new Date();
-  const monthNames = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-  ];
-  while (cursor <= now && months.length < 24) {
-    const mmm = monthNames[cursor.getMonth()];
-    const yy = String(cursor.getFullYear()).slice(-2);
-    months.push(`${mmm}-${yy}`);
-    cursor.setMonth(cursor.getMonth() + 1);
-  }
+  const fyEndExclusive = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+  )
+    .toISOString()
+    .slice(0, 10);
 
   let delivered = 0;
-  if (months.length > 0) {
-    const { data: summary, error: sumErr } = await (supabase as any)
-      .from('appointment_summary')
-      .select('uda_count, month')
+  const pageSize = 1000;
+  let offset = 0;
+  for (let i = 0; i < 500; i++) {
+    const { data, error } = await (supabase as any)
+      .from('nhs_claims')
+      .select('nc_expected_uda')
       .eq('organization_id', practiceId)
-      .in('month', months);
+      .eq('nc_claim_status', 'completed')
+      .is('deleted_at', null)
+      .gte('nc_submitted_date', fyStart)
+      .lt('nc_submitted_date', fyEndExclusive)
+      .range(offset, offset + pageSize - 1);
 
-    if (sumErr) {
-      console.warn('[PE UDA] appointment_summary:', sumErr.message);
-    } else {
-      for (const r of (summary ?? []) as Array<{ uda_count: number | string | null }>) {
-        delivered += num(r.uda_count);
-      }
+    if (error) {
+      console.warn('[PE UDA] nhs_claims:', error.message);
+      break;
     }
+    const rowsPage = (data ?? []) as Array<{ nc_expected_uda: number | string | null }>;
+    if (rowsPage.length === 0) break;
+    for (const r of rowsPage) {
+      delivered += num(r.nc_expected_uda);
+    }
+    if (rowsPage.length < pageSize) break;
+    offset += pageSize;
   }
+  delivered = Math.round(delivered * 100) / 100;
 
   const hasNhsContract = obligation > 0 || contractValue > 0;
   if (!hasNhsContract) return empty;
@@ -361,7 +367,7 @@ export function useInvoiceContributionSummary() {
   const { organizationId } = useOrganization();
 
   return useQuery({
-    queryKey: ['v_invoice_contribution', 'summary', 'mix-uda-gaps', organizationId],
+    queryKey: ['v_invoice_contribution', 'summary', 'mix-uda-claims', organizationId],
     enabled: !!organizationId,
     queryFn: () => fetchInvoiceContributionSummary(organizationId!),
   });
