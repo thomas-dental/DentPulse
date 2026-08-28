@@ -38,6 +38,14 @@ const {
 const {
   runModelledComputeTick,
 } = require('../services/patientEconomics/computePatientModelledScores');
+const {
+  getPatientContributionList,
+  getPatientFinancialRecordList,
+  getPatientFinancialRecord,
+  fetchPatientTreatmentLines,
+  fetchPatientInvoices,
+  getInvoiceContributionSummary,
+} = require('../services/patientEconomics/patientEconomicsRead');
 
 const router = express.Router();
 
@@ -898,6 +906,167 @@ router.get('/journey/treatment-economic', syncAuthMiddleware, async (req, res) =
   } catch (err) {
     console.error('[EconomicsEngine] GET /journey/treatment-economic error:', err.message);
     return res.status(500).json({ success: false, error: 'Failed to load treatment economic journey' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/patient-contribution-list?practiceId=
+ */
+router.get('/read/patient-contribution-list', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const payload = await getPatientContributionList(practiceId);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/patient-contribution-list error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load patient list' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/patient-financial-records?practiceId=
+ */
+router.get('/read/patient-financial-records', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const payload = await getPatientFinancialRecordList(practiceId);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/patient-financial-records error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load patient financial records' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/patient-financial-record?practiceId=&patientId=
+ */
+router.get('/read/patient-financial-record', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    const patientId = req.query?.patientId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+    if (!patientId || !isUuid(patientId)) {
+      return res.status(400).json({ success: false, error: 'patientId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const record = await getPatientFinancialRecord(practiceId, patientId);
+    if (!record) {
+      return res.status(404).json({ success: false, error: 'Patient not found in contribution data' });
+    }
+    return res.json({ success: true, practiceId, patientId, ...record });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/patient-financial-record error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load patient financial record' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/patient-treatment-lines?practiceId=&patientId=&ptId=
+ */
+router.get('/read/patient-treatment-lines', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    const patientId = req.query?.patientId;
+    const ptIdRaw = req.query?.ptId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+    if (!patientId || !isUuid(patientId)) {
+      return res.status(400).json({ success: false, error: 'patientId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const ptId =
+      ptIdRaw == null || ptIdRaw === ''
+        ? null
+        : Number.isFinite(Number(ptIdRaw))
+          ? Number(ptIdRaw)
+          : null;
+
+    const lines = await fetchPatientTreatmentLines(practiceId, patientId, ptId);
+    return res.json({ success: true, practiceId, patientId, lines });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/patient-treatment-lines error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load treatment lines' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/patient-invoices?practiceId=&patientId=
+ */
+router.get('/read/patient-invoices', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    const patientId = req.query?.patientId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+    if (!patientId || !isUuid(patientId)) {
+      return res.status(400).json({ success: false, error: 'patientId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const invoices = await fetchPatientInvoices(practiceId, patientId);
+    return res.json({ success: true, practiceId, patientId, invoices });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/patient-invoices error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load patient invoices' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/invoice-contribution-summary?practiceId=
+ */
+router.get('/read/invoice-contribution-summary', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const summary = await getInvoiceContributionSummary(practiceId);
+    return res.json({ success: true, practiceId, summary });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/invoice-contribution-summary error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load invoice contribution summary' });
   }
 });
 

@@ -377,6 +377,106 @@ export async function fetchTreatmentEconomicJourney(
   };
 }
 
+async function economicsReadGet<T>(
+  path: string,
+  params: Record<string, string>,
+): Promise<T> {
+  const headers = await getAuthHeaders();
+  const qs = new URLSearchParams(params);
+  const res = await fetch(`${getBackendUrl()}/api/economics-engine${path}?${qs}`, {
+    method: 'GET',
+    headers,
+  });
+  const body = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string } & T;
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Request failed (${res.status})`);
+  }
+  return body;
+}
+
+/** Patient List rows — server aggregates v_patient_contribution + 12mo metrics. */
+export async function fetchPatientContributionList(practiceId: string) {
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    practiceName: string;
+    patients: Array<Record<string, unknown>>;
+  }>('/read/patient-contribution-list', { practiceId });
+}
+
+/** Patient Financial Records roster rows. */
+export async function fetchPatientFinancialRecordList(practiceId: string) {
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    practiceName: string;
+    patients: Array<Record<string, unknown>>;
+  }>('/read/patient-financial-records', { practiceId });
+}
+
+/** Single patient financial record detail. Returns null when patient not in PE data. */
+export async function fetchPatientFinancialRecordApi(
+  practiceId: string,
+  patientId: string,
+) {
+  const headers = await getAuthHeaders();
+  const params = new URLSearchParams({ practiceId, patientId });
+  const res = await fetch(
+    `${getBackendUrl()}/api/economics-engine/read/patient-financial-record?${params}`,
+    { method: 'GET', headers },
+  );
+  const body = (await res.json().catch(() => ({}))) as {
+    success?: boolean;
+    error?: string;
+    row?: Record<string, unknown>;
+    modelled?: Record<string, unknown> | null;
+    retention?: Record<string, unknown>;
+    invoices?: Array<Record<string, unknown>>;
+    acquisitionSourceName?: string | null;
+    recallHint?: string | null;
+  };
+  if (res.status === 404) return null;
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Request failed (${res.status})`);
+  }
+  return body;
+}
+
+/** Expanded roster treatment lines for one patient. */
+export async function fetchPatientTreatmentLinesApi(
+  practiceId: string,
+  patientId: string,
+  ptId: number | null,
+) {
+  const params: Record<string, string> = { practiceId, patientId };
+  if (ptId != null) params.ptId = String(ptId);
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    patientId: string;
+    lines: Array<Record<string, unknown>>;
+  }>('/read/patient-treatment-lines', params);
+}
+
+/** Patient invoice drill-down rows. */
+export async function fetchPatientInvoicesApi(practiceId: string, patientId: string) {
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    patientId: string;
+    invoices: Array<Record<string, unknown>>;
+  }>('/read/patient-invoices', { practiceId, patientId });
+}
+
+/** Economic Pulse practice rollup from v_invoice_contribution. */
+export async function fetchInvoiceContributionSummaryApi(practiceId: string) {
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    summary: Record<string, unknown>;
+  }>('/read/invoice-contribution-summary', { practiceId });
+}
+
 /** Append a new effective-dated private-share rate (never updates existing rows). */
 export async function createPractitionerPrivateShareRate(
   practiceId: string,

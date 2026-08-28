@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
 import { useOrganization } from '@/hooks/useOrganization';
+import { fetchPatientContributionList } from '@/services/integrations/patientEconomicsService';
 import type { PeRetentionStatus, PeRetentionStatusTier } from '@/lib/peRetentionConstants';
 import type { PeRecommendedAction } from '@/lib/peRecommendedAction';
 import { parseRecommendedAction } from '@/lib/peRecommendedAction';
@@ -85,22 +85,75 @@ export type PatientListSummary = {
   averageProjectedLtv: number;
 };
 
-const PAGE_SIZE = 1000;
-const PATIENT_META_CHUNK = 500;
 
 function num(v: unknown): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
 
-function displayName(
-  rawName: string | null | undefined,
-  ptId: number | null,
-): string {
-  const trimmed = String(rawName ?? '').trim();
-  if (trimmed) return trimmed;
-  if (ptId != null) return `Patient #${ptId}`;
-  return 'Unknown patient';
+export function mapPatientContributionRow(raw: Record<string, unknown>): PatientContributionRow {
+  return {
+    patientId: String(raw.patientId),
+    ptId: raw.ptId == null ? null : num(raw.ptId),
+    patientName: String(raw.patientName ?? 'Unknown patient'),
+    patientUuid: raw.patientUuid != null ? String(raw.patientUuid) : null,
+    practiceName: String(raw.practiceName ?? 'This practice'),
+    isActive: raw.isActive === true,
+    hasPaymentPlan: raw.hasPaymentPlan === true,
+    contribution12mo: num(raw.contribution12mo),
+    visits12mo: num(raw.visits12mo),
+    visitFreqPerYear:
+      raw.visitFreqPerYear == null ? null : num(raw.visitFreqPerYear),
+    valuePerVisit: raw.valuePerVisit == null ? null : num(raw.valuePerVisit),
+    invoiceCount: num(raw.invoiceCount),
+    invoicesWithRevenue: num(raw.invoicesWithRevenue),
+    revenuePrivatePlan: num(raw.revenuePrivatePlan),
+    clinicianCost: num(raw.clinicianCost),
+    directCost: num(raw.directCost),
+    contribution: num(raw.contribution),
+    marginPct: raw.marginPct == null ? null : num(raw.marginPct),
+    invoicesComplete: num(raw.invoicesComplete),
+    invoicesPartialNoPractitioner: num(raw.invoicesPartialNoPractitioner),
+    invoicesPartialMissingRate: num(raw.invoicesPartialMissingRate),
+    pctComplete: raw.pctComplete == null ? null : num(raw.pctComplete),
+    contributionProvenanceStatus:
+      raw.contributionProvenanceStatus === 'partial_no_practitioner' ||
+      raw.contributionProvenanceStatus === 'partial_missing_rate'
+        ? raw.contributionProvenanceStatus
+        : 'complete',
+    revenueTier: String(raw.revenueTier || 'Dentally'),
+    clinicianCostTier: String(raw.clinicianCostTier || 'Derived'),
+    contributionTier: String(raw.contributionTier || 'Derived'),
+    confidenceScore: raw.confidenceScore == null ? null : num(raw.confidenceScore),
+    retentionStatus: parseRetentionStatus(raw.retentionStatus),
+    retentionStatusTier: parseRetentionStatusTier(raw.retentionStatusTier),
+    opportunityGross: num(raw.opportunityGross),
+    opportunityGrossTier: String(raw.opportunityGrossTier || 'Derived'),
+    opportunityWeighted: num(raw.opportunityWeighted),
+    opportunityWeightedTier: String(raw.opportunityWeightedTier || 'Modelled'),
+    opportunityWeightedTierNote:
+      raw.opportunityWeightedTierNote != null
+        ? String(raw.opportunityWeightedTierNote)
+        : null,
+    patientEconomicValue: num(raw.patientEconomicValue),
+    patientEconomicValueTier: String(raw.patientEconomicValueTier || 'Modelled'),
+    patientEconomicValueTierNote:
+      raw.patientEconomicValueTierNote != null
+        ? String(raw.patientEconomicValueTierNote)
+        : null,
+    qualityScore: num(raw.qualityScore),
+    recommendedAction: parseRecommendedAction(raw.recommendedAction),
+    recommendedActionTier: String(raw.recommendedActionTier || 'Modelled'),
+    recommendedActionTierNote:
+      raw.recommendedActionTierNote != null
+        ? String(raw.recommendedActionTierNote)
+        : null,
+  };
+}
+
+async function fetchAllPatientRows(practiceId: string): Promise<PatientContributionRow[]> {
+  const { patients } = await fetchPatientContributionList(practiceId);
+  return patients.map((row) => mapPatientContributionRow(row));
 }
 
 function parseRetentionStatus(raw: unknown): PeRetentionStatus {
@@ -117,234 +170,6 @@ export function dataQualityLabel(status: PatientProvenanceStatus): string {
   if (status === 'partial_no_practitioner') return 'No practitioner';
   if (status === 'partial_missing_rate') return 'Missing rate';
   return 'Derived';
-}
-
-function twelveMonthsAgoIsoDate(): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() - 12);
-  return d.toISOString().slice(0, 10);
-}
-
-async function fetchContribution12moByPatient(practiceId: string): Promise<Map<string, number>> {
-  const map = new Map<string, number>();
-  const since = twelveMonthsAgoIsoDate();
-  let offset = 0;
-
-  for (let page = 0; page < 100; page++) {
-    const { data, error } = await (supabase as any)
-      .from('v_invoice_contribution')
-      .select('patient_id, contribution')
-      .eq('practice_id', practiceId)
-      .gte('invoice_date', since)
-      .range(offset, offset + PAGE_SIZE - 1);
-
-    if (error) throw error;
-
-    const batch = data ?? [];
-    for (const row of batch) {
-      if (row.patient_id == null) continue;
-      const pid = String(row.patient_id);
-      map.set(pid, (map.get(pid) ?? 0) + num(row.contribution));
-    }
-
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
-  }
-
-  return map;
-}
-
-async function fetchCompletedVisits12moByPtId(practiceId: string): Promise<Map<number, number>> {
-  const map = new Map<number, number>();
-  const since = twelveMonthsAgoIsoDate();
-  let offset = 0;
-
-  for (let page = 0; page < 100; page++) {
-    const { data, error } = await supabase
-      .from('appointments')
-      .select('apmt_patient_id, apmt_completed_at, apmt_state')
-      .eq('organization_id', practiceId)
-      .gte('apmt_completed_at', `${since}T00:00:00`)
-      .range(offset, offset + PAGE_SIZE - 1);
-
-    if (error) throw error;
-
-    const batch = data ?? [];
-    for (const row of batch) {
-      const ptId = row.apmt_patient_id;
-      if (ptId == null || !Number.isFinite(Number(ptId))) continue;
-      const state = String(row.apmt_state ?? '').toLowerCase().trim();
-      if (state === 'cancelled' || state === 'did not attend' || state === 'dna') continue;
-      if (!row.apmt_completed_at && state !== 'completed') continue;
-      const n = Number(ptId);
-      map.set(n, (map.get(n) ?? 0) + 1);
-    }
-
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
-  }
-
-  return map;
-}
-
-function attachTwelveMonthMetrics(
-  rows: PatientContributionRow[],
-  contribution12mo: Map<string, number>,
-  visitsByPtId: Map<number, number>,
-): PatientContributionRow[] {
-  return rows.map((row) => {
-    const c12 = contribution12mo.get(row.patientId) ?? 0;
-    const visits =
-      row.ptId != null ? (visitsByPtId.get(row.ptId) ?? 0) : 0;
-    const visitFreqPerYear = visits > 0 ? visits : null;
-    const valuePerVisit =
-      visits > 0 && c12 > 0 ? c12 / visits : visits > 0 ? 0 : null;
-
-    return {
-      ...row,
-      contribution12mo: c12,
-      visits12mo: visits,
-      visitFreqPerYear,
-      valuePerVisit,
-    };
-  });
-}
-
-async function enrichPatientMetadata(
-  practiceId: string,
-  rows: PatientContributionRow[],
-): Promise<PatientContributionRow[]> {
-  if (rows.length === 0) return rows;
-
-  const meta = new Map<string, { isActive: boolean; hasPaymentPlan: boolean }>();
-  const ids = rows.map((r) => r.patientId);
-
-  for (let i = 0; i < ids.length; i += PATIENT_META_CHUNK) {
-    const chunk = ids.slice(i, i + PATIENT_META_CHUNK);
-    const { data, error } = await supabase
-      .from('patients')
-      .select('id, is_active, pt_payment_plan_id')
-      .eq('organization_id', practiceId)
-      .in('id', chunk);
-
-    if (error) throw error;
-
-    for (const row of data ?? []) {
-      meta.set(String(row.id), {
-        isActive: row.is_active === true,
-        hasPaymentPlan: row.pt_payment_plan_id != null,
-      });
-    }
-  }
-
-  return rows.map((row) => {
-    const m = meta.get(row.patientId);
-    return {
-      ...row,
-      isActive: m?.isActive ?? false,
-      hasPaymentPlan: m?.hasPaymentPlan ?? false,
-    };
-  });
-}
-
-async function fetchAllPatientRows(
-  practiceId: string,
-  practiceName: string,
-): Promise<PatientContributionRow[]> {
-  const all: PatientContributionRow[] = [];
-  let offset = 0;
-
-  for (let page = 0; page < 50; page++) {
-    const { data, error } = await (supabase as any)
-      .from('v_patient_contribution')
-      .select('*')
-      .eq('practice_id', practiceId)
-      .order('contribution', { ascending: false })
-      .range(offset, offset + PAGE_SIZE - 1);
-
-    if (error) throw error;
-
-    const rows = (data ?? []) as Record<string, unknown>[];
-    for (const row of rows) {
-      const status = String(row.contribution_provenance_status || 'complete');
-      const ptIdRaw = row.pt_id;
-      const ptId =
-        ptIdRaw == null || ptIdRaw === ''
-          ? null
-          : Number.isFinite(Number(ptIdRaw))
-            ? Number(ptIdRaw)
-            : null;
-
-      all.push({
-        patientId: String(row.patient_id),
-        ptId,
-        patientName: displayName(row.patient_name as string, ptId),
-        patientUuid:
-          row.patient_uuid != null && String(row.patient_uuid).length > 0
-            ? String(row.patient_uuid)
-            : null,
-        practiceName,
-        isActive: false,
-        hasPaymentPlan: false,
-        contribution12mo: 0,
-        visits12mo: 0,
-        visitFreqPerYear: null,
-        valuePerVisit: null,
-        invoiceCount: num(row.invoice_count),
-        invoicesWithRevenue: num(row.invoices_with_revenue),
-        revenuePrivatePlan: num(row.revenue_private_plan),
-        clinicianCost: num(row.clinician_cost),
-        directCost: num(row.direct_cost),
-        contribution: num(row.contribution),
-        marginPct: row.margin_pct == null ? null : num(row.margin_pct),
-        invoicesComplete: num(row.invoices_complete),
-        invoicesPartialNoPractitioner: num(row.invoices_partial_no_practitioner),
-        invoicesPartialMissingRate: num(row.invoices_partial_missing_rate),
-        pctComplete: row.pct_complete == null ? null : num(row.pct_complete),
-        contributionProvenanceStatus:
-          status === 'partial_no_practitioner' || status === 'partial_missing_rate'
-            ? status
-            : 'complete',
-        revenueTier: String(row.revenue_tier || 'Dentally'),
-        clinicianCostTier: String(row.clinician_cost_tier || 'Derived'),
-        contributionTier: String(row.contribution_tier || 'Derived'),
-        confidenceScore: row.confidence_score == null ? null : num(row.confidence_score),
-        retentionStatus: parseRetentionStatus(row.retention_status),
-        retentionStatusTier: parseRetentionStatusTier(row.retention_status_tier),
-        opportunityGross: num(row.opportunity_gross),
-        opportunityGrossTier: String(row.opportunity_gross_tier || 'Derived'),
-        opportunityWeighted: num(row.opportunity_weighted),
-        opportunityWeightedTier: String(row.opportunity_weighted_tier || 'Modelled'),
-        opportunityWeightedTierNote:
-          row.opportunity_weighted_tier_note != null
-            ? String(row.opportunity_weighted_tier_note)
-            : null,
-        patientEconomicValue: num(row.patient_economic_value),
-        patientEconomicValueTier: String(row.patient_economic_value_tier || 'Modelled'),
-        patientEconomicValueTierNote:
-          row.patient_economic_value_tier_note != null
-            ? String(row.patient_economic_value_tier_note)
-            : null,
-        qualityScore: num(row.quality_score),
-        recommendedAction: parseRecommendedAction(row.recommended_action),
-        recommendedActionTier: String(row.recommended_action_tier || 'Modelled'),
-        recommendedActionTierNote:
-          row.recommended_action_tier_note != null
-            ? String(row.recommended_action_tier_note)
-            : null,
-      });
-    }
-
-    if (rows.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
-  }
-
-  const withMeta = await enrichPatientMetadata(practiceId, all);
-  const [contribution12mo, visitsByPtId] = await Promise.all([
-    fetchContribution12moByPatient(practiceId),
-    fetchCompletedVisits12moByPtId(practiceId),
-  ]);
-  return attachTwelveMonthMetrics(withMeta, contribution12mo, visitsByPtId);
 }
 
 export function isPrivatePlanPatient(row: PatientContributionRow): boolean {
@@ -624,13 +449,12 @@ export function exportPatientListCsv(rows: PatientContributionRow[]): void {
 }
 
 export function usePatientContributionList() {
-  const { organizationId, organization } = useOrganization();
-  const practiceName = organization?.name?.trim() || 'This practice';
+  const { organizationId } = useOrganization();
 
   return useQuery({
-    queryKey: ['v_patient_contribution', 'list', organizationId, practiceName],
+    queryKey: ['patient-contribution-list', organizationId],
     enabled: !!organizationId,
-    queryFn: () => fetchAllPatientRows(organizationId!, practiceName),
+    queryFn: () => fetchAllPatientRows(organizationId!),
     staleTime: 60 * 1000,
   });
 }
