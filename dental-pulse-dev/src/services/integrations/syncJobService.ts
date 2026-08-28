@@ -137,22 +137,20 @@ export const QUICKBOOKS_ENTITY_ALIASES = new Set([
 
 export const SyncJobService = {
   /**
-   * Get sync job by ID (direct DB query for UI display)
+   * Get sync job by ID via Node backend
    */
   async getSyncJob(jobId: string): Promise<SyncJob | null> {
     try {
-      const { data, error } = await supabase
-        .from('sync_jobs')
-        .select('*')
-        .eq('id', jobId)
-        .single();
-
-      if (error) {
-        console.error('Failed to fetch sync job:', error);
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SYNC_BACKEND_URL}/api/sync/job/${jobId}`, {
+        method: 'GET',
+        headers,
+      });
+      if (!response.ok) {
+        console.error('Failed to fetch sync job:', response.statusText);
         return null;
       }
-
-      return data as SyncJob;
+      return (await response.json()) as SyncJob;
     } catch (error) {
       console.error('Error fetching sync job:', error);
       return null;
@@ -160,23 +158,22 @@ export const SyncJobService = {
   },
 
   /**
-   * Get all active sync jobs for an organization (direct DB query for UI display)
+   * Get all active sync jobs for an organization via Node backend
+   * (queued | running) — used for TopBar / status polling.
    */
   async getActiveSyncJobs(organizationId: string): Promise<SyncJob[]> {
     try {
-      const { data, error } = await supabase
-        .from('sync_jobs')
-        .select('*')
-        .eq('organization_id', organizationId)
-        .in('status', ['queued', 'running'])
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        console.error('Failed to fetch active sync jobs:', error);
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SYNC_BACKEND_URL}/api/sync/active/${organizationId}`, {
+        method: 'GET',
+        headers,
+      });
+      if (!response.ok) {
+        console.error('Failed to fetch active sync jobs:', response.statusText);
         return [];
       }
-
-      return data as SyncJob[];
+      const body = await response.json().catch(() => ({} as { jobs?: SyncJob[] }));
+      return (body.jobs || []) as SyncJob[];
     } catch (error) {
       console.error('Error fetching active sync jobs:', error);
       return [];
@@ -184,23 +181,22 @@ export const SyncJobService = {
   },
 
   /**
-   * Get all sync jobs for an organization (direct DB query for UI display)
+   * Get all sync jobs for an organization via Node backend
    */
   async getSyncJobs(organizationId: string, limit: number = 50): Promise<SyncJob[]> {
     try {
-      const { data, error } = await supabase
-        .from('sync_jobs')
-        .select('*')
-        .eq('organization_id', organizationId)
-        .order('created_at', { ascending: false })
-        .limit(limit);
-
-      if (error) {
-        console.error('Failed to fetch sync jobs:', error);
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SYNC_BACKEND_URL}/api/sync/status/${organizationId}`, {
+        method: 'GET',
+        headers,
+      });
+      if (!response.ok) {
+        console.error('Failed to fetch sync jobs:', response.statusText);
         return [];
       }
-
-      return data as SyncJob[];
+      const body = await response.json().catch(() => ({} as { jobs?: SyncJob[] }));
+      const jobs = (body.jobs || []) as SyncJob[];
+      return jobs.slice(0, limit);
     } catch (error) {
       console.error('Error fetching sync jobs:', error);
       return [];
@@ -208,7 +204,8 @@ export const SyncJobService = {
   },
 
   /**
-   * Update sync job status (direct DB update for UI)
+   * Update sync job status — prefer cancel/trigger APIs; kept for rare UI paths.
+   * @deprecated Prefer backend cancel/trigger endpoints.
    */
   async updateSyncJobStatus(
     jobId: string,
@@ -224,22 +221,10 @@ export const SyncJobService = {
       completed_at?: string;
     }
   ): Promise<boolean> {
-    try {
-      const { error } = await supabase
-        .from('sync_jobs')
-        .update(updates)
-        .eq('id', jobId);
-
-      if (error) {
-        console.error('Failed to update sync job:', error);
-        return false;
-      }
-
-      return true;
-    } catch (error) {
-      console.error('Error updating sync job:', error);
-      return false;
-    }
+    console.warn('[SyncJobService] updateSyncJobStatus is deprecated; use backend cancel/trigger APIs');
+    void jobId;
+    void updates;
+    return false;
   },
 
   /**
@@ -262,17 +247,7 @@ export const SyncJobService = {
       return result.success;
     } catch (error) {
       console.error('Error cancelling sync job:', error);
-      // Fallback: cancel directly in DB
-      try {
-        const { error: dbError } = await supabase
-          .from('sync_jobs')
-          .update({ status: 'cancelled', completed_at: new Date().toISOString() })
-          .eq('id', jobId)
-          .in('status', ['queued', 'running']);
-        return !dbError;
-      } catch {
-        return false;
-      }
+      return false;
     }
   },
 

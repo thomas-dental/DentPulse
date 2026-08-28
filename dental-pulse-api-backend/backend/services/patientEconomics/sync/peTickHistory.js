@@ -10,7 +10,7 @@ const ticks = [];
 
 /**
  * @param {{
- *   kind: 'resume'|'kickoff_incremental'|'kickoff_full',
+ *   kind: 'resume'|'kickoff_incremental'|'kickoff_full'|'modelled_compute',
  *   practicesConsidered?: number,
  *   kicked?: number,
  *   skipped?: number,

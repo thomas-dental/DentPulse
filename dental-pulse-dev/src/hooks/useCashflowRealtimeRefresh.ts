@@ -1,30 +1,26 @@
 /**
  * useCashflowRealtimeRefresh
  *
- * Live-refreshes the 13-week cash flow forecast when fresh actuals land.
- *
- * Incoming Xero / Dentally / Denplan actuals are written to Supabase by the Node
- * sync backend, which records every run in `sync_jobs`. When a job flips to
- * `completed`, the new actuals are in the DB — so we invalidate every cashflow
- * query. The forecast table, the Variance view and the graph all read the SAME
- * `useCashflowForecast` queries, so a single invalidation re-renders all three
- * with the updated numbers (and the variance £/% recompute automatically).
- *
- * Uses its own uniquely-named Realtime channel (so it never collides with the
- * global `sync_jobs_changes` channel in useSyncStatus). React Query's staleTime +
- * refetch-on-focus remain the fallback if a realtime event is ever dropped.
+ * Live-refreshes the 13-week cash flow forecast when sync finishes.
+ * Polls backend active sync status; when jobs go from active → idle, invalidates
+ * cashflow queries so new actuals are picked up (no direct Supabase sync_jobs).
  */
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
 import { useOrganization } from './useOrganization';
+import { SyncJobService } from '@/services/integrations/syncJobService';
+
+const POLL_MS = 5000;
 
 export function useCashflowRealtimeRefresh() {
   const queryClient = useQueryClient();
   const { organizationId } = useOrganization();
+  const wasActiveRef = useRef(false);
 
   useEffect(() => {
     if (!organizationId) return;
+
+    let cancelled = false;
 
     const refresh = () =>
       queryClient.invalidateQueries({
@@ -34,26 +30,25 @@ export function useCashflowRealtimeRefresh() {
         },
       });
 
-    const channel = supabase
-      .channel(`cashflow-actuals-refresh-${organizationId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'sync_jobs',
-          filter: `organization_id=eq.${organizationId}`,
-        },
-        (payload) => {
-          // A sync finishing means new Xero/Dentally/Denplan actuals just landed.
-          const status = (payload.new as { status?: string } | null)?.status;
-          if (status === 'completed') refresh();
-        },
-      )
-      .subscribe();
+    const tick = async () => {
+      try {
+        const jobs = await SyncJobService.getActiveSyncJobs(organizationId);
+        if (cancelled) return;
+        const active = jobs.length > 0;
+        if (wasActiveRef.current && !active) {
+          refresh();
+        }
+        wasActiveRef.current = active;
+      } catch (err) {
+        console.warn('[useCashflowRealtimeRefresh] active sync poll failed:', err);
+      }
+    };
 
+    tick();
+    const interval = setInterval(tick, POLL_MS);
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      clearInterval(interval);
     };
   }, [organizationId, queryClient]);
 }

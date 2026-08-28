@@ -23,16 +23,20 @@ const {
   runFullKickoffTick,
 } = require('./peScheduleKickoff');
 const { recordTick } = require('./peTickHistory');
+const { runModelledComputeTick } = require('../computePatientModelledScores');
 
 const RESUME_SCHEDULE = process.env.PE_SYNC_CRON_SCHEDULE || '*/2 * * * *';
 const INCREMENTAL_SCHEDULE =
   process.env.PE_SYNC_INCREMENTAL_SCHEDULE || '*/15 * * * *';
 const FULL_SCHEDULE = process.env.PE_SYNC_FULL_SCHEDULE || '0 2 * * *';
+const MODELLED_SCHEDULE =
+  process.env.PE_MODELLED_COMPUTE_SCHEDULE || '30 3 * * *';
 const MAX_CHUNKS_PER_TICK = Number(process.env.PE_SYNC_CRON_MAX_CHUNKS_PER_TICK || 10);
 const STALE_MS = Number(process.env.PE_SYNC_IN_PROGRESS_STALE_MS || 120_000);
 
 let resumeInFlight = false;
 let kickoffInFlight = false;
+let modelledInFlight = false;
 let started = false;
 
 async function processOneCursor(row) {
@@ -175,6 +179,7 @@ function startPeSyncCron() {
     ['PE_SYNC_CRON_SCHEDULE', RESUME_SCHEDULE],
     ['PE_SYNC_INCREMENTAL_SCHEDULE', INCREMENTAL_SCHEDULE],
     ['PE_SYNC_FULL_SCHEDULE', FULL_SCHEDULE],
+    ['PE_MODELLED_COMPUTE_SCHEDULE', MODELLED_SCHEDULE],
   ]) {
     if (!cron.validate(schedule)) {
       throw new Error(`Invalid ${name}: ${schedule}`);
@@ -199,10 +204,31 @@ function startPeSyncCron() {
     });
   });
 
+  cron.schedule(MODELLED_SCHEDULE, () => {
+    if (modelledInFlight) {
+      console.log('[PE sync cron] Modelled compute skipped — in flight');
+      return;
+    }
+    modelledInFlight = true;
+    runModelledComputeTick()
+      .then((out) => {
+        console.log(
+          `[PE sync cron] Modelled compute done — processed=${out.processed} ` +
+            `considered=${out.practicesConsidered}`,
+        );
+      })
+      .catch((err) => {
+        console.error('[PE sync cron] Modelled compute failed:', err.message);
+      })
+      .finally(() => {
+        modelledInFlight = false;
+      });
+  });
+
   started = true;
   console.log(
     `[PE sync cron] Resume "${RESUME_SCHEDULE}" | Incremental "${INCREMENTAL_SCHEDULE}" | ` +
-      `Full "${FULL_SCHEDULE}" — resources: ${SCHEDULED_RESOURCE_TYPES.join(', ')}`
+      `Full "${FULL_SCHEDULE}" | Modelled "${MODELLED_SCHEDULE}" — resources: ${SCHEDULED_RESOURCE_TYPES.join(', ')}`
   );
 }
 
@@ -213,4 +239,5 @@ module.exports = {
   processOneCursor,
   runIncrementalKickoffTick,
   runFullKickoffTick,
+  runModelledComputeTick,
 };

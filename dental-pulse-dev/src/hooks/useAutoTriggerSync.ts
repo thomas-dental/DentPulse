@@ -55,13 +55,9 @@ export function useAutoTriggerSync() {
         // If there are truly zero jobs AND integration has api_key, this is likely a fresh account
         // where onboarding failed to create jobs
         if (!hasResumedRef.current) {
-          const { data: existingJobs } = await supabase
-            .from('sync_jobs')
-            .select('id')
-            .eq('organization_id', organizationId)
-            .limit(1);
+          const existingJobs = await SyncJobService.getSyncJobs(organizationId, 1);
 
-          if (existingJobs && existingJobs.length > 0) {
+          if (existingJobs.length > 0) {
             // Jobs exist (completed/failed/etc.) — don't auto-trigger
             console.log('[AutoTriggerSync] Existing jobs found, skipping auto-trigger');
             hasResumedRef.current = true;

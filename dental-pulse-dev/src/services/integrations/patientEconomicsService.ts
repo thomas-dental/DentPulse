@@ -312,6 +312,71 @@ export async function listPractitionerPrivateShareRates(
   };
 }
 
+export type JourneyStageKey =
+  | 'planned'
+  | 'scheduled'
+  | 'started'
+  | 'completed'
+  | 'charged'
+  | 'collected';
+
+export type JourneyEventType =
+  | 'PLAN_CREATED'
+  | 'APPOINTMENT_LINKED'
+  | 'TREATMENT_STARTED'
+  | 'PLAN_COMPLETED'
+  | 'INVOICE_RAISED'
+  | 'PAYMENT_ALLOCATED';
+
+export type TreatmentEconomicJourneyStage = {
+  key: JourneyStageKey;
+  label: string;
+  eventType: JourneyEventType;
+  eventCount: number;
+  valueGbp: number;
+};
+
+export type TreatmentEconomicJourneyResponse = {
+  stages: TreatmentEconomicJourneyStage[];
+  totalEvents: number;
+  plannedEventCount: number;
+  isBackfilling: boolean;
+};
+
+/** Aggregated Treatment Economic Journey™ from backend (event_ledger rollup). */
+export async function fetchTreatmentEconomicJourney(
+  practiceId: string,
+): Promise<TreatmentEconomicJourneyResponse> {
+  const headers = await getAuthHeaders();
+  const params = new URLSearchParams({ practiceId });
+  const res = await fetch(
+    `${getBackendUrl()}/api/economics-engine/journey/treatment-economic?${params}`,
+    { method: 'GET', headers },
+  );
+  const body = await res.json().catch(
+    () =>
+      ({} as {
+        success?: boolean;
+        error?: string;
+        stages?: TreatmentEconomicJourneyStage[];
+        totalEvents?: number;
+        plannedEventCount?: number;
+        isBackfilling?: boolean;
+      }),
+  );
+
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Failed to load treatment economic journey (${res.status})`);
+  }
+
+  return {
+    stages: body.stages || [],
+    totalEvents: body.totalEvents ?? 0,
+    plannedEventCount: body.plannedEventCount ?? 0,
+    isBackfilling: body.isBackfilling === true,
+  };
+}
+
 /** Append a new effective-dated private-share rate (never updates existing rows). */
 export async function createPractitionerPrivateShareRate(
   practiceId: string,

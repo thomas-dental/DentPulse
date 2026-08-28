@@ -32,6 +32,12 @@ const {
   listPractitionerRates,
   insertPractitionerRate,
 } = require('../services/patientEconomics/practitionerPrivateShareRates');
+const {
+  getTreatmentEconomicJourney,
+} = require('../services/patientEconomics/treatmentEconomicJourney');
+const {
+  runModelledComputeTick,
+} = require('../services/patientEconomics/computePatientModelledScores');
 
 const router = express.Router();
 
@@ -739,6 +745,56 @@ router.post('/sync/kickoff-full', async (req, res, next) => {
 });
 
 /**
+ * POST /api/economics-engine/modelled/compute
+ * Body: { practiceId } (optional for x-service-key → all candidate practices)
+ * Runs Modelled-tier CLTV projection + Quality Score materialization.
+ */
+async function handleModelledComputeRoute(req, res) {
+  try {
+    const serviceAuth = isServiceKeyAuth(req);
+    if (!serviceAuth && !req.user?.id) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const practiceId = req.body?.practiceId || req.query?.practiceId || null;
+
+    if (practiceId) {
+      if (!isUuid(practiceId)) {
+        return res.status(400).json({ success: false, error: 'practiceId must be a UUID' });
+      }
+      if (!serviceAuth) {
+        const access = await verifyPracticeAccess(req.user.id, practiceId);
+        if (!access.ok) {
+          return res.status(access.status).json({ success: false, error: access.error });
+        }
+      }
+      const result = await runModelledComputeTick({ practiceId });
+      return res.json({ success: true, ...result });
+    }
+
+    if (!serviceAuth) {
+      return res.status(400).json({
+        success: false,
+        error: 'practiceId (UUID) is required',
+      });
+    }
+
+    const result = await runModelledComputeTick();
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[EconomicsEngine] POST /modelled/compute error:', err.message);
+    return res.status(500).json({ success: false, error: 'Modelled compute failed' });
+  }
+}
+
+router.post('/modelled/compute', async (req, res) => {
+  if (isServiceKeyAuth(req)) {
+    return handleModelledComputeRoute(req, res);
+  }
+  return syncAuthMiddleware(req, res, () => handleModelledComputeRoute(req, res));
+});
+
+/**
  * GET /api/economics-engine/assumptions/practitioner-rates?practiceId=
  * Lists practitioners with current effective private-share rate or explicit not-configured state.
  */
@@ -818,6 +874,30 @@ router.post('/assumptions/practitioner-rates', syncAuthMiddleware, async (req, r
     }
     console.error('[EconomicsEngine] POST /assumptions/practitioner-rates error:', err.message);
     return res.status(500).json({ success: false, error: 'Failed to save practitioner rate' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/journey/treatment-economic?practiceId=
+ * Aggregated Treatment Economic Journey™ stages from event_ledger (server-side).
+ */
+router.get('/journey/treatment-economic', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const journey = await getTreatmentEconomicJourney(practiceId);
+    return res.json({ success: true, practiceId, ...journey });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /journey/treatment-economic error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load treatment economic journey' });
   }
 });
 

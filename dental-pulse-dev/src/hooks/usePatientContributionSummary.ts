@@ -36,6 +36,11 @@ export type InvoiceContributionSummary = {
   hasMissingPractitioner: boolean;
   hasMissingRate: boolean;
   hasPartialData: boolean;
+  /** Step 1a tier tags for UI chips (from view / derived flags). */
+  revenueTier: 'Dentally';
+  contributionTier: 'Derived';
+  clinicianCostTier: 'Derived' | 'External';
+  dominantProvenanceStatus: 'complete' | 'partial_no_practitioner' | 'partial_missing_rate';
 };
 
 /** @deprecated Prefer InvoiceContributionSummary */
@@ -388,6 +393,11 @@ async function fetchInvoiceContributionSummary(
 
   const hasMissingPractitioner = invoicesMissingPractitioner > 0;
   const hasMissingRate = invoicesMissingRate > 0;
+  const dominantProvenanceStatus = hasMissingPractitioner
+    ? ('partial_no_practitioner' as const)
+    : hasMissingRate
+      ? ('partial_missing_rate' as const)
+      : ('complete' as const);
 
   return {
     invoiceCount,
@@ -407,6 +417,10 @@ async function fetchInvoiceContributionSummary(
     hasMissingPractitioner,
     hasMissingRate,
     hasPartialData: hasMissingPractitioner || hasMissingRate,
+    revenueTier: 'Dentally',
+    contributionTier: 'Derived',
+    clinicianCostTier: dominantProvenanceStatus === 'complete' ? 'Derived' : 'External',
+    dominantProvenanceStatus,
     ...uda,
   };
 }

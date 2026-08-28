@@ -18,11 +18,46 @@ import {
   type JourneyStage,
   type TreatmentEconomicJourney,
 } from '@/hooks/useTreatmentEconomicJourney';
+import {
+  useSortedPracticeContributionRollup,
+  type PracticeSortKey,
+} from '@/hooks/usePracticeContributionRollup';
 import { cn } from '@/lib/utils';
 import { PatientEconomicsSettingsTab } from '@/pages/patient-economics/PatientEconomicsSettingsTab';
+import { PatientListDirectory } from '@/pages/patient-economics/PatientListDirectory';
+import { PatientFinancialRecords } from '@/pages/patient-economics/PatientFinancialRecords';
 
-type ProvenanceKind = 'derived' | 'pending' | 'partial' | 'dentally';
+type ProvenanceKind =
+  | 'dentally'
+  | 'derived'
+  | 'modelled'
+  | 'external'
+  | 'pending'
+  | 'partial_no_practitioner'
+  | 'partial_missing_rate'
+  /** @deprecated Prefer partial_no_practitioner / partial_missing_rate */
+  | 'partial';
 type HeroTone = 'default' | 'opp' | 'risk' | 'conv' | 'qual';
+
+function tierToChip(
+  tier: string | null | undefined,
+): Extract<ProvenanceKind, 'dentally' | 'derived' | 'modelled' | 'external'> {
+  const t = String(tier || '').toLowerCase();
+  if (t === 'dentally') return 'dentally';
+  if (t === 'modelled') return 'modelled';
+  if (t === 'external') return 'external';
+  return 'derived';
+}
+
+function contributionStatusChip(
+  status: InvoiceContributionSummary['dominantProvenanceStatus'] | undefined,
+  hasPartial: boolean | undefined,
+): ProvenanceKind {
+  if (status === 'partial_no_practitioner') return 'partial_no_practitioner';
+  if (status === 'partial_missing_rate') return 'partial_missing_rate';
+  if (hasPartial) return 'partial_missing_rate';
+  return 'derived';
+}
 
 const PE_TABS: { key: string | null; label: string; to: string }[] = [
   { key: null, label: 'Economic Pulse', to: '/patients' },
@@ -40,8 +75,6 @@ const PENDING_TABS: Record<string, { title: string }> = {
   'growth-levers': { title: 'Growth Levers' },
   'value-leakage': { title: 'Value & Leakage' },
   retention: { title: 'Retention & Reactivation' },
-  'patient-list': { title: 'Patient List' },
-  'patient-records': { title: 'Patient Records' },
   invoices: { title: 'Invoices' },
   'goal-settings': { title: 'Goal Settings' },
 };
@@ -230,9 +263,12 @@ function RevenueMixCard({
             based, so it is tracked separately, never blended in.
           </p>
         </div>
-        <span className="inline-flex shrink-0 items-center rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
-          {badgeLabel}
-        </span>
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+          <ProvenanceChip kind="dentally" />
+          <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
+            {badgeLabel}
+          </span>
+        </div>
       </div>
 
       <div className="mt-3.5 flex h-[26px] overflow-hidden rounded-[7px] text-[11px] font-bold text-white">
@@ -332,11 +368,19 @@ function ProvenanceChip({ kind }: { kind: ProvenanceKind }) {
       </span>
     );
   }
-  if (kind === 'partial') {
+  if (kind === 'partial_no_practitioner') {
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:text-amber-200">
         <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-        Partial data
+        No practitioner
+      </span>
+    );
+  }
+  if (kind === 'partial_missing_rate' || kind === 'partial') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:text-amber-200">
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+        {kind === 'partial' ? 'Partial data' : 'Missing rate'}
       </span>
     );
   }
@@ -345,6 +389,22 @@ function ProvenanceChip({ kind }: { kind: ProvenanceKind }) {
       <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[11px] font-semibold text-sky-800 dark:text-sky-200">
         <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
         Dentally
+      </span>
+    );
+  }
+  if (kind === 'modelled') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-900 dark:text-amber-100">
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-600" />
+        Modelled
+      </span>
+    );
+  }
+  if (kind === 'external') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[11px] font-semibold text-violet-800 dark:text-violet-200">
+        <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
+        External
       </span>
     );
   }
@@ -407,8 +467,9 @@ function PartialDataBanner({
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="font-semibold text-foreground">Contribution uses partial data</div>
-          <ProvenanceChip kind="partial" />
+          <div className="font-semibold text-foreground">Contribution uses incomplete attribution</div>
+          {summary.hasMissingPractitioner && <ProvenanceChip kind="partial_no_practitioner" />}
+          {summary.hasMissingRate && <ProvenanceChip kind="partial_missing_rate" />}
         </div>
         <ul className="mt-2 list-disc space-y-1.5 pl-4 text-[13px] text-muted-foreground">
           {gaps}
@@ -814,7 +875,7 @@ function TreatmentEconomicJourneyCard({
           <div className="flex-1">
             <div className="font-semibold">Couldn’t load journey ledger</div>
             <div className="mt-0.5 text-danger-strong/80">
-              {errorMessage || 'event_ledger query failed.'}
+              {errorMessage || 'Journey API request failed.'}
             </div>
           </div>
           <Button variant="outline" size="sm" onClick={onRetry} disabled={isFetching}>
@@ -860,20 +921,27 @@ function ContributionVsRevenueCard({
   revenue,
   contribution,
   showEmpty,
+  contributionTier,
 }: {
   isLoading: boolean;
   isError: boolean;
   revenue: number;
   contribution: number;
   showEmpty: boolean;
+  contributionTier?: string;
 }) {
   const marginPct =
     revenue > 0 ? Math.round((contribution / revenue) * 1000) / 10 : null;
 
   return (
     <div className="rounded-[14px] border border-border bg-card px-5 py-[18px] shadow-sm">
-      <h3 className="text-[15px] font-bold text-foreground">Contribution vs Revenue</h3>
-      <p className="mt-0.5 text-[12.5px] text-muted-foreground">Why economics beats “spend”</p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-[15px] font-bold text-foreground">Contribution vs Revenue</h3>
+          <p className="mt-0.5 text-[12.5px] text-muted-foreground">Why economics beats “spend”</p>
+        </div>
+        <ProvenanceChip kind={tierToChip(contributionTier)} />
+      </div>
 
       {isLoading && (
         <div className="mt-2.5 space-y-2">
@@ -945,22 +1013,26 @@ function WhereTheValueSits() {
           revenue={contribQuery.data?.totalRevenue ?? 0}
           contribution={contribQuery.data?.totalContribution ?? 0}
           showEmpty={!hasSyncedFinancials}
+          contributionTier={contribQuery.data?.contributionTier}
         />
       </div>
     </>
   );
 }
 
-function PracticeComparisonPending() {
-  const columns = [
-    'Practice',
-    'Active',
-    'Econ. Value',
-    'Contribution 12mo',
-    'Opportunity (wtd)',
-    'At Risk',
-    'Commit. Rate',
-    'Status',
+function PerPracticeEconomicsTable() {
+  const { rows, isLoading, isError, error, refetch, isFetching, sortKey, sortDir, toggleSort } =
+    useSortedPracticeContributionRollup();
+
+  const columns: { key: PracticeSortKey; label: string; align?: 'left' | 'right' }[] = [
+    { key: 'practiceName', label: 'Practice', align: 'left' },
+    { key: 'patientsWithRevenue', label: 'Patients', align: 'right' },
+    { key: 'revenuePrivatePlan', label: 'Revenue', align: 'right' },
+    { key: 'clinicianCost', label: 'Clinician cost', align: 'right' },
+    { key: 'directCost', label: 'Direct cost', align: 'right' },
+    { key: 'contribution', label: 'Contribution', align: 'right' },
+    { key: 'marginPct', label: 'Margin %', align: 'right' },
+    { key: 'pctComplete', label: 'Data quality', align: 'right' },
   ];
 
   return (
@@ -971,42 +1043,123 @@ function PracticeComparisonPending() {
           <div>
             <h3 className="text-[15px] font-bold text-foreground">Per-Practice Economics</h3>
             <p className="mt-0.5 text-[12.5px] text-muted-foreground">
-              Ranked by patient economic value
+              Ranked by contribution · data quality from invoice attribution
             </p>
           </div>
-          <span className="inline-flex shrink-0 items-center rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
-            Multi-practice view
-          </span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <ProvenanceChip kind="derived" />
+            <span className="inline-flex shrink-0 items-center rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
+              Multi-practice view
+            </span>
+          </div>
         </div>
+
+        {isError && (
+          <div className="m-5 flex flex-wrap items-start gap-3 rounded-[10px] border border-danger/30 bg-danger-muted px-3 py-2.5 text-sm text-danger-strong">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="flex-1">
+              <div className="font-semibold">Couldn’t load per-practice rollup</div>
+              <div className="mt-0.5 text-danger-strong/80">
+                {(error as Error)?.message || 'v_practice_contribution query failed.'}
+              </div>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+              Retry
+            </Button>
+          </div>
+        )}
+
         <div className="overflow-x-auto px-5 pb-5">
-          <table className="w-full min-w-[720px] border-collapse text-[13px]">
+          <table className="w-full min-w-[880px] border-collapse text-[13px]">
             <thead>
               <tr className="border-b border-border text-left text-[12px] font-semibold text-muted-foreground">
-                {columns.map((col, i) => (
+                {columns.map((col) => (
                   <th
-                    key={col}
-                    className={cn('whitespace-nowrap px-3.5 py-2.5', i > 0 && 'text-right')}
+                    key={col.key}
+                    className={cn(
+                      'whitespace-nowrap px-3.5 py-2.5',
+                      col.align === 'right' && 'text-right',
+                    )}
                   >
-                    {col}
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 hover:text-foreground"
+                      onClick={() => toggleSort(col.key)}
+                    >
+                      {col.label}
+                      {sortKey === col.key && (
+                        <span className="text-[10px]">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                      )}
+                    </button>
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td
-                  colSpan={columns.length}
-                  className="px-3.5 py-10 text-center text-[13px] text-muted-foreground"
-                >
-                  <div className="font-semibold">Calculating</div>
-                  <div className="mt-1 text-[12px]">
-                    Per-practice ranking lands with opportunity and commitment engines
-                  </div>
-                  <div className="mt-3 flex justify-center">
-                    <ProvenanceChip kind="pending" />
-                  </div>
-                </td>
-              </tr>
+              {isLoading &&
+                Array.from({ length: 4 }).map((_, i) => (
+                  <tr key={i} className="border-b border-border/60">
+                    {columns.map((col) => (
+                      <td key={col.key} className="px-3.5 py-3">
+                        <Skeleton className="h-4 w-full" />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+
+              {!isLoading && !isError && rows.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={columns.length}
+                    className="px-3.5 py-10 text-center text-[13px] text-muted-foreground"
+                  >
+                    <div className="font-semibold">No practices in scope</div>
+                    <div className="mt-1 text-[12px]">
+                      Join an organization (user_roles) to see per-practice economics.
+                    </div>
+                  </td>
+                </tr>
+              )}
+
+              {!isLoading &&
+                !isError &&
+                rows.map((row) => (
+                  <tr key={row.practiceId} className="border-b border-border/60 last:border-b-0">
+                    <td className="px-3.5 py-3 font-semibold text-foreground">{row.practiceName}</td>
+                    <td className="px-3.5 py-3 text-right tabular-nums">
+                      {row.patientsWithRevenue.toLocaleString('en-GB')}
+                    </td>
+                    <td className="px-3.5 py-3 text-right tabular-nums">
+                      {formatGbpCompact(row.revenuePrivatePlan)}
+                    </td>
+                    <td className="px-3.5 py-3 text-right tabular-nums">
+                      {formatGbpCompact(row.clinicianCost)}
+                    </td>
+                    <td className="px-3.5 py-3 text-right tabular-nums">
+                      {formatGbpCompact(row.directCost)}
+                    </td>
+                    <td className="px-3.5 py-3 text-right font-semibold tabular-nums text-foreground">
+                      {formatGbpCompact(row.contribution)}
+                    </td>
+                    <td className="px-3.5 py-3 text-right tabular-nums">
+                      {row.marginPct == null ? '—' : `${row.marginPct}%`}
+                    </td>
+                    <td className="px-3.5 py-3 text-right">
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        {row.contributionProvenanceStatus === 'complete' ? (
+                          <ProvenanceChip kind={tierToChip(row.contributionTier)} />
+                        ) : (
+                          <ProvenanceChip kind={row.contributionProvenanceStatus} />
+                        )}
+                        {row.pctComplete != null && (
+                          <span className="text-[11px] text-muted-foreground">
+                            {row.pctComplete}% complete
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>
@@ -1020,7 +1173,7 @@ function EconomicPulseBelowFold() {
     <>
       <OpportunityActionsPending />
       <WhereTheValueSits />
-      <PracticeComparisonPending />
+      <PerPracticeEconomicsTable />
     </>
   );
 }
@@ -1114,7 +1267,12 @@ function EconomicPulseHeroes() {
                 NHS/UDA excluded &nbsp;
                 <ProvenanceChip
                   kind={
-                    hasSyncedFinancials && data?.hasPartialData ? 'partial' : 'derived'
+                    hasSyncedFinancials
+                      ? contributionStatusChip(
+                          data?.dominantProvenanceStatus,
+                          data?.hasPartialData,
+                        )
+                      : 'pending'
                   }
                 />
               </>
@@ -1215,13 +1373,25 @@ export default function EconomicPulse() {
   const [searchParams] = useSearchParams();
   const tab = searchParams.get('tab')?.trim().toLowerCase() ?? null;
   const isSettingsTab = tab === 'settings';
-  const pending = tab && !isSettingsTab ? PENDING_TABS[tab] : null;
+  const isPatientListTab = tab === 'patient-list';
+  const isPatientRecordsTab = tab === 'patient-records';
+  const patientId = searchParams.get('patientId')?.trim() ?? null;
+  const pending =
+    tab && !isSettingsTab && !isPatientListTab && !isPatientRecordsTab
+      ? PENDING_TABS[tab]
+      : null;
   const activeTab = tab && (PE_TAB_KEYS.has(tab) || tab === 'settings') ? tab : null;
   const pageTitle = isSettingsTab
     ? 'Settings · Patients · DentPulse'
-    : pending
-      ? `${pending.title} · Patients · DentPulse`
-      : 'Economic Pulse · Patients · DentPulse';
+    : isPatientListTab
+      ? 'Patient List · Patients · DentPulse'
+      : isPatientRecordsTab
+        ? patientId
+          ? 'Patient Financial Record · Patients · DentPulse'
+          : 'Patient Records · Patients · DentPulse'
+        : pending
+          ? `${pending.title} · Patients · DentPulse`
+          : 'Economic Pulse · Patients · DentPulse';
 
   return (
     <MainLayout contentClassName="px-7 pb-[60px] pt-[5.5rem]">
@@ -1234,6 +1404,10 @@ export default function EconomicPulse() {
         <div className="space-y-4">
           {isSettingsTab ? (
             <PatientEconomicsSettingsTab />
+          ) : isPatientListTab ? (
+            <PatientListDirectory />
+          ) : isPatientRecordsTab ? (
+            <PatientFinancialRecords />
           ) : pending ? (
             <PendingTabPanel title={pending.title} />
           ) : (
