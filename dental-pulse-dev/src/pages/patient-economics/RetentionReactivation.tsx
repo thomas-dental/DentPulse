@@ -160,6 +160,19 @@ export function RetentionReactivation() {
   ).length;
 
   const reactivationPractices = recoveryGroup?.practices ?? [];
+  const reactivationChartPractices =
+    reactivationPractices.length > 0
+      ? reactivationPractices
+      : recoveryPractice && recoveryPractice.reactivationValueGbp > 0
+        ? [
+            {
+              practiceId: recoveryPractice.practiceId,
+              practiceName: recoveryPractice.practiceName,
+              reactivationValueGbp: recoveryPractice.reactivationValueGbp,
+              openFlagCount: recoveryPractice.openFlagCount,
+            },
+          ]
+        : [];
 
   const isPageLoading = isLoading || recoveryQuery.isLoading;
 
@@ -237,8 +250,8 @@ export function RetentionReactivation() {
                 <Skeleton className="h-[180px] w-full" />
               ) : recoveryQuery.isError ? (
                 <p className="py-6 text-sm text-danger-strong">Could not load reactivation value.</p>
-              ) : multiPractice && reactivationPractices.length > 0 ? (
-                <ReactivationValueByPracticeChart practices={reactivationPractices} />
+              ) : reactivationChartPractices.length > 0 ? (
+                <ReactivationValueByPracticeChart practices={reactivationChartPractices} />
               ) : recoveryPractice && recoveryPractice.openFlagCount > 0 ? (
                 <p className="py-4 text-center text-sm text-muted-foreground">
                   {recoveryPractice.openFlagCount} open flag(s) ·{' '}
@@ -278,13 +291,19 @@ export function RetentionReactivation() {
             </div>
             <div className="flex gap-6">
               <div className="text-right">
-                <div className="text-[11px] text-muted-foreground">Recovered this quarter</div>
+                <div className="text-[11px] text-muted-foreground">
+                  Recovered this quarter
+                  <span className="block text-[10px] font-normal">contribution booked</span>
+                </div>
                 <div className="text-[22px] font-extrabold tracking-tight text-success">
                   {formatGbp(recoveryRollup.recoveredThisQuarterGbp)}
                 </div>
               </div>
               <div className="text-right">
-                <div className="text-[11px] text-muted-foreground">In progress</div>
+                <div className="text-[11px] text-muted-foreground">
+                  In progress
+                  <span className="block text-[10px] font-normal">open flags at risk</span>
+                </div>
                 <div className="text-[22px] font-extrabold tracking-tight text-primary">
                   {formatGbp(recoveryRollup.inProgressGbp)}
                 </div>
@@ -294,13 +313,31 @@ export function RetentionReactivation() {
           <div className="px-5 py-4">
             <RecoveryLoopFunnelChart funnel={recoveryRollup.recoveryFunnel} />
             <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
-              Stage-to-stage conversion is measured, not assumed. Last quarter the group banked{' '}
-              <strong className="font-bold text-foreground">
-                {recoveryRollup.recoveryFunnel.bankedPct != null
-                  ? `${Math.round(recoveryRollup.recoveryFunnel.bankedPct * 100)}%`
-                  : '—'}
-              </strong>{' '}
-              of flagged at-risk contribution.
+              Funnel £ follows worklist workflow status (new → contacted → booked). The{' '}
+              <strong className="font-semibold text-foreground">At-risk recovered</strong> bar is
+              contribution at risk on closed flags — not the same as{' '}
+              <strong className="font-semibold text-foreground">Recovered this quarter</strong>{' '}
+              (invoice contribution in the last 90 days).
+              {recoveryRollup.recoveryFunnel.bankedPct != null && (
+                <>
+                  {' '}
+                  Cohort recovery rate:{' '}
+                  <strong className="font-bold text-foreground">
+                    {Math.round(recoveryRollup.recoveryFunnel.bankedPct * 100)}%
+                  </strong>{' '}
+                  of flagged at-risk £.
+                </>
+              )}
+              {recoveryRollup.recoveryFunnel.recoveredValueGbp > 0 && (
+                <>
+                  {' '}
+                  Lifetime contribution on recovered flags:{' '}
+                  <strong className="font-semibold text-foreground">
+                    {formatGbp(recoveryRollup.recoveryFunnel.recoveredValueGbp)}
+                  </strong>
+                  .
+                </>
+              )}
             </p>
           </div>
         </div>

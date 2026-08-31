@@ -1,6 +1,5 @@
 /**
- * Goal progress = actual ÷ goal (bar fill and on-track), using live input goals.
- * e.g. actual 49%, goal 70% → bar width 49/70 × 100 ≈ 70%.
+ * Goal progress = actual ÷ goal for higher-is-better metrics; ceiling ÷ actual for attrition.
  */
 
 export type PeGoalProgressFormat = 'pct' | 'gbp' | 'pctCeiling';
@@ -37,8 +36,14 @@ export function computeGoalProgressRatio(
   const goal = resolveGoalValue(goalInput, format, savedTarget);
   if (goal == null || goal <= 0) return null;
 
-  // Same rule for all metrics: actual ÷ goal (e.g. 49% actual, 70% goal → 0.7).
-  // Attrition ceiling: 6% actual, 1% ceiling → 6.0 (bar capped at 100% when above ceiling).
+  if (format === 'pctCeiling') {
+    // Attrition ceiling — lower actual is better: progress = ceiling ÷ actual.
+    // e.g. 1% ceiling, 6% actual → 0.17 (~17% bar); 1% ceiling, 0.5% actual → 2 (cap 100%).
+    if (actual <= 0) return 1;
+    return goal / actual;
+  }
+
+  // Higher-is-better metrics: actual ÷ goal (e.g. 49% actual, 70% goal → 0.7).
   return actual / goal;
 }
 
@@ -75,8 +80,11 @@ export function formatGoalProgressFooter(
 ): string | null {
   const ratio = computeGoalProgressRatio(actual, goalInput, format, savedTarget);
   if (ratio == null) return null;
+  if (format === 'pctCeiling') {
+    if (ratio >= 1) return 'Within ceiling';
+    return `${Math.round(ratio * 100)}% of ceiling headroom`;
+  }
   const pct = Math.round(ratio * 100);
-  if (format === 'pctCeiling') return null;
   return `${pct}% to ${format === 'gbp' ? 'target' : 'plan'}`;
 }
 

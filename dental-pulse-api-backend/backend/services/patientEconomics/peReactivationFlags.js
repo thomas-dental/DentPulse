@@ -16,6 +16,12 @@
 const { supabaseAdmin } = require('../../config/supabase');
 const { loadPeEconomicAssumptions } = require('./peEconomicAssumptions');
 const { parseRetentionStatus } = require('./peRetentionSegmentation');
+const {
+  annualizeTrailingContribution,
+  buildRecoveryFunnel,
+  pickLatestCompletedVisit,
+  resolveWorklistDaysOverdue,
+} = require('./peReactivationWorklistLogic');
 
 const PAGE_SIZE = 1000;
 const AT_RISK_STATUSES = new Set(['drifting', 'lapsed', 'effectively_lost']);
@@ -44,72 +50,12 @@ function daysSinceFlagged(flaggedAt) {
   return Math.max(0, Math.floor(ms / (1000 * 60 * 60 * 24)));
 }
 
-function recallOverdueDays(dentistRecall, hygienistRecall) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  let maxOverdue = 0;
-  for (const raw of [dentistRecall, hygienistRecall]) {
-    if (!raw) continue;
-    const d = new Date(raw);
-    if (Number.isNaN(d.getTime())) continue;
-    d.setHours(0, 0, 0, 0);
-    if (d < today) {
-      const overdue = Math.floor((today - d) / (1000 * 60 * 60 * 24));
-      if (overdue > maxOverdue) maxOverdue = overdue;
-    }
-  }
-  return maxOverdue;
-}
-
 function deriveWorkflowStatus(flag) {
   if (flag.status === 'recovered') return 'recovered';
   const days = daysSinceFlagged(flag.flaggedAt);
   if (days >= 120) return 'booked';
   if (days >= 30) return 'contacted';
   return 'new';
-}
-
-function buildRecoveryFunnel(flagRows) {
-  const recoveredRows = flagRows.filter((f) => f.status === 'recovered');
-  const openRows = flagRows.filter((f) => f.status === 'open');
-
-  const sumAtRisk = (rows) =>
-    round2(rows.reduce((s, f) => s + num(f.contributionAtRiskAtFlagTime), 0));
-
-  const flaggedAtRiskGbp = sumAtRisk(flagRows);
-  const recoveredAtRiskGbp = sumAtRisk(recoveredRows);
-  const recoveredValueGbp = round2(
-    recoveredRows.reduce((s, f) => s + num(f.contributionRecoveredGbp), 0),
-  );
-  const openValueGbp = sumAtRisk(openRows);
-
-  const contactedOpen = openRows.filter((f) => daysSinceFlagged(f.flaggedAt) >= 7);
-  const bookedOpen = openRows.filter((f) => daysSinceFlagged(f.flaggedAt) >= 21);
-
-  const assignedGbp = round2(recoveredAtRiskGbp + openValueGbp);
-  const contactedGbp = round2(sumAtRisk(contactedOpen) + recoveredAtRiskGbp);
-  const bookedGbp = round2(sumAtRisk(bookedOpen) + recoveredAtRiskGbp);
-
-  const bankedPct =
-    flaggedAtRiskGbp > 0 ? roundPct(recoveredAtRiskGbp / flaggedAtRiskGbp) : null;
-
-  return {
-    flaggedAtRiskGbp,
-    assignedGbp,
-    contactedGbp,
-    bookedGbp,
-    recoveredAtRiskGbp,
-    recoveredValueGbp,
-    openValueGbp,
-    bankedPct,
-    stages: [
-      { key: 'flagged', label: 'Flagged at risk', valueGbp: flaggedAtRiskGbp },
-      { key: 'assigned', label: 'Assigned', valueGbp: assignedGbp },
-      { key: 'contacted', label: 'Contacted', valueGbp: contactedGbp },
-      { key: 'booked', label: 'Booked', valueGbp: bookedGbp },
-      { key: 'recovered', label: 'Recovered', valueGbp: recoveredAtRiskGbp },
-    ],
-  };
 }
 
 function recoveredThisQuarterGbp(flagRows) {
@@ -131,7 +77,9 @@ function buildOpenWorklist(flagRows, worklistMeta) {
     .filter((f) => f.status === 'open')
     .map((f) => {
       const meta = worklistMeta.get(f.patientId) ?? {};
-      const daysOverdue = recallOverdueDays(
+      const lastVisitAt = meta.lastVisitAt ?? null;
+      const daysOverdue = resolveWorklistDaysOverdue(
+        lastVisitAt,
         meta.dentistRecallDate,
         meta.hygienistRecallDate,
       );
@@ -139,9 +87,12 @@ function buildOpenWorklist(flagRows, worklistMeta) {
       return {
         ...f,
         daysSinceFlagged: daysSinceFlagged(f.flaggedAt),
-        lastVisitAt: meta.lastVisitAt ?? null,
+        lastVisitAt,
         daysOverdue,
-        histContributionYr: round2(num(f.contributionAtRiskAtFlagTime)),
+        histContributionYr: annualizeTrailingContribution(
+          f.contributionAtRiskAtFlagTime,
+          f.trailingMonths,
+        ),
         ownerName: null,
         workflowStatus,
       };
@@ -503,21 +454,22 @@ async function loadPatientWorklistMeta(practiceId, patientIds) {
       const chunk = ptIds.slice(i, i + 300);
       const { data, error } = await supabaseAdmin
         .from('appointments')
-        .select('apmt_patient_id, apmt_completed_at, apmt_start_time, apmt_state')
+        .select('apmt_patient_id, apmt_completed_at, apmt_state')
         .eq('organization_id', practiceId)
         .in('apmt_patient_id', chunk);
 
       if (error) throw new Error(`appointment last visit: ${error.message}`);
 
       const lastByPtId = new Map();
+      const byPtId = new Map();
       for (const appt of data ?? []) {
         const ptId = String(appt.apmt_patient_id);
-        const state = String(appt.apmt_state || '').toLowerCase().trim();
-        if (state === 'cancelled' || state === 'did not attend' || state === 'dna') continue;
-        const at = appt.apmt_completed_at || appt.apmt_start_time;
-        if (!at) continue;
-        const prev = lastByPtId.get(ptId);
-        if (!prev || String(at) > String(prev)) lastByPtId.set(ptId, at);
+        if (!byPtId.has(ptId)) byPtId.set(ptId, []);
+        byPtId.get(ptId).push(appt);
+      }
+      for (const [ptId, appts] of byPtId.entries()) {
+        const last = pickLatestCompletedVisit(appts);
+        if (last) lastByPtId.set(ptId, last);
       }
 
       for (const [pid, meta] of worklistMeta.entries()) {
@@ -597,7 +549,7 @@ async function buildPracticeRecoveryPayload(practiceId, practiceName) {
     return mapFlagRow(f, names.get(pid), retentionStatuses.get(pid));
   });
   const openWorklist = buildOpenWorklist(flagRows, worklistMeta);
-  const funnel = buildRecoveryFunnel(flagRows);
+  const funnel = buildRecoveryFunnel(flagRows, openWorklist);
 
   const assumptions = await loadPeEconomicAssumptions(practiceId);
 
@@ -681,7 +633,7 @@ async function getRetentionRecoveryLoop(userId, contextPracticeId) {
     )
     .sort((a, b) => b.contributionAtRiskAtFlagTime - a.contributionAtRiskAtFlagTime);
 
-  const groupFunnel = buildRecoveryFunnel(groupFlags);
+  const groupFunnel = buildRecoveryFunnel(groupFlags, groupOpenWorklist);
   const groupRecoveredThisQuarter = recoveredThisQuarterGbp(groupFlags);
   const groupInProgress = round2(groupMetrics.openValueGbp);
 

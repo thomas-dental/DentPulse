@@ -93,10 +93,12 @@ export function ContributionAtRiskBySegmentChart({
     );
   }
 
-  const riskSegments = segments.filter(
-    (s) => s.status === 'drifting' || s.status === 'lapsed',
+  const barSegments = segments.filter(
+    (s) =>
+      s.contributionGbp > 0 &&
+      (s.status === 'drifting' || s.status === 'lapsed' || s.status === 'effectively_lost'),
   );
-  const maxVal = Math.max(...riskSegments.map((s) => s.contributionGbp), 1);
+  const maxVal = Math.max(...barSegments.map((s) => s.contributionGbp), 1);
   const W = 520;
   const rowH = 44;
   const pl = 110;
@@ -117,10 +119,18 @@ export function ContributionAtRiskBySegmentChart({
       {segments.map((row, i) => {
         const yy = 8 + i * rowH;
         const color = SEGMENT_COLORS[row.status as PeRetentionStatus] ?? muted;
-        const hasRiskBar =
-          (row.status === 'drifting' || row.status === 'lapsed') && row.contributionGbp > 0;
-        const barWidth =
-          row.contributionGbp > 0 ? bw * (Math.min(row.contributionGbp, maxVal) / maxVal) : 0;
+        const showBar =
+          row.contributionGbp > 0 &&
+          (row.status === 'drifting' ||
+            row.status === 'lapsed' ||
+            row.status === 'effectively_lost');
+        const barWidth = showBar
+          ? bw * (Math.min(row.contributionGbp, maxVal) / maxVal)
+          : 0;
+        const valueLabel =
+          row.status === 'effectively_lost'
+            ? `${formatGbpCompact(row.contributionGbp)} not recoverable`
+            : `${formatGbpCompact(row.contributionGbp)} at risk`;
 
         return (
           <g key={row.status}>
@@ -130,7 +140,7 @@ export function ContributionAtRiskBySegmentChart({
             <text x={pl - 8} y={yy + 29} textAnchor="end" fontSize={9.5} fill={muted}>
               {row.patientCount.toLocaleString('en-GB')} patients
             </text>
-            {hasRiskBar ? (
+            {showBar ? (
               <>
                 <rect
                   x={pl}
@@ -139,14 +149,15 @@ export function ContributionAtRiskBySegmentChart({
                   height={20}
                   rx={4}
                   fill={color}
+                  opacity={row.status === 'effectively_lost' ? 0.55 : 1}
                 />
                 <text x={pl + barWidth + 6} y={yy + 20} fontSize={11} fontWeight={700} fill={color}>
-                  {formatGbpCompact(row.contributionGbp)} at risk
+                  {valueLabel}
                 </text>
               </>
             ) : (
               <text x={pl} y={yy + 20} fontSize={10.5} fill={muted}>
-                {row.status === 'active' ? 'no contribution at risk' : 'not recoverable'}
+                {row.status === 'active' ? 'no contribution at risk' : '—'}
               </text>
             )}
           </g>
@@ -464,8 +475,18 @@ export function ReactivationWorklistTable({
               <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-left')}>Practice</th>
             )}
             <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-left')}>Last visit</th>
-            <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-right')}>Days overdue</th>
-            <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-right')}>Hist. contribution/yr</th>
+            <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-right')}>
+              Days overdue
+              <span className="block text-[10px] font-normal normal-case tracking-normal text-muted-foreground">
+                since last completed visit
+              </span>
+            </th>
+            <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-right')}>
+              Hist. contribution/yr
+              <span className="block text-[10px] font-normal normal-case tracking-normal text-muted-foreground">
+                trailing window annualised
+              </span>
+            </th>
             <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-right')}>Contribution at risk</th>
             <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-left')}>Owner</th>
             <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-left')}>Status</th>
