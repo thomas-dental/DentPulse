@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
-  dataQualityLabel,
+  patientOpportunityMetrics,
   type PatientListSortKey,
   type PatientProvenanceStatus,
 } from '@/hooks/usePatientContributionList';
@@ -19,6 +19,11 @@ import {
   type RetentionStatus,
 } from '@/hooks/usePatientFinancialRecord';
 import { cn } from '@/lib/utils';
+import {
+  ProvenanceChip,
+  tierToChip,
+} from '@/components/patient-economics/ProvenanceChip';
+import { PE_CTX_BANNER_CLASS } from '@/lib/peVisualTokens';
 import {
   recommendedActionDetail,
 } from '@/lib/peRecommendedAction';
@@ -51,66 +56,14 @@ function formatDate(raw: string | null): string {
   return new Date(`${raw}T00:00:00`).toLocaleDateString('en-GB');
 }
 
-function TierChip({ tier }: { tier: string }) {
-  const t = tier.toLowerCase();
-  if (t === 'dentally') {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-800 dark:text-sky-200">
-        Dentally
-      </span>
-    );
-  }
-  if (t === 'modelled') {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:text-amber-100">
-        Modelled
-      </span>
-    );
-  }
-  if (t === 'external') {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] font-semibold text-violet-800 dark:text-violet-200">
-        External
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
-      Derived
-    </span>
-  );
-}
-
 function DataQualityChip({ status }: { status: PatientProvenanceStatus }) {
-  const label = dataQualityLabel(status);
-  if (status === 'partial_no_practitioner' || status === 'partial_missing_rate') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:text-amber-200">
-        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-        {label}
-      </span>
-    );
+  if (status === 'partial_no_practitioner') {
+    return <ProvenanceChip kind="partial_no_practitioner" />;
   }
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
-      <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-      {label}
-    </span>
-  );
-}
-
-function contributionMarginRate(row: PatientFinancialRecordRow): number {
-  if (row.marginPct != null && row.marginPct > 0) return row.marginPct / 100;
-  if (row.revenue > 0) return row.contribution / row.revenue;
-  return 0;
-}
-
-function patientOpportunityDisplay(row: PatientFinancialRecordRow) {
-  const marginRate = contributionMarginRate(row);
-  const unscheduledTreatmentGross = row.opportunityGross;
-  const grossContributionOpportunity = row.opportunityGross * marginRate;
-  const probabilityWeighted = row.opportunityWeighted * marginRate;
-  return { unscheduledTreatmentGross, grossContributionOpportunity, probabilityWeighted };
+  if (status === 'partial_missing_rate') {
+    return <ProvenanceChip kind="partial_missing_rate" />;
+  }
+  return <ProvenanceChip kind="derived" />;
 }
 
 function StatLine({
@@ -163,13 +116,23 @@ function DataQualityBanner({
   );
 }
 
-function OpportunityM6Notice({ tierNote }: { tierNote: string | null }) {
+function OpportunityM6Notice({
+  tierNote,
+  confidence,
+}: {
+  tierNote: string | null;
+  confidence?: number;
+}) {
   const text = tierNote ?? PE_OPPORTUNITY_WEIGHTED_TIER_NOTE;
   return (
     <div className="mt-3 rounded-[10px] border border-amber-500/30 bg-amber-500/8 px-3 py-2.5 text-[11px] leading-relaxed text-amber-950 dark:text-amber-100">
-      <span className="font-semibold">Partial weighting (M6): </span>
-      {text}. Gross opportunity sums planned-not-scheduled ledger plans; weighted applies a
-      single default probability until Value & Leakage per-treatment weighting ships.
+      <span className="font-semibold">Modelled weighting: </span>
+      {text}
+      {confidence != null && confidence > 0 && (
+        <span className="mt-1 block text-amber-900/80 dark:text-amber-50/80">
+          Commitment confidence: {confidence}%
+        </span>
+      )}
     </div>
   );
 }
@@ -182,13 +145,13 @@ function RetentionStatusBadge({
   recallHint?: string | null;
 }) {
   const cls =
-    retention.tone === 'healthy'
-      ? 'border-success/30 bg-success-muted text-success'
+    retention.tone === 'active'
+      ? 'border-primary/25 bg-primary/10 text-primary'
       : retention.tone === 'drifting'
         ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
         : retention.tone === 'lapsed'
           ? 'border-danger/30 bg-danger-muted text-danger-strong'
-          : 'border-primary/25 bg-primary/10 text-primary';
+          : 'border-muted-foreground/40 bg-muted text-muted-foreground';
 
   const text = recallHint ? `${retention.label} · ${recallHint}` : retention.label;
 
@@ -329,11 +292,11 @@ function ExpandedInvoiceBreakdown({
   return (
     <tr>
       <td />
-      <td colSpan={10} className="bg-muted/40 px-5 py-3">
+      <td colSpan={9} className="bg-muted/40 px-5 py-3">
         <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
           Completed treatments · {patientName}
-          <TierChip tier="Dentally" />
-          <TierChip tier="Derived" />
+          <ProvenanceChip kind="dentally" />
+          <ProvenanceChip kind="derived" />
         </div>
         {isLoading && <Skeleton className="h-24 w-full rounded-lg" />}
         {isError && (
@@ -505,7 +468,7 @@ function RecordsRoster({
           <Input
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Search patient / ID…"
+            placeholder="Search patient…"
             className="pl-9"
           />
         </div>
@@ -530,7 +493,6 @@ function RecordsRoster({
             <tr className="border-b border-border bg-muted/40 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               <th className="w-8 px-3 py-3" />
               <th className="px-3 py-3">Patient</th>
-              <th className="px-3 py-3">ID</th>
               <th className="px-3 py-3">Practice</th>
               <th className="px-3 py-3">Status</th>
               <th className="px-3 py-3 text-right">Revenue</th>
@@ -574,7 +536,7 @@ function RecordsRoster({
             {isLoading &&
               Array.from({ length: pageSize }).map((_, i) => (
                 <tr key={i} className="border-b border-border/60">
-                  {Array.from({ length: 11 }).map((_, j) => (
+                  {Array.from({ length: 10 }).map((_, j) => (
                     <td key={j} className="px-3 py-3">
                       <Skeleton className="h-4 w-full" />
                     </td>
@@ -584,7 +546,7 @@ function RecordsRoster({
 
             {!isLoading && !isError && !hasSyncedPatients && (
               <tr>
-                <td colSpan={11} className="px-5 py-12 text-center text-muted-foreground">
+                <td colSpan={10} className="px-5 py-12 text-center text-muted-foreground">
                   No patient economics data yet. Run PE sync after connecting Dentally.
                 </td>
               </tr>
@@ -638,9 +600,6 @@ function RecordsRoster({
                         )}
                       </div>
                     </td>
-                    <td className="px-3 py-3 tabular-nums text-muted-foreground">
-                      {row.ptId ?? '—'}
-                    </td>
                     <td className="px-3 py-3 text-muted-foreground">{practiceName}</td>
                     <td className="px-3 py-3 text-left">
                       <PatientTypeStatusBadge row={row} />
@@ -660,7 +619,7 @@ function RecordsRoster({
                     </td>
                     <td className="px-3 py-3 text-right">
                       <RosterMoneyCell
-                        value={patientOpportunityDisplay(row).probabilityWeighted}
+                        value={patientOpportunityMetrics(row).probabilityWeighted}
                         tone="primary"
                       />
                     </td>
@@ -779,7 +738,7 @@ function PatientFinancialRecordInlineDetail({ patientId }: { patientId: string }
     unscheduledTreatmentGross,
     grossContributionOpportunity,
     probabilityWeighted,
-  } = patientOpportunityDisplay(c);
+  } = patientOpportunityMetrics(c);
 
   const marginLabel = c.marginPct != null ? `${c.marginPct}% margin` : 'margin n/a';
   const subtitleParts = patientSubtitleParts(c);
@@ -803,10 +762,9 @@ function PatientFinancialRecordInlineDetail({ patientId }: { patientId: string }
 
   return (
     <div className="space-y-4">
-      <div className="text-[11px] font-bold uppercase tracking-[0.06em] text-muted-foreground">
+      <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-primary">
         Patient Financial Record · {c.patientName}
         <span className="ml-2 font-medium normal-case tracking-normal text-muted-foreground">
-          {c.ptId != null ? `· ID ${c.ptId}` : ''}
           {subtitleParts.length > 0 ? ` · ${subtitleParts.join(' · ')}` : ''}
         </span>
       </div>
@@ -849,7 +807,7 @@ function PatientFinancialRecordInlineDetail({ patientId }: { patientId: string }
             <div>
               <div className="mb-1 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-primary">
                 Revenue
-                <TierChip tier={c.revenueTier} />
+                <ProvenanceChip kind={tierToChip(c.revenueTier)} />
               </div>
               <StatLine
                 label="Total revenue"
@@ -860,7 +818,7 @@ function PatientFinancialRecordInlineDetail({ patientId }: { patientId: string }
             <div>
               <div className="mb-1 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-danger">
                 Direct cost
-                <TierChip tier={c.clinicianCostTier} />
+                <ProvenanceChip kind={tierToChip(c.clinicianCostTier)} />
               </div>
               <StatLine label="Clinician (attributed)" value={formatGbp(c.clinicianCost)} />
               <StatLine label="Lab" value={formatGbp(labTotal)} />
@@ -911,9 +869,12 @@ function PatientFinancialRecordInlineDetail({ patientId }: { patientId: string }
             }
           />
 
-          <OpportunityM6Notice tierNote={c.opportunityWeightedTierNote} />
+          <OpportunityM6Notice
+            tierNote={c.opportunityWeightedTierNote}
+            confidence={c.opportunityWeightConfidence}
+          />
 
-          <div className="mt-4 rounded-[10px] border border-primary/25 bg-primary/5 px-4 py-3">
+          <div className={cn(PE_CTX_BANNER_CLASS, 'mt-4')}>
             <div className="text-[11px] font-bold uppercase tracking-wide text-primary">
               Recommended action
             </div>

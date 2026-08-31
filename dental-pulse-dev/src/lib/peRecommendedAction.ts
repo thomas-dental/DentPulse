@@ -2,10 +2,10 @@
  * Recommended action — rule-based (not ML), easy to tune via thresholds below.
  *
  * Inputs (all on v_patient_contribution after migration):
- *   retention_status, opportunity_weighted, quality_score (from modelled job)
+ *   retention_status, opportunity_weighted (commitment-learned at API read), quality_score
  *
- * Rules evaluated in order; first match wins. Mirror SQL CASE in migration
- * 20260828140001_v_patient_contribution_retention_opportunity.sql — keep in sync.
+ * Rules evaluated in order; first match wins. Mirror pe_retention_status() /
+ * peRetentionSegmentation.ts — keep in sync when either file changes.
  *
  * Provenance: tier = Modelled; see PE_RECOMMENDED_ACTION_TIER_NOTE.
  */
@@ -59,10 +59,8 @@ export const PE_RECOMMENDED_ACTION_LABELS: Record<PeRecommendedAction, string> =
  * | lapsed    | < HIGH_OPP        | else                 | priority_reactivation
  * | drifting  | >= HIGH_OPP       | any                  | schedule_treatment_recall
  * | drifting  | < HIGH_OPP        | any                  | recall_follow_up
- * | healthy   | >= HIGH_OPP       | any                  | review_unscheduled_next_visit
  * | active    | >= HIGH_OPP       | < LOW_QUALITY        | chase_completion_data
  * | active    | >= HIGH_OPP       | >= HIGH_QUALITY      | maintain_high_value
- * | healthy   | < HIGH_OPP        | any                  | routine_recall
  * | else      | any               | any                  | monitor
  */
 export function deriveRecommendedAction(
@@ -75,7 +73,7 @@ export function deriveRecommendedAction(
   const highQuality = quality >= PE_HIGH_QUALITY_SCORE;
   const lowQuality = quality < PE_LOW_QUALITY_SCORE;
 
-  if (retentionStatus === 'lapsed') {
+  if (retentionStatus === 'lapsed' || retentionStatus === 'effectively_lost') {
     if (highOpp) return 'priority_reactivation';
     if (highQuality) return 'reactivation_relationship';
     return 'priority_reactivation';
@@ -85,11 +83,7 @@ export function deriveRecommendedAction(
     return highOpp ? 'schedule_treatment_recall' : 'recall_follow_up';
   }
 
-  if (retentionStatus === 'healthy') {
-    return highOpp ? 'review_unscheduled_next_visit' : 'routine_recall';
-  }
-
-  // active (and any other fallback)
+  // active
   if (highOpp && lowQuality) return 'chase_completion_data';
   if (highOpp && highQuality) return 'maintain_high_value';
   return 'monitor';

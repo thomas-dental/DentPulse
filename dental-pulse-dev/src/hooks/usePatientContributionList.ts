@@ -3,6 +3,11 @@ import { useQuery } from '@tanstack/react-query';
 import { useOrganization } from '@/hooks/useOrganization';
 import { fetchPatientContributionList } from '@/services/integrations/patientEconomicsService';
 import type { PeRetentionStatus, PeRetentionStatusTier } from '@/lib/peRetentionConstants';
+import {
+  parseRetentionStatus,
+  parseRetentionStatusTier,
+  retentionListLabel,
+} from '@/lib/peRetentionSegmentation';
 import type { PeRecommendedAction } from '@/lib/peRecommendedAction';
 import { parseRecommendedAction } from '@/lib/peRecommendedAction';
 
@@ -11,7 +16,12 @@ export type PatientProvenanceStatus =
   | 'partial_no_practitioner'
   | 'partial_missing_rate';
 
-export type PatientListRetentionFilter = 'all' | 'active' | 'drifting' | 'lapsed';
+export type PatientListRetentionFilter =
+  | 'all'
+  | 'active'
+  | 'drifting'
+  | 'lapsed'
+  | 'effectively_lost';
 export type PatientListTypeFilter = 'all' | 'private' | 'nhs' | 'member';
 
 export type PatientContributionRow = {
@@ -49,6 +59,7 @@ export type PatientContributionRow = {
   opportunityWeighted: number;
   opportunityWeightedTier: string;
   opportunityWeightedTierNote: string | null;
+  opportunityWeightConfidence: number;
   patientEconomicValue: number;
   patientEconomicValueTier: string;
   patientEconomicValueTierNote: string | null;
@@ -77,6 +88,7 @@ export type PatientListSummary = {
   retentionActiveCount: number;
   retentionDriftingCount: number;
   retentionLapsedCount: number;
+  retentionEffectivelyLostCount: number;
   privatePlanPatients: number;
   memberPatients: number;
   privateTypePatients: number;
@@ -135,6 +147,7 @@ export function mapPatientContributionRow(raw: Record<string, unknown>): Patient
       raw.opportunityWeightedTierNote != null
         ? String(raw.opportunityWeightedTierNote)
         : null,
+    opportunityWeightConfidence: num(raw.opportunityWeightConfidence),
     patientEconomicValue: num(raw.patientEconomicValue),
     patientEconomicValueTier: String(raw.patientEconomicValueTier || 'Modelled'),
     patientEconomicValueTierNote:
@@ -156,16 +169,6 @@ async function fetchAllPatientRows(practiceId: string): Promise<PatientContribut
   return patients.map((row) => mapPatientContributionRow(row));
 }
 
-function parseRetentionStatus(raw: unknown): PeRetentionStatus {
-  const s = String(raw || 'active').toLowerCase();
-  if (s === 'drifting' || s === 'lapsed' || s === 'healthy') return s;
-  return 'active';
-}
-
-function parseRetentionStatusTier(raw: unknown): PeRetentionStatusTier {
-  return String(raw || 'Derived') === 'Modelled' ? 'Modelled' : 'Derived';
-}
-
 export function dataQualityLabel(status: PatientProvenanceStatus): string {
   if (status === 'partial_no_practitioner') return 'No practitioner';
   if (status === 'partial_missing_rate') return 'Missing rate';
@@ -183,13 +186,6 @@ export function patientTypeLabel(row: PatientContributionRow): 'Member' | 'Priva
   return null;
 }
 
-export function retentionListLabel(status: PeRetentionStatus): string {
-  if (status === 'healthy' || status === 'active') return 'Active';
-  if (status === 'drifting') return 'Drifting';
-  if (status === 'lapsed') return 'Lapsed';
-  return 'Active';
-}
-
 export function filterPatientRowsByChips(
   rows: PatientContributionRow[],
   retentionFilter: PatientListRetentionFilter,
@@ -199,11 +195,12 @@ export function filterPatientRowsByChips(
 
   if (retentionFilter !== 'all') {
     out = out.filter((row) => {
-      if (retentionFilter === 'active') {
-        return row.retentionStatus === 'active' || row.retentionStatus === 'healthy';
-      }
+      if (retentionFilter === 'active') return row.retentionStatus === 'active';
       if (retentionFilter === 'drifting') return row.retentionStatus === 'drifting';
       if (retentionFilter === 'lapsed') return row.retentionStatus === 'lapsed';
+      if (retentionFilter === 'effectively_lost') {
+        return row.retentionStatus === 'effectively_lost';
+      }
       return true;
     });
   }
@@ -243,6 +240,7 @@ export function computePatientListSummary(rows: PatientContributionRow[]): Patie
   let retentionActiveCount = 0;
   let retentionDriftingCount = 0;
   let retentionLapsedCount = 0;
+  let retentionEffectivelyLostCount = 0;
   let privatePlanPatients = 0;
   let memberPatients = 0;
   let privateTypePatients = 0;
@@ -252,11 +250,10 @@ export function computePatientListSummary(rows: PatientContributionRow[]): Patie
 
   for (const row of rows) {
     if (row.isActive) activePatients += 1;
-    if (row.retentionStatus === 'active' || row.retentionStatus === 'healthy') {
-      retentionActiveCount += 1;
-    }
+    if (row.retentionStatus === 'active') retentionActiveCount += 1;
     if (row.retentionStatus === 'drifting') retentionDriftingCount += 1;
     if (row.retentionStatus === 'lapsed') retentionLapsedCount += 1;
+    if (row.retentionStatus === 'effectively_lost') retentionEffectivelyLostCount += 1;
     if (isPrivatePlanPatient(row)) privatePlanPatients += 1;
     const type = patientTypeLabel(row);
     if (type === 'Member') memberPatients += 1;
@@ -272,6 +269,7 @@ export function computePatientListSummary(rows: PatientContributionRow[]): Patie
     retentionActiveCount,
     retentionDriftingCount,
     retentionLapsedCount,
+    retentionEffectivelyLostCount,
     privatePlanPatients,
     memberPatients,
     privateTypePatients,
@@ -313,7 +311,15 @@ export function patientListSecondaryKpi(
     return {
       label: 'Lapsed',
       value: filterSummary.retentionLapsedCount.toLocaleString('en-GB'),
-      subtitle: 'Inactive or no visit in 12+ months',
+      subtitle: 'Long recall/visit gap — reactivation candidate',
+      tone: 'danger',
+    };
+  }
+  if (retentionFilter === 'effectively_lost') {
+    return {
+      label: 'Effectively lost',
+      value: filterSummary.retentionEffectivelyLostCount.toLocaleString('en-GB'),
+      subtitle: 'Inactive or very long gap — low recovery probability',
       tone: 'danger',
     };
   }
@@ -321,7 +327,7 @@ export function patientListSecondaryKpi(
     return {
       label: 'Active',
       value: filterSummary.retentionActiveCount.toLocaleString('en-GB'),
-      subtitle: 'Healthy or on recall track',
+      subtitle: 'On recall track',
       tone: 'qual',
     };
   }
@@ -402,7 +408,6 @@ function csvEscape(value: string | number): string {
 export function exportPatientListCsv(rows: PatientContributionRow[]): void {
   const headers = [
     'Patient',
-    'Patient ID',
     'Practice',
     'Type',
     'Status',
@@ -421,7 +426,6 @@ export function exportPatientListCsv(rows: PatientContributionRow[]): void {
 
     return [
       row.patientName,
-      row.ptId ?? '',
       row.practiceName,
       type ?? '',
       retentionListLabel(row.retentionStatus),
@@ -472,6 +476,27 @@ export function filterPatientRows(
   });
 }
 
+/** Margin rate for converting treatment £ opportunity → contribution £. */
+export function contributionMarginRate(row: PatientContributionRow): number {
+  if (row.marginPct != null && row.marginPct > 0) return row.marginPct / 100;
+  if (row.revenuePrivatePlan > 0) return row.contribution / row.revenuePrivatePlan;
+  return 0;
+}
+
+/** Contribution £ after commitment rate and margin — matches Patient Records table column. */
+export function probabilityWeightedContribution(row: PatientContributionRow): number {
+  return row.opportunityWeighted * contributionMarginRate(row);
+}
+
+export function patientOpportunityMetrics(row: PatientContributionRow) {
+  const marginRate = contributionMarginRate(row);
+  return {
+    unscheduledTreatmentGross: row.opportunityGross,
+    grossContributionOpportunity: row.opportunityGross * marginRate,
+    probabilityWeighted: row.opportunityWeighted * marginRate,
+  };
+}
+
 export function sortPatientRows(
   rows: PatientContributionRow[],
   sortKey: PatientListSortKey,
@@ -485,6 +510,11 @@ export function sortPatientRows(
     if (sortKey === 'visitFreqPerYear' || sortKey === 'valuePerVisit') {
       av = a[sortKey];
       bv = b[sortKey];
+    }
+
+    if (sortKey === 'opportunityWeighted') {
+      av = probabilityWeightedContribution(a);
+      bv = probabilityWeightedContribution(b);
     }
 
     if (av == null && bv == null) {

@@ -257,7 +257,7 @@ Chips: **Dentally** (events from PMS sync) · **Derived** (server rollups).
 | UDA rate (display) | From `uda_settings.uda_rate` | Remuneration table + Pulse UDA lens |
 | NHS / UDA contract | Contract £ + obligation | Delivery %, clawback, UDA rate |
 | Economic assumptions (table ready) | Membership annual cost, default CAC | Reserved; invoice grain still 0 |
-| Toggles (mock) | Exclude UDA from contribution / track separately | Behaviour already enforced in view/UI |
+| Toggles (mock) | Exclude UDA from contribution / track separately | Behaviour already enforced in view/UI — see **`PE_SETTINGS_NOTES.md`** for deferred mockup controls (clawback %, mixed-patient). |
 
 **Partial-data banner** on Economic Pulse distinguishes:
 

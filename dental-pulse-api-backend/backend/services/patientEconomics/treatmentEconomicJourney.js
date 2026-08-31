@@ -52,6 +52,10 @@ function payloadGbp(payload) {
  * }>}
  */
 async function getTreatmentEconomicJourney(practiceId) {
+  const { loadPeEconomicAssumptions } = require('./peEconomicAssumptions');
+  const assumptions = await loadPeEconomicAssumptions(practiceId);
+  const minPlannedEvents = assumptions.journeyMinPlannedEvents;
+  const minTotalFunnelEvents = assumptions.journeyMinTotalFunnelEvents;
   const byType = new Map();
   for (const t of FUNNEL_EVENT_TYPES) {
     byType.set(t, { eventCount: 0, valueGbp: 0 });
@@ -125,7 +129,7 @@ async function getTreatmentEconomicJourney(practiceId) {
   const totalEvents = stages.reduce((sum, s) => sum + s.eventCount, 0);
   const plannedEventCount = stages.find((s) => s.key === 'planned')?.eventCount ?? 0;
   const isBackfilling =
-    plannedEventCount < MIN_PLANNED_EVENTS || totalEvents < MIN_TOTAL_FUNNEL_EVENTS;
+    plannedEventCount < minPlannedEvents || totalEvents < minTotalFunnelEvents;
 
   return { stages, totalEvents, plannedEventCount, isBackfilling };
 }

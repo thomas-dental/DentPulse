@@ -477,6 +477,449 @@ export async function fetchInvoiceContributionSummaryApi(practiceId: string) {
   }>('/read/invoice-contribution-summary', { practiceId });
 }
 
+/** Value & Leakage — planned private items unscheduled beyond threshold days. */
+export async function fetchPlannedUnscheduledLeakageApi(practiceId: string) {
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    thresholdDays: number;
+    tier: string;
+    tierNote: string;
+    itemCount: number;
+    totalValueAtRisk: number;
+    marginPct?: number | null;
+    contributionOpportunity?: number | null;
+    rows: Array<{
+      planId: string;
+      tpiId: string | null;
+      patientId: string;
+      patientName: string;
+      treatmentValue: number;
+      daysUnscheduled: number;
+      planCreatedAt: string;
+    }>;
+  }>('/read/planned-unscheduled-leakage', { practiceId });
+}
+
+/** Value & Leakage — opportunity + commitment breakdowns. */
+export async function fetchValueLeakageSummaryApi(practiceId: string) {
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    opportunityGross: number;
+    opportunityGrossTier: string;
+    opportunityGrossTierNote: string;
+    opportunityWeighted: number;
+    opportunityWeightedTier: string;
+    opportunityWeightedTierNote: string;
+    opportunityWeightConfidence: number;
+    opportunityByCategory?: Array<{
+      category: string;
+      gross: number;
+      weighted: number;
+    }>;
+    weightingWindowDays: number;
+    commitmentRate30d: number;
+    commitmentRate30dTier: string;
+    commitmentRate30dConfidence: number;
+    commitmentRate30dTierNote: string;
+    commitmentRate30dEligibleValue: number;
+    commitmentRate30dCommittedValue: number;
+    byWindow: Array<{
+      windowDays: number;
+      commitmentRate: number;
+      totalEligibleValue: number;
+      committedValueWithinWindow: number;
+      eligibleItemCount: number;
+      committedItemCount: number;
+      confidence: number;
+      tier: string;
+      tierNote: string;
+    }>;
+    byClinician: Array<{
+      practitionerExtId: string | null;
+      providerId: string | null;
+      practitionerName: string;
+      windowDays: number;
+      commitmentRate: number;
+      totalEligibleValue: number;
+      committedValueWithinWindow: number;
+      eligibleItemCount: number;
+      committedItemCount: number;
+      confidence: number;
+      tier: string;
+      attributionTier: string;
+      tierNote: string;
+    }>;
+    clinicianWindowDays: number;
+    hasUnattributedPlanItems: boolean;
+    unattributedEligibleValue: number;
+    tier: string;
+    tierNote: string;
+  }>('/read/value-leakage-summary', { practiceId });
+}
+
+/** Growth Levers — visit frequency and value per visit (Derived tier). */
+export async function fetchGrowthLeversSummaryApi(practiceId: string) {
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    trailingMonths: number;
+    sinceDate: string;
+    visitFrequency: number | null;
+    visitFrequencyTier: string;
+    visitFrequencyTierNote: string;
+    valuePerVisit: number | null;
+    valuePerVisitTier: string;
+    valuePerVisitTierNote: string;
+    totalCompletedVisits: number;
+    totalRevenuePrivatePlan: number;
+    activePatientCount: number;
+    monthly: Array<{
+      month: string;
+      completedVisits: number;
+      revenuePrivatePlan: number;
+      valuePerVisit: number | null;
+    }>;
+    hasAppointmentData: boolean;
+    hasRevenueData: boolean;
+    hasActivePatients: boolean;
+    tenureYears: number | null;
+    tenureTier: string;
+    tenureTierNote: string;
+    tenurePatientCount: number;
+    projectedLifetimeYears: number | null;
+    projectedLifetimeTier: string;
+    projectedLifetimeTierNote: string;
+    projectedLifetimePatientCount: number;
+    hasTenureData: boolean;
+    hasProjectedLifetimeData: boolean;
+    tier: string;
+    tierNote: string;
+  }>('/read/growth-levers-summary', { practiceId });
+}
+
+/** Multi-practice growth levers with headroom vs benchmark. */
+export async function fetchGrowthLeversByPracticeApi(practiceId: string) {
+  return economicsReadGet<{
+    success: true;
+    contextPracticeId: string;
+    benchmarkMethod: string;
+    benchmarkMethodNote: string;
+    groupBenchmarks: {
+      visitFrequency: number | null;
+      valuePerVisit: number | null;
+      tenureYears: number | null;
+      projectedLifetimeYears: number | null;
+    };
+    practices: Array<{
+      practiceId: string;
+      practiceName: string;
+      visitFrequency: number | null;
+      valuePerVisit: number | null;
+      tenureYears: number | null;
+      projectedLifetimeYears: number | null;
+      trailingMonths: number | null;
+      benchmarks: {
+        visitFrequency: number | null;
+        valuePerVisit: number | null;
+        tenureYears: number | null;
+        projectedLifetimeYears: number | null;
+      };
+      visitFrequencyHeadroom: number | null;
+      valuePerVisitHeadroom: number | null;
+      tenureHeadroom: number | null;
+      projectedLifetimeHeadroom: number | null;
+      combinedHeadroomPct: number | null;
+      topLeverToPull: string | null;
+    }>;
+    hasData: boolean;
+  }>('/read/growth-levers-by-practice', { practiceId });
+}
+
+export type RetentionContributionSegmentRow = {
+  status: string;
+  label: string;
+  patientCount: number;
+  contributionGbp: number;
+};
+
+export type RetentionContributionRollup = {
+  practiceId: string;
+  practiceName: string;
+  segments: RetentionContributionSegmentRow[];
+  totalContributionGbp: number;
+  totalPatientCount: number;
+  atRiskContributionGbp: number;
+  atRiskPatientCount: number;
+  tier: string;
+  tierNote: string;
+};
+
+/** Retention & Reactivation — contribution by 4-tier segment (practice + group). */
+export async function fetchRetentionContributionAtRiskApi(practiceId: string) {
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    practiceName: string;
+    practice: RetentionContributionRollup;
+    group: RetentionContributionRollup & {
+      practiceCount: number;
+      practices: RetentionContributionRollup[];
+    };
+    hasData: boolean;
+  }>('/read/retention-contribution-at-risk', { practiceId });
+}
+
+export type ReactivationFlagRow = {
+  flagId: string;
+  patientId: string;
+  patientName: string;
+  segmentAtFlagTime: string;
+  /** Live retention_status on v_patient_contribution — matches Patient Records. */
+  currentRetentionStatus: string;
+  contributionAtRiskAtFlagTime: number;
+  contributionPreFlagGbp: number;
+  flaggedAt: string;
+  status: string;
+  recoveredAt: string | null;
+  reactivatedEventAt: string | null;
+  contributionRecoveredGbp: number | null;
+  recoveryWindowDays: number;
+  trailingMonths: number;
+  practiceId?: string;
+  practiceName?: string;
+};
+
+export type ReactivationWorklistRow = ReactivationFlagRow & {
+  daysSinceFlagged: number;
+  lastVisitAt: string | null;
+  daysOverdue: number;
+  histContributionYr: number;
+  ownerName: string | null;
+  workflowStatus: 'new' | 'contacted' | 'booked' | 'recovered';
+};
+
+export type RecoveryFunnelStage = {
+  key: string;
+  label: string;
+  valueGbp: number;
+};
+
+export type RecoveryFunnel = {
+  flaggedAtRiskGbp: number;
+  assignedGbp: number;
+  contactedGbp: number;
+  bookedGbp: number;
+  recoveredAtRiskGbp: number;
+  recoveredValueGbp: number;
+  openValueGbp: number;
+  bankedPct: number | null;
+  stages: RecoveryFunnelStage[];
+};
+
+export type RetentionRecoveryPracticePayload = {
+  practiceId: string;
+  practiceName: string;
+  reactivationValueGbp: number;
+  openFlagCount: number;
+  recoveryWindowDays: number;
+  minContributionThresholdGbp: number;
+  trailingMonths: number;
+  flaggedValueGbp: number;
+  recoveredValueGbp: number;
+  recoveredAtRiskGbp: number;
+  openValueGbp: number;
+  recoveredFlagCount: number;
+  totalFlagCount: number;
+  recoveryRatePct: number | null;
+  recoveryFlagRatePct: number | null;
+  flags: ReactivationFlagRow[];
+  openWorklist: ReactivationWorklistRow[];
+  recoveredThisQuarterGbp: number;
+  inProgressGbp: number;
+  recoveryFunnel: RecoveryFunnel;
+  tier: string;
+  tierNote: string;
+};
+
+export type ReactivationValueByPracticeRow = {
+  practiceId: string;
+  practiceName: string;
+  reactivationValueGbp: number;
+  openFlagCount: number;
+};
+
+/** Retention & Reactivation — flags, recovery loop, reactivation value by practice. */
+export async function fetchRetentionRecoveryLoopApi(practiceId: string) {
+  return economicsReadGet<{
+    success: true;
+    contextPracticeId: string;
+    practiceName: string;
+    practice: RetentionRecoveryPracticePayload;
+    group: RetentionRecoveryPracticePayload & {
+      practiceCount: number;
+      practices: ReactivationValueByPracticeRow[];
+      flags: ReactivationFlagRow[];
+    };
+    hasData: boolean;
+  }>('/read/retention-recovery-loop', { practiceId });
+}
+
+/** Day 3 modelled CLTV rollup by acquisition source. */
+export async function fetchCltvByAcquisitionSourceApi(practiceId: string) {
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    minSampleSize: number;
+    minSampleTierNote: string;
+    sources: Array<{
+      acquisitionSourceName: string;
+      patientCount: number;
+      avgCltv: number;
+      totalCltv: number;
+      avgQualityScore: number;
+      isThinSample: boolean;
+      tier: string;
+    }>;
+    hasData: boolean;
+    tier: string;
+    tierNote: string;
+  }>('/read/cltv-by-acquisition-source', { practiceId });
+}
+
+/** Goal Settings — group defaults + per-practice overrides with actuals. */
+export async function fetchGoalSettingsApi(practiceId: string) {
+  return economicsReadGet<{
+    success: true;
+    contextPracticeId: string;
+    commitmentWindowDays: number;
+    quarterStart: string;
+    defaults: {
+      commitmentRatePct: number | null;
+      contributionPerActiveGbp: number | null;
+      opportunityProgressionGbp: number | null;
+      attritionCeilingPct: number | null;
+    };
+    contextMetrics: {
+      commitmentRate: { actual: number | null; target: number | null; progressPct: number | null; onTrack: boolean | null };
+      contributionPerActive: { actual: number | null; target: number | null; progressPct: number | null; onTrack: boolean | null };
+      opportunityProgression: { actual: number | null; target: number | null; progressPct: number | null; onTrack: boolean | null };
+      attritionCeiling: { actual: number | null; target: number | null; progressPct: number | null; onTrack: boolean | null };
+    } | null;
+    practices: Array<{
+      practiceId: string;
+      practiceName: string;
+      override: {
+        commitmentRatePct: number | null;
+        contributionPerActiveGbp: number | null;
+        opportunityProgressionGbp: number | null;
+        attritionCeilingPct: number | null;
+      } | null;
+      targets: {
+        commitmentRatePct: number | null;
+        contributionPerActiveGbp: number | null;
+        opportunityProgressionGbp: number | null;
+        attritionCeilingPct: number | null;
+      };
+      actuals: {
+        commitmentRate30d: number | null;
+        contributionPerActiveGbp: number | null;
+        opportunityProgressionGbp: number | null;
+        attritionPct: number | null;
+      };
+      metrics: {
+        commitmentRate: { actual: number | null; target: number | null; progressPct: number | null; onTrack: boolean | null };
+        contributionPerActive: { actual: number | null; target: number | null; progressPct: number | null; onTrack: boolean | null };
+        opportunityProgression: { actual: number | null; target: number | null; progressPct: number | null; onTrack: boolean | null };
+        attritionCeiling: { actual: number | null; target: number | null; progressPct: number | null; onTrack: boolean | null };
+      };
+    }>;
+    hasData: boolean;
+  }>('/read/goal-settings', { practiceId });
+}
+
+export async function saveGoalSettingsApi(
+  contextPracticeId: string,
+  payload: {
+    defaults: {
+      commitmentRatePct: number | null;
+      contributionPerActiveGbp: number | null;
+      opportunityProgressionGbp: number | null;
+      attritionCeilingPct: number | null;
+    };
+    practiceOverrides: Array<{
+      practiceId: string;
+      commitmentRatePct: number | null;
+      contributionPerActiveGbp: number | null;
+      opportunityProgressionGbp: number | null;
+      attritionCeilingPct: number | null;
+    }>;
+  },
+) {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${getBackendUrl()}/api/economics-engine/assumptions/goal-settings`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ contextPracticeId, ...payload }),
+  });
+  const body = await res.json().catch(() => ({} as { success?: boolean; error?: string }));
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Failed to save goal settings (${res.status})`);
+  }
+  return body;
+}
+
+export async function fetchEconomicAssumptionsApi(practiceId: string) {
+  const headers = await getAuthHeaders();
+  const params = new URLSearchParams({ practiceId });
+  const res = await fetch(
+    `${getBackendUrl()}/api/economics-engine/assumptions/economic-assumptions?${params}`,
+    { method: 'GET', headers },
+  );
+  const body = await res.json().catch(() => ({} as { success?: boolean; error?: string }));
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Failed to load economic assumptions (${res.status})`);
+  }
+  return body as {
+    practiceId: string;
+    assumptions: import('@/types/peEconomicAssumptions').PeEconomicAssumptions;
+    defaults: import('@/types/peEconomicAssumptions').PeEconomicAssumptions;
+    opsOnlyNote?: string;
+  };
+}
+
+export async function saveEconomicAssumptionsApi(
+  practiceId: string,
+  assumptions: import('@/types/peEconomicAssumptions').PeEconomicAssumptions,
+) {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${getBackendUrl()}/api/economics-engine/assumptions/economic-assumptions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ practiceId, assumptions }),
+  });
+  const body = await res.json().catch(() => ({} as { success?: boolean; error?: string }));
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Failed to save economic assumptions (${res.status})`);
+  }
+  return body;
+}
+
+export async function fetchConversionProbabilitiesApi(practiceId: string) {
+  const headers = await getAuthHeaders();
+  const params = new URLSearchParams({ practiceId });
+  const res = await fetch(
+    `${getBackendUrl()}/api/economics-engine/read/conversion-probabilities?${params}`,
+    { method: 'GET', headers },
+  );
+  const body = await res.json().catch(() => ({} as { success?: boolean; error?: string }));
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Failed to load conversion probabilities (${res.status})`);
+  }
+  return body as import('@/types/peEconomicAssumptions').PeConversionProbabilitiesSummary;
+}
+
 /** Append a new effective-dated private-share rate (never updates existing rows). */
 export async function createPractitionerPrivateShareRate(
   practiceId: string,

@@ -46,6 +46,38 @@ const {
   fetchPatientInvoices,
   getInvoiceContributionSummary,
 } = require('../services/patientEconomics/patientEconomicsRead');
+const {
+  getPlannedUnscheduledLeakage,
+} = require('../services/patientEconomics/plannedUnscheduledLeakage');
+const {
+  getValueLeakageSummary,
+} = require('../services/patientEconomics/valueLeakageSummary');
+const {
+  getGrowthLeversSummary,
+} = require('../services/patientEconomics/growthLeversSummary');
+const {
+  getGrowthLeversByPractice,
+} = require('../services/patientEconomics/growthLeversByPractice');
+const {
+  getRetentionContributionAtRisk,
+} = require('../services/patientEconomics/retentionContributionAtRisk');
+const {
+  getRetentionRecoveryLoop,
+} = require('../services/patientEconomics/peReactivationFlags');
+const {
+  getCltvByAcquisitionSource,
+} = require('../services/patientEconomics/cltvByAcquisitionSource');
+const {
+  getGoalSettingsSummary,
+  saveGoalSettings,
+} = require('../services/patientEconomics/goalSettings');
+const {
+  getEconomicAssumptionsSummary,
+  saveEconomicAssumptions,
+} = require('../services/patientEconomics/peEconomicAssumptions');
+const {
+  getConversionProbabilitiesSummary,
+} = require('../services/patientEconomics/conversionProbabilities');
 
 const router = express.Router();
 
@@ -1067,6 +1099,338 @@ router.get('/read/invoice-contribution-summary', syncAuthMiddleware, async (req,
   } catch (err) {
     console.error('[EconomicsEngine] GET /read/invoice-contribution-summary error:', err.message);
     return res.status(500).json({ success: false, error: 'Failed to load invoice contribution summary' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/planned-unscheduled-leakage?practiceId=
+ * Private planned items unscheduled beyond leakage_unscheduled_threshold_days (default 60).
+ */
+router.get('/read/planned-unscheduled-leakage', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const payload = await getPlannedUnscheduledLeakage(practiceId);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/planned-unscheduled-leakage error:', err.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to load planned unscheduled leakage',
+    });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/value-leakage-summary?practiceId=
+ * Gross/weighted opportunity, Commitment Rate 30d, by-window and by-clinician breakdowns.
+ */
+router.get('/read/value-leakage-summary', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const summary = await getValueLeakageSummary(practiceId);
+    return res.json({ success: true, ...summary });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/value-leakage-summary error:', err.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to load value & leakage summary',
+    });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/growth-levers-summary?practiceId=
+ * Practice visit frequency and value per visit (Derived tier, trailing window configurable).
+ */
+router.get('/read/growth-levers-summary', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const summary = await getGrowthLeversSummary(practiceId);
+    return res.json({ success: true, ...summary });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/growth-levers-summary error:', err.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to load growth levers summary',
+    });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/growth-levers-by-practice?practiceId=
+ * Multi-practice lever values + headroom vs configurable benchmark (context practiceId).
+ */
+router.get('/read/growth-levers-by-practice', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const payload = await getGrowthLeversByPractice(req.user.id, practiceId);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/growth-levers-by-practice error:', err.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to load growth levers by practice',
+    });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/retention-contribution-at-risk?practiceId=
+ * Contribution £ rollup by 4-tier retention segment — practice + group.
+ */
+router.get('/read/retention-contribution-at-risk', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const payload = await getRetentionContributionAtRisk(req.user.id, practiceId);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error(
+      '[EconomicsEngine] GET /read/retention-contribution-at-risk error:',
+      err.message,
+    );
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to load retention contribution at risk',
+    });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/retention-recovery-loop?practiceId=
+ * Reactivation flags, value by practice, recovery rate + patient list.
+ */
+router.get('/read/retention-recovery-loop', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const payload = await getRetentionRecoveryLoop(req.user.id, practiceId);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/retention-recovery-loop error:', err.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to load retention recovery loop',
+    });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/cltv-by-acquisition-source?practiceId=
+ * Day 3 modelled CLTV rollup by acquisition source (thin samples flagged).
+ */
+router.get('/read/cltv-by-acquisition-source', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const payload = await getCltvByAcquisitionSource(practiceId);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/cltv-by-acquisition-source error:', err.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to load CLTV by acquisition source',
+    });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/goal-settings?practiceId=
+ * Group defaults + per-practice overrides with actual vs target rollups.
+ */
+router.get('/read/goal-settings', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const payload = await getGoalSettingsSummary(req.user.id, practiceId);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/goal-settings error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load goal settings' });
+  }
+});
+
+/**
+ * POST /api/economics-engine/assumptions/goal-settings
+ * Body: { contextPracticeId, defaults, practiceOverrides }
+ */
+router.post('/assumptions/goal-settings', syncAuthMiddleware, async (req, res) => {
+  try {
+    const contextPracticeId = req.body?.contextPracticeId;
+    if (!contextPracticeId || !isUuid(contextPracticeId)) {
+      return res.status(400).json({ success: false, error: 'contextPracticeId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, contextPracticeId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const overrides = Array.isArray(req.body?.practiceOverrides)
+      ? req.body.practiceOverrides
+      : [];
+
+    for (const row of overrides) {
+      const pid = row?.practiceId;
+      if (!pid || !isUuid(pid)) {
+        return res.status(400).json({ success: false, error: 'Each override needs practiceId (UUID)' });
+      }
+      const overrideAccess = await verifyPracticeAccess(req.user.id, pid);
+      if (!overrideAccess.ok) {
+        return res.status(overrideAccess.status).json({
+          success: false,
+          error: overrideAccess.error || 'Not authorized for override practice',
+        });
+      }
+    }
+
+    const payload = await saveGoalSettings(req.user.id, contextPracticeId, {
+      defaults: req.body?.defaults ?? {},
+      practiceOverrides: overrides,
+    });
+
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] POST /assumptions/goal-settings error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to save goal settings' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/assumptions/economic-assumptions?practiceId=
+ */
+router.get('/assumptions/economic-assumptions', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const payload = await getEconomicAssumptionsSummary(practiceId);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /assumptions/economic-assumptions error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load economic assumptions' });
+  }
+});
+
+/**
+ * POST /api/economics-engine/assumptions/economic-assumptions
+ * Body: { practiceId, assumptions }
+ */
+router.post('/assumptions/economic-assumptions', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.body?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const payload = await saveEconomicAssumptions(req.user.id, practiceId, req.body);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] POST /assumptions/economic-assumptions error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to save economic assumptions' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/conversion-probabilities?practiceId=
+ */
+router.get('/read/conversion-probabilities', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const payload = await getConversionProbabilitiesSummary(practiceId);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/conversion-probabilities error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load conversion probabilities' });
   }
 });
 

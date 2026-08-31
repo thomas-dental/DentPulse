@@ -4,21 +4,16 @@
  */
 
 import { Link } from 'react-router-dom';
-import { Check, Settings2 } from 'lucide-react';
+import { Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { useOrganization } from '@/hooks/useOrganization';
 import { ClinicianRemunerationProfiles } from '@/components/patient-economics/ClinicianRemunerationProfiles';
+import { PeEconomicAssumptionsPanel } from '@/components/patient-economics/PeEconomicAssumptionsPanel';
+import { PeConversionProbabilitiesPanel } from '@/components/patient-economics/PeConversionProbabilitiesPanel';
+import { PeProvenanceConfidencePanel } from '@/components/patient-economics/PeProvenanceConfidencePanel';
 import { PeNhsUdaContractSettings } from '@/components/patient-economics/PeNhsUdaContractSettings';
 import { cn } from '@/lib/utils';
+import { PE_CTX_BANNER_CLASS } from '@/lib/peVisualTokens';
 
 function SettingsCard({
   title,
@@ -70,39 +65,13 @@ function SetRow({
   );
 }
 
-function ProvenanceChip({ kind }: { kind: 'dentally' | 'derived' | 'modelled' | 'external' }) {
-  const styles = {
-    dentally: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    derived: 'bg-primary/10 text-primary border-primary/25',
-    modelled: 'bg-amber-50 text-amber-800 border-amber-200',
-    external: 'bg-violet-50 text-violet-700 border-violet-200',
-  };
-  const labels = {
-    dentally: 'Dentally',
-    derived: 'Derived',
-    modelled: 'Modelled',
-    external: 'External',
-  };
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold',
-        styles[kind],
-      )}
-    >
-      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
-      {labels[kind]}
-    </span>
-  );
-}
-
 export function PatientEconomicsSettingsTab() {
   const { organizationId, isLoading: orgLoading } = useOrganization();
 
   return (
     <div className="space-y-5">
       {!orgLoading && !organizationId && (
-        <div className="rounded-[10px] border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-muted-foreground">
+        <div className={PE_CTX_BANNER_CLASS}>
           Select a practice to configure economic assumptions.
         </div>
       )}
@@ -110,83 +79,21 @@ export function PatientEconomicsSettingsTab() {
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <SettingsCard
           title="Economic Assumptions"
-          subtitle="Used to compute contribution where live cost feeds aren't connected — the “only a few assumptions” layer"
+          subtitle="Practice-level thresholds and windows — defaults match production behaviour until you change them"
           primary
+          className="xl:col-span-2"
         >
           <ClinicianRemunerationProfiles organizationId={organizationId} />
-
-          <SetRow
-            label="Lab cost source"
-            description="Where treatment lab cost comes from."
-            control={
-              <Select defaultValue="standard" disabled>
-                <SelectTrigger className="h-8 w-[200px] text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="xero">Dentally item → Xero (Phase 2)</SelectItem>
-                  <SelectItem value="standard">Treatment standard cost</SelectItem>
-                </SelectContent>
-              </Select>
-            }
-          />
-
-          <SetRow
-            label="Material standard-cost library"
-            description="Per-treatment consumable cost (TPE library)."
-            control={
-              <Button type="button" variant="outline" size="sm" className="h-8 text-xs" disabled>
-                Edit · 48 treatments
-              </Button>
-            }
-          />
-
-          <SetRow
-            label="Membership service cost"
-            description="Annual expected delivery cost per member."
-            control={
-              <div className="flex items-center gap-1.5">
-                <span className="text-[13px] text-muted-foreground">£</span>
-                <Input className="h-8 w-20 text-xs" defaultValue="205" disabled />
-              </div>
-            }
-          />
+          <div className="mt-2 border-t border-border pt-1">
+            <PeEconomicAssumptionsPanel organizationId={organizationId} />
+          </div>
         </SettingsCard>
 
         <SettingsCard
           title="Conversion Probabilities"
-          subtitle="Weight the opportunity pipeline — never collapse gross & weighted"
+          subtitle="Commitment Rate–derived opportunity weighting (D16)"
         >
-          <SetRow
-            label="Auto-learn from your history"
-            description="Use each treatment's real planned→completed rate when the sample is large enough."
-            control={<Switch disabled defaultChecked />}
-          />
-          <SetRow
-            label="Implant"
-            description="Manual override when history is thin."
-            control={
-              <div className="flex items-center gap-1.5">
-                <Input className="h-8 w-[70px] text-xs" defaultValue="34" disabled />
-                <span className="text-xs text-muted-foreground">%</span>
-              </div>
-            }
-          />
-          <SetRow
-            label="Churn model"
-            description="Drives Contribution-at-Risk weighting."
-            control={
-              <Select defaultValue="recall" disabled>
-                <SelectTrigger className="h-8 w-[180px] text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="recall">Recall-gap based</SelectItem>
-                  <SelectItem value="behavioural">Behavioural (attendance + gap)</SelectItem>
-                </SelectContent>
-              </Select>
-            }
-          />
+          <PeConversionProbabilitiesPanel />
         </SettingsCard>
 
         <SettingsCard
@@ -194,36 +101,22 @@ export function PatientEconomicsSettingsTab() {
           subtitle="Every figure is tagged by where it comes from, not just how sure we are."
           primary
         >
-          <div className="mb-3 flex flex-wrap gap-2 rounded-[10px] bg-muted/50 p-3">
-            <ProvenanceChip kind="dentally" />
-            <ProvenanceChip kind="derived" />
-            <ProvenanceChip kind="modelled" />
-            <ProvenanceChip kind="external" />
-          </div>
-          <SetRow
-            label="Associate, lab, materials, CAC"
-            description="Contracts, Xero / QBO, marketing spend. Not from Dentally."
-            control={<ProvenanceChip kind="external" />}
-          />
-          <SetRow
-            label="Show provenance tags in UI"
-            description="Display the chip beside every computed figure."
-            control={<Switch disabled defaultChecked />}
-          />
+          <PeProvenanceConfidencePanel />
         </SettingsCard>
 
         <SettingsCard
           title="Status, Recall & Data Source"
-          subtitle="Definitions that drive the calculations"
+          subtitle="Definitions that drive the calculations — partial; see PE_SETTINGS_NOTES.md"
         >
+          <p className="mb-3 text-[11px] leading-relaxed text-muted-foreground">
+            Scheduling window and retention day thresholds live in Economic Assumptions. Full
+            integration health panel deferred.
+          </p>
           <SetRow
             label="Active window"
-            description="Seen within N months = Active."
+            description="Mockup placeholder — superseded by 4-tier retention (Economic Assumptions)."
             control={
-              <div className="flex items-center gap-1.5">
-                <Input className="h-8 w-16 text-xs" defaultValue="18" disabled />
-                <span className="text-xs text-muted-foreground">mo</span>
-              </div>
+              <span className="text-xs text-muted-foreground">See retention thresholds</span>
             }
           />
           <SetRow
@@ -254,16 +147,28 @@ export function PatientEconomicsSettingsTab() {
           subtitle="How NHS work is treated so it never distorts private contribution"
           className="xl:col-span-2"
         >
+          <p className="mb-3 text-[11px] leading-relaxed text-muted-foreground">
+            Contribution exclusion and separate UDA tracking are always enforced in the view and
+            Pulse UI. Clawback threshold and mixed-patient options deferred — see PE_SETTINGS_NOTES.md.
+          </p>
           <div className="grid gap-0 md:grid-cols-2">
             <SetRow
               label="Exclude UDA income from contribution"
               description="UDA is contract-value based, not margin-based."
-              control={<Switch disabled defaultChecked />}
+              control={
+                <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
+                  Always enforced
+                </span>
+              }
             />
             <SetRow
               label="Track UDA delivery separately"
               description="Delivered vs contracted UDAs in its own lens."
-              control={<Switch disabled defaultChecked />}
+              control={
+                <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
+                  Always enforced
+                </span>
+              }
             />
           </div>
 
@@ -274,16 +179,6 @@ export function PatientEconomicsSettingsTab() {
             <PeNhsUdaContractSettings organizationId={organizationId} />
           </div>
         </SettingsCard>
-      </div>
-
-      <div className="flex justify-end gap-2.5 pt-1">
-        <Button type="button" variant="outline" size="sm" disabled>
-          Reset
-        </Button>
-        <Button type="button" size="sm" className="gap-1.5" disabled>
-          <Check className="h-3.5 w-3.5" />
-          Save changes
-        </Button>
       </div>
     </div>
   );

@@ -54,6 +54,10 @@ const {
   practiceNeedsReconnection,
 } = require('./sync/credentialsStatus');
 const { recordTick } = require('./sync/peTickHistory');
+const {
+  loadPeEconomicAssumptions,
+  discountFactorFromAssumptions,
+} = require('./peEconomicAssumptions');
 
 const HORIZON_YEARS = 5;
 const DISCOUNT_RATE = 0.10;
@@ -123,15 +127,22 @@ function recallSignals(dentistRecall, hygienistRecall, today) {
   return { factor: 1.0, score: 90 };
 }
 
-function computeScores(row, visitsLast12m, today) {
+function computeScores(row, visitsLast12m, today, scoreAssumptions = {}) {
+  const visitsCap = scoreAssumptions.visitsPerYearCap ?? 6;
+  const minVisitsActive = scoreAssumptions.minVisitsPerYearActive ?? 0.5;
+  const inactiveFactor = scoreAssumptions.inactiveRetentionFactor ?? 0.3;
+  const fullEngagementVisits = scoreAssumptions.fullEngagementVisitsPerYear ?? 2;
+  const planBonusPts = scoreAssumptions.qualityScorePlanBonus ?? 5;
+  const discountFactor = scoreAssumptions.discountFactor ?? DISCOUNT_FACTOR;
+
   const contribution = num(row.contribution);
   const invoiceCount = Math.max(1, num(row.invoice_count));
   const perVisit = contribution / invoiceCount;
-  const visitsPerYear = Math.min(visitsLast12m, 6);
+  const visitsPerYear = Math.min(visitsLast12m, visitsCap);
   const isActive = row.is_active === true;
 
   const annualRunRate = isActive
-    ? perVisit * Math.max(visitsPerYear, 0.5)
+    ? perVisit * Math.max(visitsPerYear, minVisitsActive)
     : perVisit * visitsPerYear;
 
   const recall = recallSignals(
@@ -139,20 +150,20 @@ function computeScores(row, visitsLast12m, today) {
     row.pt_hygienist_recall_date,
     today,
   );
-  const activeFactor = isActive ? 1.0 : 0.3;
-  const engagementFactor = Math.min(visitsPerYear / 2, 1.0);
+  const activeFactor = isActive ? 1.0 : inactiveFactor;
+  const engagementFactor = Math.min(visitsPerYear / fullEngagementVisits, 1.0);
   const retentionMultiplier = activeFactor * recall.factor * engagementFactor;
 
-  const futureValue = annualRunRate * retentionMultiplier * DISCOUNT_FACTOR;
+  const futureValue = annualRunRate * retentionMultiplier * discountFactor;
   const cltvProjection = Math.round((contribution + futureValue) * 100) / 100;
 
   const dataQuality =
     row.confidence_score != null
       ? num(row.confidence_score)
       : num(row.pct_complete) || 50;
-  const engagement = Math.min((visitsPerYear / 2) * 100, 100);
+  const engagement = Math.min((visitsPerYear / fullEngagementVisits) * 100, 100);
   const activeScore = isActive ? 100 : 25;
-  const planBonus = row.pt_payment_plan_id != null ? 5 : 0;
+  const planBonus = row.pt_payment_plan_id != null ? planBonusPts : 0;
 
   let qualityScore = Math.round(
     0.3 * dataQuality +
@@ -272,6 +283,15 @@ async function upsertScores(practiceId, rows, computedAt) {
  * @returns {Promise<{ practiceId: string, patients: number, upserted: number, computedAt: string }>}
  */
 async function computeModelledScoresForPractice(practiceId) {
+  const assumptions = await loadPeEconomicAssumptions(practiceId);
+  const scoreAssumptions = {
+    visitsPerYearCap: assumptions.modelledVisitsPerYearCap,
+    minVisitsPerYearActive: assumptions.modelledMinVisitsPerYearActive,
+    inactiveRetentionFactor: assumptions.modelledInactiveRetentionFactor,
+    fullEngagementVisitsPerYear: assumptions.modelledFullEngagementVisitsPerYear,
+    qualityScorePlanBonus: assumptions.modelledQualityScorePlanBonus,
+    discountFactor: discountFactorFromAssumptions(assumptions),
+  };
   const today = todayUtcDate();
   const sinceIso = `${twelveMonthsAgoUtcDate()}T00:00:00.000Z`;
   const computedAt = new Date().toISOString();
@@ -303,7 +323,7 @@ async function computeModelledScoresForPractice(practiceId) {
             ? String(row.pt_id)
             : null;
       const visits = ptIdKey ? visitCounts.get(ptIdKey) || 0 : 0;
-      const scores = computeScores(merged, visits, today);
+      const scores = computeScores(merged, visits, today, scoreAssumptions);
       scored.push({
         patient_id: row.patient_id,
         ...scores,

@@ -17,6 +17,7 @@ import {
 } from '@/services/integrations/patientEconomicsService';
 import type { PeRetentionStatus } from '@/lib/peRetentionConstants';
 import { PE_OPPORTUNITY_WEIGHTED_TIER_NOTE } from '@/lib/peRetentionConstants';
+import type { PeRetentionStatusTone } from '@/lib/peRetentionSegmentation';
 import { parseRecommendedAction } from '@/lib/peRecommendedAction';
 
 export type PatientInvoiceRow = {
@@ -61,7 +62,7 @@ export type RetentionStatus = {
   status: PeRetentionStatus;
   label: string;
   tier: string;
-  tone: 'healthy' | 'drifting' | 'lapsed' | 'active';
+  tone: PeRetentionStatusTone;
 };
 
 export type PatientFinancialRecordRow = PatientContributionRow & {

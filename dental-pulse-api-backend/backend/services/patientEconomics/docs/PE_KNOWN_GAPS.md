@@ -8,14 +8,14 @@ Last validated: 2026-08-28 against linked Supabase practice `10a0474f-4356-48e1-
 |--------|--------|------------------|
 | **Patient Economic Value (PEV)** | Proposed, business-confirmed for sprint | `cltv_projection` when Day 3 modelled row exists; else `contribution` only. Not `contribution + cltv`. See `pePatientEconomicValue.ts`, `patient_economic_value_tier_note` on `v_patient_contribution`. |
 | **Recommended action** | Rule table (not ML) | `peRecommendedAction.ts` + SQL CASE on `v_patient_contribution`. Thresholds: opp ≥ £500, quality ≥ 70 / &lt; 40. |
-| **Retention status** | Rule-based | Recall dates + visit gaps + `is_active`. Thresholds in migration `20260828140001` / `peRetentionConstants.ts`. |
+| **Retention status** | Rule-based | 4-tier `pe_retention_status()` on `v_patient_contribution` / `v_pe_retention_segment`. Thresholds in `pe_economic_assumptions` + `peRetentionSegmentation.ts`. |
 | **Modelled CLTV / Quality Score** | Heuristic job | `computePatientModelledScores.js` — 5yr run-rate @ 10%, not contractual methodology. |
 
 ## Partial / M6-dependent features
 
 | Feature | Tier | Gap |
 |---------|------|-----|
-| **Weighted opportunity** | Modelled (partial) | Single `default_opportunity_probability` from `pe_economic_assumptions` (default 0.35). Per-treatment / per-clinician weighting lands in **Value & Leakage (M6)**. UI shows `opportunity_weighted_tier_note`. |
+| **Weighted opportunity** | Modelled (learned) | Practice Commitment Rate (value within `commitment_rate_window_days`, default 30) × open pipeline gross. `commitmentRateLogic.js`. |
 | **Opportunity gross** | Derived | Event ledger `PLAN_CREATED` planned value for plans not currently scheduled and not `PLAN_COMPLETED`. Depends on ledger backfill quality (`plan_id`, `planned_value` in payload). |
 | **Membership service cost / CAC** | Modelled at invoice grain | Held at 0 on `v_invoice_contribution` until patient-level allocation. |
 | **Lab / materials at patient rollup** | Invoice-level tiers only | `v_patient_financial_record` does not expose aggregate `lab_cost_tier` / `material_cost_tier`; invoice table shows per-line tiers. |
@@ -35,10 +35,13 @@ Last validated: 2026-08-28 against linked Supabase practice `10a0474f-4356-48e1-
 
 | Screen | Primary query | Notes |
 |--------|---------------|--------|
-| Economic Pulse heroes / practice table | `v_practice_contribution`, `v_invoice_contribution` summary | Practice table chips from view `*_tier` columns. **Exception:** `useInvoiceContributionSummary` (Contribution vs Revenue card) hardcodes `revenueTier: Dentally` and `contributionTier: Derived` when aggregating invoices — not per-field view tiers. Hero card 1 uses `contributionStatusChip` from dominant provenance status. |
-| Patient List | `v_patient_contribution` | Data quality chip from `contribution_provenance_status` (not tier chips on £ columns). |
-| Patient Records roster + detail | `v_patient_financial_record` | Invoice drill-down still `v_invoice_contribution`. |
+| Economic Pulse heroes / practice table | `GET /api/economics-engine/read/invoice-contribution-summary` | Backend aggregates `v_invoice_contribution` + UDA lens. |
+| Patient List | `GET /api/economics-engine/read/patient-contribution-list` | Backend aggregates `v_patient_contribution` + 12mo metrics. |
+| Patient Records roster + detail | `GET /api/economics-engine/read/patient-financial-records` + `patient-financial-record` | Treatment lines / invoices via `/read/patient-treatment-lines` and `/read/patient-invoices`. |
 
-## Sprint validation reference patient
+## Settings UI (`/patients?tab=settings`)
+
+**Deferred / partial panels:** see **`PE_SETTINGS_NOTES.md`** — Status/Recall/Data Source (mostly superseded by Economic Assumptions + ops sync) and NHS/UDA toggles/clawback/mixed-patient (contract inputs live; remainder mock).
+
 
 **Douglas Clark** (`patient_id` `e00526e3-1550-420c-b264-674b15bfda9a`, `pt_id` 19014) — 4 invoices, mixed complete/partial, ledger opportunity £85, modelled scores present. Full trace in sprint validation report (2026-08-28).

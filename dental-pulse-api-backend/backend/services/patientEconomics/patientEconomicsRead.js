@@ -4,6 +4,12 @@
  */
 
 const { supabaseAdmin } = require('../../config/supabase');
+const { applyCommitmentOpportunityWeighting } = require('./opportunityCommitmentWeighting');
+const {
+  parseRetentionStatus,
+  parseRetentionStatusTier,
+  retentionDisplayFromRow,
+} = require('./peRetentionSegmentation');
 
 const PAGE_SIZE = 1000;
 const PATIENT_META_CHUNK = 500;
@@ -44,16 +50,6 @@ function parseProvenanceStatus(raw) {
   return 'complete';
 }
 
-function parseRetentionStatus(raw) {
-  const s = String(raw || 'active').toLowerCase();
-  if (s === 'drifting' || s === 'lapsed' || s === 'healthy') return s;
-  return 'active';
-}
-
-function parseRetentionStatusTier(raw) {
-  return String(raw || 'Derived') === 'Modelled' ? 'Modelled' : 'Derived';
-}
-
 function twelveMonthsAgoIsoDate() {
   const d = new Date();
   d.setMonth(d.getMonth() - 12);
@@ -92,26 +88,6 @@ function formatRecallHint(dentistRecall, hygienistRecall) {
   }
 
   return labels[0];
-}
-
-function retentionDisplayFromRow(status, tier) {
-  const label =
-    status === 'healthy'
-      ? 'Healthy'
-      : status === 'drifting'
-        ? 'Drifting'
-        : status === 'lapsed'
-          ? 'Lapsed'
-          : 'Active';
-  const tone =
-    status === 'healthy'
-      ? 'healthy'
-      : status === 'drifting'
-        ? 'drifting'
-        : status === 'lapsed'
-          ? 'lapsed'
-          : 'active';
-  return { status, label, tier, tone };
 }
 
 async function getPracticeName(practiceId) {
@@ -379,6 +355,7 @@ function mapContributionRowFromView(row, practiceName) {
       row.opportunity_weighted_tier_note != null
         ? String(row.opportunity_weighted_tier_note)
         : null,
+    opportunityWeightConfidence: 0,
     patientEconomicValue: num(row.patient_economic_value),
     patientEconomicValueTier: String(row.patient_economic_value_tier || 'Modelled'),
     patientEconomicValueTierNote:
@@ -589,7 +566,8 @@ async function fetchAllPatientContributionRows(practiceId, practiceName) {
     fetchContribution12moByPatient(practiceId),
     fetchCompletedVisits12moByPtId(practiceId),
   ]);
-  return attachTwelveMonthMetrics(withMeta, contribution12mo, visitsByPtId);
+  const withMetrics = attachTwelveMonthMetrics(withMeta, contribution12mo, visitsByPtId);
+  return applyCommitmentOpportunityWeighting(practiceId, withMetrics);
 }
 
 async function fetchAllFinancialRecordRows(practiceId, practiceName) {
@@ -618,7 +596,8 @@ async function fetchAllFinancialRecordRows(practiceId, practiceName) {
     offset += PAGE_SIZE;
   }
 
-  return enrichPatientMetadata(practiceId, all);
+  const withMeta = await enrichPatientMetadata(practiceId, all);
+  return applyCommitmentOpportunityWeighting(practiceId, withMeta);
 }
 
 async function fetchPatientInvoices(practiceId, patientId) {
@@ -916,7 +895,10 @@ async function getPatientFinancialRecord(practiceId, patientId) {
 
   if (patientErr) throw patientErr;
 
-  const row = mapFinancialRecordRow(recordRow, practiceName);
+  const [weightedRow] = await applyCommitmentOpportunityWeighting(practiceId, [
+    mapFinancialRecordRow(recordRow, practiceName),
+  ]);
+  const row = weightedRow;
   row.isActive = patientRow?.is_active === true;
   row.hasPaymentPlan = patientRow?.pt_payment_plan_id != null;
 

@@ -14,7 +14,6 @@ import {
   patientListSecondaryKpi,
   patientListTertiaryKpi,
   patientTypeLabel,
-  retentionListLabel,
   usePatientContributionListTable,
   type PatientContributionRow,
   type PatientListRetentionFilter,
@@ -22,6 +21,7 @@ import {
   type PatientListTypeFilter,
 } from '@/hooks/usePatientContributionList';
 import type { PeRetentionStatus } from '@/lib/peRetentionConstants';
+import { retentionListLabel } from '@/lib/peRetentionSegmentation';
 import { cn } from '@/lib/utils';
 
 const PAGE_SIZE_OPTIONS = [5, 25, 50, 100];
@@ -31,6 +31,7 @@ const RETENTION_FILTERS: { key: PatientListRetentionFilter; label: string }[] = 
   { key: 'active', label: 'Active' },
   { key: 'drifting', label: 'Drifting' },
   { key: 'lapsed', label: 'Lapsed' },
+  { key: 'effectively_lost', label: 'Effectively lost' },
 ];
 
 const TYPE_FILTERS: { key: PatientListTypeFilter; label: string }[] = [
@@ -172,11 +173,13 @@ function PatientTypeBadge({ row }: { row: PatientContributionRow }) {
 function RetentionListBadge({ status }: { status: PeRetentionStatus }) {
   const label = retentionListLabel(status);
   const cls =
-    label === 'Active'
+    status === 'active'
       ? 'border-success/30 bg-success-muted text-success'
-      : label === 'Drifting'
+      : status === 'drifting'
         ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
-        : 'border-danger/30 bg-danger-muted text-danger-strong';
+        : status === 'lapsed'
+          ? 'border-danger/30 bg-danger-muted text-danger-strong'
+          : 'border-muted-foreground/40 bg-muted text-muted-foreground';
 
   return (
     <span
@@ -264,7 +267,6 @@ export function PatientListDirectory() {
     sortable?: boolean;
   }[] = [
     { key: 'patientName', label: 'Patient', align: 'left', sortable: true },
-    { key: 'ptId', label: 'ID', align: 'left', sortable: true },
     { key: 'practice', label: 'Practice', align: 'left', sortable: false },
     { key: 'type', label: 'Type', align: 'left', sortable: false },
     { key: 'status', label: 'Status', align: 'left', sortable: false },
@@ -334,7 +336,7 @@ export function PatientListDirectory() {
             <Input
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Search patient / ID…"
+              placeholder="Search patient…"
               className="pl-9"
               disabled={isLoading}
             />
@@ -501,12 +503,9 @@ export function PatientListDirectory() {
                   return (
                     <tr
                       key={row.patientId}
-                      className="border-b border-border/60 last:border-b-0 hover:bg-muted/30"
+                      className="border-b border-border/60 last:border-b-0 hover:bg-primary/[0.04]"
                     >
                       <td className="px-3 py-3">{nameCell}</td>
-                      <td className="px-3 py-3 tabular-nums text-muted-foreground">
-                        {row.ptId != null ? row.ptId : '—'}
-                      </td>
                       <td className="px-3 py-3 text-foreground">{row.practiceName}</td>
                       <td className="px-3 py-3">
                         <PatientTypeBadge row={row} />

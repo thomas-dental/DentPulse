@@ -23,31 +23,26 @@ import {
   type PracticeSortKey,
 } from '@/hooks/usePracticeContributionRollup';
 import { cn } from '@/lib/utils';
+import { PE_CTX_BANNER_CLASS } from '@/lib/peVisualTokens';
 import { PatientEconomicsSettingsTab } from '@/pages/patient-economics/PatientEconomicsSettingsTab';
 import { PatientListDirectory } from '@/pages/patient-economics/PatientListDirectory';
 import { PatientFinancialRecords } from '@/pages/patient-economics/PatientFinancialRecords';
+import { ValueLeakage } from '@/pages/patient-economics/ValueLeakage';
+import { GrowthLevers } from '@/pages/patient-economics/GrowthLevers';
+import { GoalSettings } from '@/pages/patient-economics/GoalSettings';
+import { Invoices } from '@/pages/patient-economics/Invoices';
+import { RetentionReactivation } from '@/pages/patient-economics/RetentionReactivation';
+import {
+  ProvenanceChip,
+  tierToChip,
+  type ProvenanceKind,
+} from '@/components/patient-economics/ProvenanceChip';
+import {
+  useEconomicPulseMetrics,
+  type EconomicPulseMetrics,
+} from '@/hooks/useEconomicPulseMetrics';
 
-type ProvenanceKind =
-  | 'dentally'
-  | 'derived'
-  | 'modelled'
-  | 'external'
-  | 'pending'
-  | 'partial_no_practitioner'
-  | 'partial_missing_rate'
-  /** @deprecated Prefer partial_no_practitioner / partial_missing_rate */
-  | 'partial';
 type HeroTone = 'default' | 'opp' | 'risk' | 'conv' | 'qual';
-
-function tierToChip(
-  tier: string | null | undefined,
-): Extract<ProvenanceKind, 'dentally' | 'derived' | 'modelled' | 'external'> {
-  const t = String(tier || '').toLowerCase();
-  if (t === 'dentally') return 'dentally';
-  if (t === 'modelled') return 'modelled';
-  if (t === 'external') return 'external';
-  return 'derived';
-}
 
 function contributionStatusChip(
   status: InvoiceContributionSummary['dominantProvenanceStatus'] | undefined,
@@ -71,13 +66,7 @@ const PE_TABS: { key: string | null; label: string; to: string }[] = [
   { key: 'settings', label: 'Settings', to: '/patients?tab=settings' },
 ];
 
-const PENDING_TABS: Record<string, { title: string }> = {
-  'growth-levers': { title: 'Growth Levers' },
-  'value-leakage': { title: 'Value & Leakage' },
-  retention: { title: 'Retention & Reactivation' },
-  invoices: { title: 'Invoices' },
-  'goal-settings': { title: 'Goal Settings' },
-};
+const PENDING_TABS: Record<string, { title: string }> = {};
 
 const PE_TAB_KEYS = new Set(PE_TABS.map((t) => t.key).filter(Boolean) as string[]);
 
@@ -89,6 +78,10 @@ function formatGbp(value: number): string {
     maximumFractionDigits: abs >= 1000 ? 0 : 2,
   }).format(abs);
   return value < 0 ? `−${formatted}` : formatted;
+}
+
+function formatPct(rate: number): string {
+  return `${Math.round(rate * 100)}%`;
 }
 
 function formatGbpCompact(value: number): string {
@@ -359,63 +352,6 @@ function RevenueMixCard({
   );
 }
 
-function ProvenanceChip({ kind }: { kind: ProvenanceKind }) {
-  if (kind === 'pending') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
-        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/70" />
-        Pending
-      </span>
-    );
-  }
-  if (kind === 'partial_no_practitioner') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:text-amber-200">
-        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-        No practitioner
-      </span>
-    );
-  }
-  if (kind === 'partial_missing_rate' || kind === 'partial') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:text-amber-200">
-        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-        {kind === 'partial' ? 'Partial data' : 'Missing rate'}
-      </span>
-    );
-  }
-  if (kind === 'dentally') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[11px] font-semibold text-sky-800 dark:text-sky-200">
-        <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
-        Dentally
-      </span>
-    );
-  }
-  if (kind === 'modelled') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-900 dark:text-amber-100">
-        <span className="h-1.5 w-1.5 rounded-full bg-amber-600" />
-        Modelled
-      </span>
-    );
-  }
-  if (kind === 'external') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[11px] font-semibold text-violet-800 dark:text-violet-200">
-        <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
-        External
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
-      <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-      Derived
-    </span>
-  );
-}
-
 /** Step 6 — distinct missing_practitioner vs missing_rate copy (not generic “incomplete”). */
 function PartialDataBanner({
   summary,
@@ -516,7 +452,7 @@ function HeroCard({
         {question}
       </div>
       <div className="mt-2 min-h-[2.5rem]">{children}</div>
-      <div className="mt-2 text-[12.5px] leading-relaxed text-muted-foreground">{subtitle}</div>
+      <div className="mt-2 text-[11.5px] leading-relaxed text-muted-foreground">{subtitle}</div>
     </div>
   );
 }
@@ -615,40 +551,101 @@ function PendingChartPlaceholder({ height = 220 }: { height?: number }) {
   );
 }
 
-function OpportunityActionsPending() {
+function OpportunityActions({ metrics, isLoading }: { metrics: EconomicPulseMetrics | null; isLoading: boolean }) {
+  const highValueThreshold =
+    metrics != null
+      ? metrics.highValueThresholdGbp.toLocaleString('en-GB', { maximumFractionDigits: 0 })
+      : '1,000';
+
   const priorities = [
     {
       label: 'Priority 1 · Retention',
-      title: 'High-value overdue patients',
-      description:
-        'Lapsed patients who previously generated £1,000+ contribution/yr. Prioritise reactivation.',
+      title:
+        metrics != null && metrics.highValueCount > 0
+          ? `${metrics.highValueCount.toLocaleString('en-GB')} high-value overdue patients`
+          : 'High-value overdue patients',
+      description: `Lapsed patients who previously generated £${highValueThreshold}+ contribution/yr. Prioritise reactivation.`,
+      amount:
+        metrics != null && metrics.retentionOpenAtRiskGbp > 0
+          ? formatGbpCompact(metrics.retentionOpenAtRiskGbp)
+          : metrics != null
+            ? formatGbp(0)
+            : null,
       metric: 'at risk',
+      pending: isLoading,
     },
     {
       label: 'Priority 2 · Commercial opportunity',
-      title: 'Planned > 60 days, unscheduled',
+      title:
+        metrics != null && metrics.plannedTotalValueGbp > 0
+          ? `${formatGbpCompact(metrics.plannedTotalValueGbp)} planned > 60 days, unscheduled`
+          : 'Planned > 60 days, unscheduled',
       description:
         'Private treatment planned with no future appointment linked. Chase to schedule.',
+      amount:
+        metrics?.plannedContributionGbp != null
+          ? formatGbpCompact(metrics.plannedContributionGbp)
+          : metrics != null && metrics.plannedTotalValueGbp > 0
+            ? formatGbpCompact(metrics.plannedTotalValueGbp)
+            : metrics != null
+              ? formatGbp(0)
+              : null,
       metric: 'contribution',
+      pending: isLoading,
     },
     {
       label: 'Priority 3 · Billing leakage',
       title: 'Completed treatment not yet charged',
       description:
-        'Courses completed in Dentally but no invoice raised yet. Charge them.',
+        metrics != null && metrics.billingItemCount > 0
+          ? `${metrics.billingItemCount.toLocaleString('en-GB')} courses worth ${formatGbpCompact(metrics.billingRevenueGapGbp)} are completed in Dentally but no invoice has been raised. Charge them.`
+          : 'Courses completed in Dentally but no invoice raised yet. Charge them.',
+      amount:
+        metrics?.billingContributionGbp != null
+          ? formatGbpCompact(metrics.billingContributionGbp)
+          : metrics?.billingPending
+            ? null
+            : metrics != null
+              ? formatGbp(0)
+              : null,
       metric: 'contribution',
+      pending: isLoading || metrics?.billingPending === true,
     },
   ];
+
+  const breakdown =
+    metrics != null
+      ? [
+          metrics.opportunityWeighted > 0
+            ? `${formatGbpCompact(metrics.opportunityWeighted)} existing treatment`
+            : null,
+          metrics.retentionOpenAtRiskGbp > 0
+            ? `${formatGbpCompact(metrics.retentionOpenAtRiskGbp)} retention risk`
+            : null,
+          metrics.billingContributionGbp != null && metrics.billingContributionGbp > 0
+            ? `${formatGbpCompact(metrics.billingContributionGbp)} billing leakage`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : null;
 
   return (
     <div className="mt-5 rounded-[14px] border border-primary/25 bg-gradient-to-br from-primary/10 to-primary/[0.03] px-5 py-[18px]">
       <div className="mb-3.5 flex flex-wrap items-center justify-between gap-2">
         <div className="text-[15px] font-extrabold text-foreground">
           DentPulse has identified{' '}
-          <span className="text-muted-foreground/80">—</span> of patient economic opportunity
+          {isLoading ? (
+            <span className="text-muted-foreground/80">—</span>
+          ) : (
+            <b>{formatGbp(metrics?.totalIdentifiedGbp ?? 0)}</b>
+          )}{' '}
+          of patient economic opportunity
         </div>
         <span className="text-[12px] text-muted-foreground">
-          Calculating — full breakdown not yet available
+          {isLoading
+            ? 'Calculating — full breakdown not yet available'
+            : breakdown || 'No actionable opportunity identified yet'}
         </span>
       </div>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -664,9 +661,22 @@ function OpportunityActionsPending() {
             <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
               {item.description}
             </p>
-            <div className="mt-2 text-[19px] font-extrabold text-muted-foreground/70">
-              —{' '}
-              <span className="text-[12px] font-semibold text-muted-foreground">{item.metric}</span>
+            <div className="mt-2 text-[19px] font-extrabold text-foreground">
+              {item.pending || item.amount == null ? (
+                <>
+                  <span className="text-muted-foreground/70">—</span>{' '}
+                  <span className="text-[12px] font-semibold text-muted-foreground">
+                    {item.metric}
+                  </span>
+                </>
+              ) : (
+                <>
+                  {item.amount}{' '}
+                  <span className="text-[12px] font-semibold text-muted-foreground">
+                    {item.metric}
+                  </span>
+                </>
+              )}
             </div>
           </div>
         ))}
@@ -1169,9 +1179,11 @@ function PerPracticeEconomicsTable() {
 }
 
 function EconomicPulseBelowFold() {
+  const { metrics, isLoading } = useEconomicPulseMetrics();
+
   return (
     <>
-      <OpportunityActionsPending />
+      <OpportunityActions metrics={metrics} isLoading={isLoading} />
       <WhereTheValueSits />
       <PerPracticeEconomicsTable />
     </>
@@ -1200,11 +1212,15 @@ function PendingTabPanel({ title }: { title: string }) {
 function EconomicPulseHeroes() {
   const { data, isLoading, isError, error, refetch, isFetching } =
     useInvoiceContributionSummary();
+  const pulseMetrics = useEconomicPulseMetrics();
+  const metrics = pulseMetrics.metrics;
 
   const hasSyncedFinancials =
     !!data && (data.totalRevenue > 0 || data.revenueNhs > 0);
   const isEmpty =
     !!data && data.totalRevenue <= 0 && data.revenueNhs <= 0 && !isLoading;
+
+  const heroesLoading = isLoading || pulseMetrics.isLoading;
 
   return (
     <>
@@ -1224,7 +1240,7 @@ function EconomicPulseHeroes() {
       )}
 
       {isEmpty && !isError && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
+        <div className={cn(PE_CTX_BANNER_CLASS, 'flex-wrap justify-between')}>
           <div>
             <div className="font-semibold text-foreground">No synced financial data yet</div>
             <div className="mt-0.5 text-muted-foreground">
@@ -1245,7 +1261,7 @@ function EconomicPulseHeroes() {
         <PartialDataBanner summary={data} />
       )}
 
-      {isLoading ? (
+      {heroesLoading ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
           {Array.from({ length: 5 }).map((_, i) => (
             <div key={i} className="rounded-[14px] border border-border bg-card p-4 shadow-sm">
@@ -1291,62 +1307,129 @@ function EconomicPulseHeroes() {
             tone="opp"
             question="2 · Opportunity in your database"
             subtitle={
-              <>
-                Unrealised contribution (prob-weighted)
-                <br />
-                Calculating &nbsp;
-                <ProvenanceChip kind="pending" />
-              </>
+              metrics != null ? (
+                <>
+                  Unrealised contribution (prob-weighted)
+                  <br />
+                  Gross {formatGbpCompact(metrics.opportunityGross)} &nbsp;
+                  <ProvenanceChip kind={tierToChip(metrics.opportunityWeightedTier)} />
+                </>
+              ) : (
+                <>
+                  Unrealised contribution (prob-weighted)
+                  <br />
+                  Calculating &nbsp;
+                  <ProvenanceChip kind="pending" />
+                </>
+              )
             }
           >
-            <PendingValue />
+            {metrics != null ? (
+              <div className="text-[28px] font-extrabold tracking-tight text-[hsl(var(--chart-5))]">
+                {formatGbp(metrics.opportunityWeighted)}
+              </div>
+            ) : (
+              <PendingValue />
+            )}
           </HeroCard>
 
           <HeroCard
             tone="risk"
             question="3 · Value at risk"
             subtitle={
-              <>
-                Patient Contribution at Risk
-                <span className="align-super text-[9px]">™</span>
-                <br />
-                Calculating &nbsp;
-                <ProvenanceChip kind="pending" />
-              </>
+              metrics != null ? (
+                <>
+                  Patient Contribution at Risk
+                  <span className="align-super text-[9px]">™</span>
+                  <br />
+                  Overdue &amp; drifting patients &nbsp;
+                  <ProvenanceChip kind={tierToChip(metrics.retentionTier)} />
+                </>
+              ) : (
+                <>
+                  Patient Contribution at Risk
+                  <span className="align-super text-[9px]">™</span>
+                  <br />
+                  Calculating &nbsp;
+                  <ProvenanceChip kind="pending" />
+                </>
+              )
             }
           >
-            <PendingValue />
+            {metrics != null ? (
+              <div className="text-[28px] font-extrabold tracking-tight text-danger-strong">
+                {formatGbp(metrics.atRiskContributionGbp)}
+              </div>
+            ) : (
+              <PendingValue />
+            )}
           </HeroCard>
 
           <HeroCard
             tone="conv"
             question="4 · Conversion"
             subtitle={
-              <>
-                Commitment Rate
-                <span className="align-super text-[9px]">™</span> (planned→scheduled 30d)
-                <br />
-                Calculating &nbsp;
-                <ProvenanceChip kind="pending" />
-              </>
+              metrics != null ? (
+                <>
+                  Commitment Rate
+                  <span className="align-super text-[9px]">™</span> (planned→scheduled 30d)
+                  <br />
+                  <ProvenanceChip kind={tierToChip(metrics.commitmentRate30dTier)} />
+                </>
+              ) : (
+                <>
+                  Commitment Rate
+                  <span className="align-super text-[9px]">™</span> (planned→scheduled 30d)
+                  <br />
+                  Calculating &nbsp;
+                  <ProvenanceChip kind="pending" />
+                </>
+              )
             }
           >
-            <PendingValue />
+            {metrics != null ? (
+              <div className="text-[28px] font-extrabold tracking-tight text-warning">
+                {formatPct(metrics.commitmentRate30d)}
+              </div>
+            ) : (
+              <PendingValue />
+            )}
           </HeroCard>
 
           <HeroCard
             tone="qual"
             question="5 · Patient quality"
             subtitle={
-              <>
-                Avg annual contribution / projected LTV
-                <br />
-                Calculating &nbsp;
-                <ProvenanceChip kind="pending" />
-              </>
+              metrics != null ? (
+                <>
+                  Avg annual contribution &nbsp;
+                  <ProvenanceChip kind="derived" />
+                  <br />
+                  {metrics.projectedLtv != null
+                    ? `Projected LTV ${formatGbp(metrics.projectedLtv)}`
+                    : 'Projected LTV —'}{' '}
+                  &nbsp;
+                  <ProvenanceChip kind={tierToChip(metrics.projectedLtvTier)} />
+                </>
+              ) : (
+                <>
+                  Avg annual contribution / projected LTV
+                  <br />
+                  Calculating &nbsp;
+                  <ProvenanceChip kind="pending" />
+                </>
+              )
             }
           >
-            <PendingValue />
+            {metrics != null ? (
+              <div className="text-[28px] font-extrabold tracking-tight text-[hsl(var(--success))]">
+                {metrics.avgAnnualContribution != null
+                  ? formatGbp(metrics.avgAnnualContribution)
+                  : '—'}
+              </div>
+            ) : (
+              <PendingValue />
+            )}
           </HeroCard>
         </div>
       )}
@@ -1375,9 +1458,22 @@ export default function EconomicPulse() {
   const isSettingsTab = tab === 'settings';
   const isPatientListTab = tab === 'patient-list';
   const isPatientRecordsTab = tab === 'patient-records';
+  const isValueLeakageTab = tab === 'value-leakage';
+  const isGrowthLeversTab = tab === 'growth-levers';
+  const isInvoicesTab = tab === 'invoices';
+  const isGoalSettingsTab = tab === 'goal-settings';
+  const isRetentionTab = tab === 'retention';
   const patientId = searchParams.get('patientId')?.trim() ?? null;
   const pending =
-    tab && !isSettingsTab && !isPatientListTab && !isPatientRecordsTab
+    tab &&
+    !isSettingsTab &&
+    !isPatientListTab &&
+    !isPatientRecordsTab &&
+    !isValueLeakageTab &&
+    !isGrowthLeversTab &&
+    !isInvoicesTab &&
+    !isGoalSettingsTab &&
+    !isRetentionTab
       ? PENDING_TABS[tab]
       : null;
   const activeTab = tab && (PE_TAB_KEYS.has(tab) || tab === 'settings') ? tab : null;
@@ -1389,6 +1485,16 @@ export default function EconomicPulse() {
         ? patientId
           ? 'Patient Financial Record · Patients · DentPulse'
           : 'Patient Records · Patients · DentPulse'
+        : isValueLeakageTab
+          ? 'Value & Leakage · Patients · DentPulse'
+          : isGrowthLeversTab
+            ? 'Growth Levers · Patients · DentPulse'
+            : isInvoicesTab
+              ? 'Invoices · Patients · DentPulse'
+              : isGoalSettingsTab
+                ? 'Goal Settings · Patients · DentPulse'
+                : isRetentionTab
+                  ? 'Retention & Reactivation · Patients · DentPulse'
         : pending
           ? `${pending.title} · Patients · DentPulse`
           : 'Economic Pulse · Patients · DentPulse';
@@ -1408,6 +1514,16 @@ export default function EconomicPulse() {
             <PatientListDirectory />
           ) : isPatientRecordsTab ? (
             <PatientFinancialRecords />
+          ) : isValueLeakageTab ? (
+            <ValueLeakage />
+          ) : isGrowthLeversTab ? (
+            <GrowthLevers />
+          ) : isInvoicesTab ? (
+            <Invoices />
+          ) : isGoalSettingsTab ? (
+            <GoalSettings />
+          ) : isRetentionTab ? (
+            <RetentionReactivation />
           ) : pending ? (
             <PendingTabPanel title={pending.title} />
           ) : (

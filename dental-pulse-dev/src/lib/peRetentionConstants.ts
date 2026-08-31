@@ -1,23 +1,26 @@
 /**
- * Patient Economics retention thresholds — must stay aligned with
- * supabase/migrations/20260828140001_v_patient_contribution_retention_opportunity.sql
- *
- * Derived rules use synced Dentally / appointment facts directly.
- * Modelled rules apply explicit day thresholds (assumptions, not facts).
+ * Re-exports retention segmentation types/helpers.
+ * Rule table and thresholds: see peRetentionSegmentation.ts
  */
-export const PE_RETENTION_THRESHOLDS = {
-  /** Recall overdue beyond this → lapsed (Modelled). */
-  LAPSED_RECALL_OVERDUE_DAYS: 90,
-  /** No completed visit within this window → drifting (Modelled). */
-  DRIFTING_VISIT_GAP_DAYS: 182,
-  /** No completed visit beyond this → lapsed (Modelled). */
-  LAPSED_VISIT_GAP_DAYS: 365,
-} as const;
 
-export type PeRetentionStatus = 'active' | 'drifting' | 'lapsed' | 'healthy';
+export {
+  PE_RETENTION_DEFAULT_THRESHOLDS,
+  PE_RETENTION_THRESHOLDS,
+  PE_RETENTION_SEGMENT_ORDER,
+  PE_AT_RISK_RETENTION_STATUSES,
+  type PeRetentionStatus,
+  type PeRetentionStatusTier,
+  type PeRetentionStatusTone,
+  type RetentionDisplay,
+  parseRetentionStatus,
+  parseRetentionStatusTier,
+  retentionStatusLabel,
+  retentionListLabel,
+  retentionStatusTone,
+  retentionDisplayFromRow,
+  isAtRiskRetentionStatus,
+} from '@/lib/peRetentionSegmentation';
 
-export type PeRetentionStatusTier = 'Derived' | 'Modelled';
-
-/** Weighted opportunity provenance until M6 Value & Leakage. */
+/** Weighted opportunity provenance — learned Commitment Rate at API read. */
 export const PE_OPPORTUNITY_WEIGHTED_TIER_NOTE =
-  'Modelled — partial, full weighting arrives with Value & Leakage (M6)';
+  'Modelled — probability from historical Planned→Scheduled ledger conversions; confidence reflects sample size';
