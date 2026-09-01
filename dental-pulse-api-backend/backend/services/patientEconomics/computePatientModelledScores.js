@@ -223,6 +223,22 @@ async function loadVisitCountsByPtId(practiceId, sinceIso) {
 }
 
 async function loadPatientContributionPage(practiceId, offset) {
+  const select =
+    'practice_id, patient_id, pt_id, contribution, invoice_count, confidence_score';
+
+  const { data: factsData, error: factsError } = await supabaseAdmin
+    .from('pe_patient_contribution_facts')
+    .select(select)
+    .eq('practice_id', practiceId)
+    .range(offset, offset + PAGE_SIZE - 1);
+
+  if (!factsError && (factsData?.length > 0 || offset > 0)) {
+    return (factsData ?? []).map((row) => ({
+      ...row,
+      pct_complete: null,
+    }));
+  }
+
   const { data, error } = await supabaseAdmin
     .from('v_patient_contribution')
     .select(

@@ -8,6 +8,7 @@ import {
   type RecoveryFunnel,
   type RetentionRecoveryPracticePayload,
 } from '@/services/integrations/patientEconomicsService';
+import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
 
 export type RetentionRecoveryLoop = {
   contextPracticeId: string;
@@ -118,6 +119,7 @@ export function useRetentionRecoveryLoop() {
   return useQuery({
     queryKey: ['retention-recovery-loop', organizationId],
     enabled: !!organizationId,
+    staleTime: PE_READ_STALE_MS,
     queryFn: async (): Promise<RetentionRecoveryLoop> => {
       const body = await fetchRetentionRecoveryLoopApi(organizationId!);
       const groupRaw = body.group as Record<string, unknown>;

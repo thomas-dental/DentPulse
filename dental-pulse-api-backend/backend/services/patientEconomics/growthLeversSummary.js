@@ -25,7 +25,9 @@ const {
 } = require('./patientLifetimeLogic');
 
 const PAGE_SIZE = 1000;
-const PATIENT_CHUNK = 200;
+const PATIENT_CHUNK = 100;
+const { queryInPatientChunks } = require('./pePatientQueryChunks');
+const { withPeReadCache } = require('./peReadCache');
 
 async function loadGrowthLeversTrailingMonths(practiceId) {
   const { loadPeEconomicAssumptions } = require('./peEconomicAssumptions');
@@ -50,64 +52,88 @@ async function countActivePatients(practiceId, locationId = null) {
 }
 
 async function loadCompletedVisits(practiceId, sinceDate, locationId = null) {
-  const sinceIso = `${sinceDate}T00:00:00`;
-  let total = 0;
-  const byMonth = new Map();
-  let offset = 0;
+  const { data, error } = await supabaseAdmin.rpc('pe_growth_levers_facts', {
+    p_practice_id: practiceId,
+    p_since_date: sinceDate,
+    p_location_id: locationId,
+  });
 
-  for (let page = 0; page < 200; page++) {
-    let query = supabaseAdmin
-      .from('appointments')
-      .select('apmt_completed_at, apmt_state')
-      .eq('organization_id', practiceId)
-      .gte('apmt_completed_at', sinceIso);
-
-    if (locationId) query = query.eq('location_id', locationId);
-
-    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
-
-    if (error) throw new Error(`appointments visits: ${error.message}`);
-
-    const batch = data ?? [];
-    for (const row of batch) {
-      if (!isCompletedAppointment(row)) continue;
-      total += 1;
-      const completedAt = row.apmt_completed_at;
-      if (!completedAt) continue;
-      const key = monthKeyFromIsoDate(String(completedAt));
-      byMonth.set(key, (byMonth.get(key) ?? 0) + 1);
+  if (!error && data) {
+    const byMonth = new Map();
+    const visitsObj = data.visits_by_month ?? {};
+    for (const [key, value] of Object.entries(visitsObj)) {
+      byMonth.set(key, num(value));
     }
-
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+    return { total: num(data.total_completed_visits), byMonth };
   }
 
-  return { total, byMonth };
+  if (error) {
+    console.error(
+      `[growthLevers] pe_growth_levers_facts failed for ${practiceId}: ${error.message}`,
+    );
+  }
+  return { total: 0, byMonth: new Map() };
 }
 
-async function loadRevenuePrivatePlan(practiceId, sinceDate, patientUuids = null) {
+function num(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+async function loadRevenuePrivatePlan(practiceId, sinceDate, locationId = null) {
+  const { data, error } = await supabaseAdmin.rpc('pe_growth_levers_facts', {
+    p_practice_id: practiceId,
+    p_since_date: sinceDate,
+    p_location_id: locationId,
+  });
+
+  if (!error && data) {
+    const byMonth = new Map();
+    const revenueObj = data.revenue_by_month ?? {};
+    for (const [key, value] of Object.entries(revenueObj)) {
+      byMonth.set(key, num(value));
+    }
+    return { total: round2(num(data.total_revenue_private_plan)), byMonth };
+  }
+
   let total = 0;
   const byMonth = new Map();
   let offset = 0;
 
-  if (patientUuids && patientUuids.length === 0) {
-    return { total: round2(0), byMonth };
-  }
-
   for (let page = 0; page < 200; page++) {
     let query = supabaseAdmin
-      .from('v_invoice_contribution')
-      .select('invoice_date, revenue_private_plan')
+      .from('pe_invoice_contribution_facts')
+      .select('invoice_date, revenue_private_plan, patient_id')
       .eq('practice_id', practiceId)
       .gte('invoice_date', sinceDate);
 
-    if (patientUuids) query = query.in('patient_id', patientUuids);
+    const { data: batchData, error: batchError } = await query.range(offset, offset + PAGE_SIZE - 1);
 
-    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
+    if (batchError && batchError.code === '42P01') {
+      query = supabaseAdmin
+        .from('v_invoice_contribution')
+        .select('invoice_date, revenue_private_plan, patient_id')
+        .eq('practice_id', practiceId)
+        .gte('invoice_date', sinceDate);
+      const fallback = await query.range(offset, offset + PAGE_SIZE - 1);
+      if (fallback.error) throw new Error(`v_invoice_contribution revenue: ${fallback.error.message}`);
+      const batch = fallback.data ?? [];
+      for (const row of batch) {
+        const revenue = Number(row.revenue_private_plan) || 0;
+        if (revenue <= 0) continue;
+        total += revenue;
+        const key = monthKeyFromIsoDate(String(row.invoice_date ?? ''));
+        if (!key || key.length < 7) continue;
+        byMonth.set(key, (byMonth.get(key) ?? 0) + revenue);
+      }
+      if (batch.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+      continue;
+    }
 
-    if (error) throw new Error(`v_invoice_contribution revenue: ${error.message}`);
+    if (batchError) throw new Error(`pe_invoice_contribution_facts revenue: ${batchError.message}`);
 
-    const batch = data ?? [];
+    const batch = batchData ?? [];
     for (const row of batch) {
       const revenue = Number(row.revenue_private_plan) || 0;
       if (revenue <= 0) continue;
@@ -157,36 +183,24 @@ async function loadActivePatients(practiceId, locationId = null) {
 
 async function loadFirstCompletedVisitByPtId(practiceId, locationId = null) {
   const map = new Map();
-  let offset = 0;
+  const { data, error } = await supabaseAdmin.rpc('pe_first_completed_visit_by_pt', {
+    p_practice_id: practiceId,
+    p_location_id: locationId,
+  });
 
-  for (let page = 0; page < 300; page++) {
-    let query = supabaseAdmin
-      .from('appointments')
-      .select('apmt_patient_id, apmt_completed_at, apmt_state')
-      .eq('organization_id', practiceId)
-      .not('apmt_completed_at', 'is', null);
-
-    if (locationId) query = query.eq('location_id', locationId);
-
-    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
-
-    if (error) throw new Error(`appointments first visit: ${error.message}`);
-
-    const batch = data ?? [];
-    for (const row of batch) {
-      if (!isCompletedAppointment(row)) continue;
-      const ptId = row.apmt_patient_id;
-      if (ptId == null) continue;
-      const key = String(ptId);
-      const date = String(row.apmt_completed_at).slice(0, 10);
-      const prev = map.get(key);
-      if (!prev || date < prev) map.set(key, date);
+  if (!error && data && typeof data === 'object') {
+    for (const [ptId, dateVal] of Object.entries(data)) {
+      if (dateVal == null) continue;
+      map.set(String(ptId), String(dateVal).slice(0, 10));
     }
-
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+    return map;
   }
 
+  if (error) {
+    console.error(
+      `[growthLevers] pe_first_completed_visit_by_pt failed for ${practiceId}: ${error.message}`,
+    );
+  }
   return map;
 }
 
@@ -196,53 +210,95 @@ async function loadFirstInvoiceDateByPatientId(practiceId, patientUuids = null) 
 
   if (patientUuids && patientUuids.length === 0) return map;
 
-  for (let page = 0; page < 300; page++) {
-    let query = supabaseAdmin
-      .from('v_invoice_contribution')
-      .select('patient_id, invoice_date')
-      .eq('practice_id', practiceId)
-      .not('invoice_date', 'is', null);
+  const sourceTables = ['pe_invoice_contribution_facts', 'v_invoice_contribution'];
 
-    if (patientUuids) query = query.in('patient_id', patientUuids);
+  for (const table of sourceTables) {
+    let offset = 0;
+    let foundRows = false;
 
-    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
+    for (let page = 0; page < 300; page++) {
+      if (patientUuids) {
+        const chunkRows = await queryInPatientChunks(patientUuids, (chunk) =>
+          supabaseAdmin
+            .from(table)
+            .select('patient_id, invoice_date')
+            .eq('practice_id', practiceId)
+            .not('invoice_date', 'is', null)
+            .in('patient_id', chunk),
+        );
+        foundRows = chunkRows.length > 0 || foundRows;
+        for (const row of chunkRows) {
+          if (row.patient_id == null || row.invoice_date == null) continue;
+          const key = String(row.patient_id);
+          const date = String(row.invoice_date).slice(0, 10);
+          const prev = map.get(key);
+          if (!prev || date < prev) map.set(key, date);
+        }
+        break;
+      }
 
-    if (error) throw new Error(`v_invoice_contribution first invoice: ${error.message}`);
+      const { data, error } = await supabaseAdmin
+        .from(table)
+        .select('patient_id, invoice_date')
+        .eq('practice_id', practiceId)
+        .not('invoice_date', 'is', null)
+        .range(offset, offset + PAGE_SIZE - 1);
 
-    const batch = data ?? [];
-    for (const row of batch) {
-      if (row.patient_id == null || row.invoice_date == null) continue;
-      const key = String(row.patient_id);
-      const date = String(row.invoice_date).slice(0, 10);
-      const prev = map.get(key);
-      if (!prev || date < prev) map.set(key, date);
+      if (error && error.code === '42P01') break;
+      if (error) throw new Error(`${table} first invoice: ${error.message}`);
+
+      const batch = data ?? [];
+      foundRows = batch.length > 0 || foundRows;
+      for (const row of batch) {
+        if (row.patient_id == null || row.invoice_date == null) continue;
+        const key = String(row.patient_id);
+        const date = String(row.invoice_date).slice(0, 10);
+        const prev = map.get(key);
+        if (!prev || date < prev) map.set(key, date);
+      }
+
+      if (batch.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
     }
 
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+    if (foundRows) break;
   }
 
   return map;
 }
 
-async function loadRetentionStatusByPatientId(practiceId, patientIds) {
+async function loadRetentionStatusByPatientId(practiceId) {
   const map = new Map();
-  if (patientIds.length === 0) return map;
+  let offset = 0;
+  const tables = ['pe_patient_contribution_facts', 'v_pe_retention_segment'];
 
-  for (let i = 0; i < patientIds.length; i += PATIENT_CHUNK) {
-    const chunk = patientIds.slice(i, i + PATIENT_CHUNK);
-    const { data, error } = await supabaseAdmin
-      .from('v_patient_contribution')
-      .select('patient_id, retention_status')
-      .eq('practice_id', practiceId)
-      .in('patient_id', chunk);
+  for (const table of tables) {
+    map.clear();
+    offset = 0;
+    let found = false;
 
-    if (error) throw new Error(`v_patient_contribution retention: ${error.message}`);
+    for (let page = 0; page < 500; page++) {
+      const { data, error } = await supabaseAdmin
+        .from(table)
+        .select('patient_id, retention_status')
+        .eq('practice_id', practiceId)
+        .range(offset, offset + PAGE_SIZE - 1);
 
-    for (const row of data ?? []) {
-      if (row.patient_id == null) continue;
-      map.set(String(row.patient_id), row.retention_status);
+      if (error && error.code === '42P01') break;
+      if (error) throw new Error(`${table} retention: ${error.message}`);
+
+      const batch = data ?? [];
+      if (batch.length > 0) found = true;
+      for (const row of batch) {
+        if (row.patient_id == null) continue;
+        map.set(String(row.patient_id), row.retention_status);
+      }
+
+      if (batch.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
     }
+
+    if (found) return map;
   }
 
   return map;
@@ -263,7 +319,7 @@ async function computePatientLifetimeMetrics(practiceId, locationId = null) {
     await Promise.all([
       loadFirstCompletedVisitByPtId(practiceId, locationId),
       loadFirstInvoiceDateByPatientId(practiceId, locationId ? patientIds : null),
-      loadRetentionStatusByPatientId(practiceId, patientIds),
+      loadRetentionStatusByPatientId(practiceId),
     ]);
 
   const tenureYearsList = [];
@@ -335,15 +391,25 @@ async function getGrowthLeversSummary(practiceId, options = {}) {
   const sinceDate = trailingSinceIsoDate(trailingMonths);
   const monthKeys = buildTrailingMonthKeys(sinceDate, trailingMonths);
 
-  const { loadPatientUuidsForLocation } = require('./peLocationScope');
-  const patientUuids = locationId
-    ? await loadPatientUuidsForLocation(practiceId, locationId)
-    : null;
+  return withPeReadCache(
+    'growth-levers-summary',
+    practiceId,
+    async () => buildGrowthLeversPayload(practiceId, locationId, trailingMonths, sinceDate, monthKeys),
+    { extra: locationId ?? 'all' },
+  );
+}
 
+async function buildGrowthLeversPayload(
+  practiceId,
+  locationId,
+  trailingMonths,
+  sinceDate,
+  monthKeys,
+) {
   const [activePatientCount, visits, revenue, lifetime] = await Promise.all([
     countActivePatients(practiceId, locationId),
     loadCompletedVisits(practiceId, sinceDate, locationId),
-    loadRevenuePrivatePlan(practiceId, sinceDate, patientUuids),
+    loadRevenuePrivatePlan(practiceId, sinceDate, locationId),
     computePatientLifetimeMetrics(practiceId, locationId),
   ]);
 

@@ -156,6 +156,13 @@ async function upsertPeEntityPage({
           existingByEntityId: ledgerState.existingByEntityId,
           existingLedgerKeys: ledgerState.existingLedgerKeys,
         });
+
+        const { refreshPeContributionFacts } = require('../refreshPeContributionFacts');
+        refreshPeContributionFacts(practiceId).catch((refreshErr) => {
+          console.error(
+            `[PE sync] refreshPeContributionFacts failed after invoices: ${refreshErr.message}`,
+          );
+        });
       }
       if (skips.length > 0) await logSkippedRecords(skips);
       return {

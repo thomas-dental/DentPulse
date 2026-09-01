@@ -502,6 +502,34 @@ export async function fetchInvoiceContributionSummaryApi(practiceId: string) {
   }>('/read/invoice-contribution-summary', { practiceId });
 }
 
+/** Economic Pulse hero row — combined invoice, leakage, retention, growth metrics. */
+export async function fetchEconomicPulseHeroApi(practiceId: string) {
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    invoiceSummary: Record<string, unknown>;
+    opportunityWeighted: number;
+    opportunityGross: number;
+    opportunityWeightedTier: string;
+    atRiskContributionGbp: number;
+    retentionTier: string;
+    commitmentRate30d: number;
+    commitmentRate30dTier: string;
+    avgAnnualContribution: number | null;
+    projectedLtv: number | null;
+    projectedLtvTier: string;
+  }>('/read/economic-pulse-hero', { practiceId });
+}
+
+/** Cost Impact / multi-site practice contribution rollup (backend RPCs). */
+export async function fetchPracticeContributionRollupApi() {
+  return economicsReadGet<{
+    success: true;
+    rollupMode: 'location' | 'practice';
+    rows: Array<Record<string, unknown>>;
+  }>('/read/practice-contribution-rollup', {});
+}
+
 /** Value & Leakage — planned private items unscheduled beyond threshold days. */
 export async function fetchPlannedUnscheduledLeakageApi(practiceId: string) {
   return economicsReadGet<{

@@ -12,7 +12,10 @@ const {
 } = require('./peRetentionSegmentation');
 
 const PAGE_SIZE = 1000;
-const PATIENT_META_CHUNK = 500;
+const PATIENT_META_CHUNK = 50;
+const PATIENT_IN_CHUNK = 100;
+const FINANCIAL_RECORD_IN_CHUNK = 25;
+const { queryInPatientChunks } = require('./pePatientQueryChunks');
 const FINANCIAL_RECORD_VIEW = 'v_patient_financial_record';
 
 const FINANCIAL_RECORD_SELECT =
@@ -326,6 +329,104 @@ async function loadUdaLens(practiceId) {
   };
 }
 
+function mapContributionRowFromFacts(row, practiceName) {
+  const ptIdRaw = row.pt_id;
+  const ptId =
+    ptIdRaw == null || ptIdRaw === ''
+      ? null
+      : Number.isFinite(Number(ptIdRaw))
+        ? Number(ptIdRaw)
+        : null;
+
+  return {
+    patientId: String(row.patient_id),
+    ptId,
+    patientName: displayName(null, ptId),
+    patientUuid: null,
+    practiceName,
+    locationId: null,
+    locationName: null,
+    isActive: false,
+    hasPaymentPlan: false,
+    contribution12mo: 0,
+    visits12mo: 0,
+    visitFreqPerYear: null,
+    valuePerVisit: null,
+    invoiceCount: num(row.invoice_count),
+    invoicesWithRevenue: 0,
+    revenuePrivatePlan: num(row.revenue_private_plan),
+    clinicianCost: 0,
+    directCost: 0,
+    contribution: num(row.contribution),
+    marginPct: null,
+    invoicesComplete: 0,
+    invoicesPartialNoPractitioner: 0,
+    invoicesPartialMissingRate: 0,
+    pctComplete: null,
+    contributionProvenanceStatus: 'complete',
+    revenueTier: 'Dentally',
+    clinicianCostTier: 'Derived',
+    contributionTier: 'Derived',
+    confidenceScore: row.confidence_score == null ? null : num(row.confidence_score),
+    retentionStatus: parseRetentionStatus(row.retention_status),
+    retentionStatusTier: 'Modelled',
+    opportunityGross: 0,
+    opportunityGrossTier: 'Derived',
+    opportunityWeighted: 0,
+    opportunityWeightedTier: 'Modelled',
+    opportunityWeightedTierNote: null,
+    opportunityWeightConfidence: 0,
+    patientEconomicValue: num(row.contribution),
+    patientEconomicValueTier: 'Derived',
+    patientEconomicValueTierNote: null,
+    qualityScore: null,
+    recommendedAction: null,
+    recommendedActionTier: null,
+    recommendedActionTierNote: null,
+    cltvProjection: null,
+    cltvTier: null,
+    qualityScoreTier: null,
+    modelledConfidenceScore: null,
+    modelledComputedAt: null,
+  };
+}
+
+async function loadFinancialRecordByPatientIds(practiceId, patientIds) {
+  const map = new Map();
+  if (patientIds.length === 0) return map;
+
+  const rows = await queryInPatientChunks(
+    patientIds,
+    (chunk) =>
+      supabaseAdmin
+        .from(FINANCIAL_RECORD_VIEW)
+        .select(FINANCIAL_RECORD_SELECT)
+        .eq('practice_id', practiceId)
+        .in('patient_id', chunk),
+    FINANCIAL_RECORD_IN_CHUNK,
+  );
+
+  for (const row of rows) {
+    if (row.patient_id == null) continue;
+    map.set(String(row.patient_id), row);
+  }
+  return map;
+}
+
+async function assertPatientFactsReady(practiceId) {
+  const { count, error } = await supabaseAdmin
+    .from('pe_patient_contribution_facts')
+    .select('*', { count: 'exact', head: true })
+    .eq('practice_id', practiceId);
+
+  if (error && error.code !== '42P01') throw error;
+  if (!count || count === 0) {
+    throw new Error(
+      'PE contribution facts not refreshed for this practice. Run: node backend/scripts/refreshPeContributionFacts.js <practice_id>',
+    );
+  }
+}
+
 function mapContributionRowFromView(row, practiceName) {
   const status = parseProvenanceStatus(row.contribution_provenance_status);
   const ptIdRaw = row.pt_id;
@@ -452,26 +553,37 @@ async function fetchContribution12moByPatient(practiceId) {
   const map = new Map();
   const since = twelveMonthsAgoIsoDate();
   let offset = 0;
+  const tables = ['pe_invoice_contribution_facts', 'v_invoice_contribution'];
 
-  for (let page = 0; page < 100; page++) {
-    const { data, error } = await supabaseAdmin
-      .from('v_invoice_contribution')
-      .select('patient_id, contribution')
-      .eq('practice_id', practiceId)
-      .gte('invoice_date', since)
-      .range(offset, offset + PAGE_SIZE - 1);
+  for (const table of tables) {
+    map.clear();
+    offset = 0;
+    let found = false;
 
-    if (error) throw error;
+    for (let page = 0; page < 100; page++) {
+      const { data, error } = await supabaseAdmin
+        .from(table)
+        .select('patient_id, contribution')
+        .eq('practice_id', practiceId)
+        .gte('invoice_date', since)
+        .range(offset, offset + PAGE_SIZE - 1);
 
-    const batch = data ?? [];
-    for (const row of batch) {
-      if (row.patient_id == null) continue;
-      const pid = String(row.patient_id);
-      map.set(pid, (map.get(pid) ?? 0) + num(row.contribution));
+      if (error && error.code === '42P01') break;
+      if (error) throw error;
+
+      const batch = data ?? [];
+      if (batch.length > 0) found = true;
+      for (const row of batch) {
+        if (row.patient_id == null) continue;
+        const pid = String(row.patient_id);
+        map.set(pid, (map.get(pid) ?? 0) + num(row.contribution));
+      }
+
+      if (batch.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
     }
 
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+    if (found) return map;
   }
 
   return map;
@@ -480,33 +592,26 @@ async function fetchContribution12moByPatient(practiceId) {
 async function fetchCompletedVisits12moByPtId(practiceId) {
   const map = new Map();
   const since = twelveMonthsAgoIsoDate();
-  let offset = 0;
 
-  for (let page = 0; page < 100; page++) {
-    const { data, error } = await supabaseAdmin
-      .from('appointments')
-      .select('apmt_patient_id, apmt_completed_at, apmt_state')
-      .eq('organization_id', practiceId)
-      .gte('apmt_completed_at', `${since}T00:00:00`)
-      .range(offset, offset + PAGE_SIZE - 1);
+  const { data, error } = await supabaseAdmin.rpc('pe_completed_visits_12mo_by_pt', {
+    p_practice_id: practiceId,
+    p_since_date: since,
+  });
 
-    if (error) throw error;
-
-    const batch = data ?? [];
-    for (const row of batch) {
-      const ptId = row.apmt_patient_id;
-      if (ptId == null || !Number.isFinite(Number(ptId))) continue;
-      const state = String(row.apmt_state ?? '').toLowerCase().trim();
-      if (state === 'cancelled' || state === 'did not attend' || state === 'dna') continue;
-      if (!row.apmt_completed_at && state !== 'completed') continue;
+  if (!error && data && typeof data === 'object') {
+    for (const [ptId, count] of Object.entries(data)) {
       const n = Number(ptId);
-      map.set(n, (map.get(n) ?? 0) + 1);
+      if (!Number.isFinite(n)) continue;
+      map.set(n, num(count));
     }
-
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+    return map;
   }
 
+  if (error) {
+    console.error(
+      `[patientEconomicsRead] pe_completed_visits_12mo_by_pt failed: ${error.message}`,
+    );
+  }
   return map;
 }
 
@@ -538,17 +643,25 @@ async function enrichPatientMetadata(practiceId, rows, locationNamesById, rollup
     const chunk = ids.slice(i, i + PATIENT_META_CHUNK);
     const { data, error } = await supabaseAdmin
       .from('patients')
-      .select('id, is_active, pt_payment_plan_id, location_id')
+      .select(
+        'id, is_active, pt_payment_plan_id, location_id, pt_first_name, pt_last_name, pt_id',
+      )
       .eq('organization_id', practiceId)
       .in('id', chunk);
 
     if (error) throw error;
 
     for (const row of data ?? []) {
+      const ptId =
+        row.pt_id != null && Number.isFinite(Number(row.pt_id)) ? Number(row.pt_id) : null;
+      const name =
+        `${String(row.pt_first_name || '').trim()} ${String(row.pt_last_name || '').trim()}`.trim();
       meta.set(String(row.id), {
         isActive: row.is_active === true,
         hasPaymentPlan: row.pt_payment_plan_id != null,
         locationId: row.location_id != null ? String(row.location_id) : null,
+        patientName: displayName(name, ptId),
+        ptId,
       });
     }
   }
@@ -565,6 +678,8 @@ async function enrichPatientMetadata(practiceId, rows, locationNamesById, rollup
 
     return {
       ...row,
+      patientName: m?.patientName ?? row.patientName,
+      ptId: m?.ptId ?? row.ptId,
       isActive: m?.isActive ?? false,
       hasPaymentPlan: m?.hasPaymentPlan ?? false,
       locationId,
@@ -578,25 +693,31 @@ async function fetchAllPatientContributionRows(practiceId, practiceName) {
   const rollupMode = resolveRollupModeFromLocations(locations);
   const locationNamesById = new Map(locations.map((loc) => [loc.id, loc.name]));
 
+  await assertPatientFactsReady(practiceId);
+
   const all = [];
   let offset = 0;
 
   for (let page = 0; page < 50; page++) {
     const { data, error } = await supabaseAdmin
-      .from('v_patient_contribution')
-      .select('*')
+      .from('pe_patient_contribution_facts')
+      .select(
+        'patient_id, pt_id, retention_status, contribution, revenue_private_plan, invoice_count, confidence_score',
+      )
       .eq('practice_id', practiceId)
       .order('contribution', { ascending: false })
       .range(offset, offset + PAGE_SIZE - 1);
 
     if (error) throw error;
 
-    const rows = data ?? [];
-    for (const row of rows) {
-      all.push(mapContributionRowFromView(row, practiceName));
+    const batch = data ?? [];
+    if (batch.length === 0) break;
+
+    for (const fact of batch) {
+      all.push(mapContributionRowFromFacts(fact, practiceName));
     }
 
-    if (rows.length < PAGE_SIZE) break;
+    if (batch.length < PAGE_SIZE) break;
     offset += PAGE_SIZE;
   }
 
@@ -799,82 +920,79 @@ async function fetchPatientTreatmentLines(practiceId, patientId, ptId) {
 }
 
 async function fetchInvoiceContributionSummary(practiceId) {
-  const [membershipPpIds, uda] = await Promise.all([
-    loadMembershipPlanIds(practiceId),
-    loadUdaLens(practiceId),
-  ]);
-  const memberPts = await loadMemberPatientPtIds(practiceId, membershipPpIds);
+  const { withPeReadCache } = require('./peReadCache');
 
-  let offset = 0;
-  let invoiceCount = 0;
-  let invoicesWithRevenue = 0;
-  let totalContribution = 0;
-  let totalRevenue = 0;
+  const [uda, rpcPayload] = await Promise.all([
+    loadUdaLens(practiceId),
+    withPeReadCache('invoice-contribution-summary', practiceId, async () => {
+      const { data, error } = await supabaseAdmin.rpc('pe_invoice_contribution_summary', {
+        p_practice_id: practiceId,
+      });
+      if (error) throw error;
+      return data ?? {};
+    }),
+  ]);
+
+  const invoiceCount = num(rpcPayload.invoice_count);
+  const invoicesWithRevenue = num(rpcPayload.invoices_with_revenue);
+  const totalContribution = num(rpcPayload.total_contribution);
+  const totalRevenue = num(rpcPayload.total_revenue);
+  const revenueNhs = num(rpcPayload.revenue_nhs);
+  const invoicesMissingPractitioner = num(rpcPayload.invoices_missing_practitioner);
+  const invoicesMissingRate = num(rpcPayload.invoices_missing_rate);
+  const revenueNoPractitioner = num(rpcPayload.revenue_no_practitioner);
+  const revenueMissingRate = num(rpcPayload.revenue_missing_rate);
+
   let revenuePrivate = 0;
   let revenuePlan = 0;
-  let revenueNhs = 0;
-  let invoicesMissingPractitioner = 0;
-  let invoicesMissingRate = 0;
-  let revenueNoPractitioner = 0;
-  let revenueMissingRate = 0;
-  const patientIds = new Set();
-  const patientsWithRevenue = new Set();
 
-  for (let i = 0; i < 200; i++) {
-    const { data, error } = await supabaseAdmin
-      .from('v_invoice_contribution')
-      .select(
-        'contribution, revenue_private_plan, revenue_nhs, nhs_excluded_amount, pt_id, patient_id, has_missing_practitioner, has_missing_rate, revenue_no_practitioner, revenue_missing_rate',
-      )
-      .eq('practice_id', practiceId)
-      .range(offset, offset + PAGE_SIZE - 1);
-
-    if (error) throw error;
-    const rows = data ?? [];
-    if (rows.length === 0) break;
-
-    for (const row of rows) {
-      invoiceCount += 1;
-      const privatePlan = num(row.revenue_private_plan);
-      const nhs = num(row.revenue_nhs ?? row.nhs_excluded_amount);
-      const contribution = num(row.contribution);
-      const ptId = num(row.pt_id);
-
-      totalRevenue += privatePlan;
-      totalContribution += contribution;
-      revenueNhs += nhs;
-
-      if (privatePlan > 0 && ptId && memberPts.has(ptId)) {
-        revenuePlan += privatePlan;
-      } else {
-        revenuePrivate += privatePlan;
-      }
-
-      if (privatePlan > 0) invoicesWithRevenue += 1;
-
-      if (row.has_missing_practitioner) {
-        invoicesMissingPractitioner += 1;
-        revenueNoPractitioner += num(row.revenue_no_practitioner);
-      }
-      if (row.has_missing_rate) {
-        invoicesMissingRate += 1;
-        revenueMissingRate += num(row.revenue_missing_rate);
-      }
-
-      const patientKey =
-        row.patient_id != null
-          ? String(row.patient_id)
-          : row.pt_id != null
-            ? `pt:${row.pt_id}`
-            : null;
-      if (patientKey) {
-        patientIds.add(patientKey);
-        if (privatePlan > 0) patientsWithRevenue.add(patientKey);
-      }
+  if (rpcPayload.revenue_private != null && rpcPayload.revenue_plan != null) {
+    revenuePrivate = num(rpcPayload.revenue_private);
+    revenuePlan = num(rpcPayload.revenue_plan);
+    if (revenuePrivate === 0 && revenuePlan === 0 && totalRevenue > 0) {
+      revenuePrivate = totalRevenue;
     }
+  } else {
+    const membershipPpIds = await loadMembershipPlanIds(practiceId);
+    const memberPts = await loadMemberPatientPtIds(practiceId, membershipPpIds);
 
-    if (rows.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+    if (memberPts.size > 0 && totalRevenue > 0) {
+      const factsTable = 'pe_invoice_contribution_facts';
+      let offset = 0;
+      for (let i = 0; i < 50; i++) {
+        const { data, error } = await supabaseAdmin
+          .from(factsTable)
+          .select('revenue_private_plan, pt_id')
+          .eq('practice_id', practiceId)
+          .gt('revenue_private_plan', 0)
+          .range(offset, offset + PAGE_SIZE - 1);
+
+        if (error && error.code === '42P01') break;
+        if (error) throw error;
+
+        const rows = data ?? [];
+        if (rows.length === 0) break;
+
+        for (const row of rows) {
+          const privatePlan = num(row.revenue_private_plan);
+          const ptId = num(row.pt_id);
+          if (privatePlan > 0 && ptId && memberPts.has(ptId)) {
+            revenuePlan += privatePlan;
+          } else {
+            revenuePrivate += privatePlan;
+          }
+        }
+
+        if (rows.length < PAGE_SIZE) break;
+        offset += PAGE_SIZE;
+      }
+
+      if (revenuePrivate === 0 && revenuePlan === 0) {
+        revenuePrivate = totalRevenue;
+      }
+    } else {
+      revenuePrivate = totalRevenue;
+    }
   }
 
   const hasMissingPractitioner = invoicesMissingPractitioner > 0;
@@ -888,8 +1006,8 @@ async function fetchInvoiceContributionSummary(practiceId) {
   return {
     invoiceCount,
     invoicesWithRevenue,
-    patientCount: patientIds.size,
-    patientsWithRevenue: patientsWithRevenue.size,
+    patientCount: num(rpcPayload.patient_count),
+    patientsWithRevenue: num(rpcPayload.patients_with_revenue),
     totalContribution,
     totalRevenue,
     totalNhsExcluded: revenueNhs,

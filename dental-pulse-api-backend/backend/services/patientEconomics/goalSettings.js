@@ -171,19 +171,31 @@ async function loadLocationOverrides(locationIds) {
 async function loadPatientRetentionRows(practiceId) {
   const rows = [];
   let offset = 0;
+  const tables = ['pe_patient_contribution_facts', 'v_pe_retention_segment'];
 
-  for (let i = 0; i < 100; i++) {
-    const { data, error } = await supabaseAdmin
-      .from('v_patient_contribution')
-      .select('patient_id, retention_status')
-      .eq('practice_id', practiceId)
-      .range(offset, offset + PAGE_SIZE - 1);
+  for (const table of tables) {
+    rows.length = 0;
+    offset = 0;
+    let found = false;
 
-    if (error) throw new Error(`v_patient_contribution: ${error.message}`);
-    const batch = data ?? [];
-    rows.push(...batch);
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+    for (let i = 0; i < 100; i++) {
+      const { data, error } = await supabaseAdmin
+        .from(table)
+        .select('patient_id, retention_status')
+        .eq('practice_id', practiceId)
+        .range(offset, offset + PAGE_SIZE - 1);
+
+      if (error && error.code === '42P01') break;
+      if (error) throw new Error(`${table}: ${error.message}`);
+
+      const batch = data ?? [];
+      if (batch.length > 0) found = true;
+      rows.push(...batch);
+      if (batch.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+    }
+
+    if (found) return rows;
   }
 
   return rows;
@@ -215,19 +227,36 @@ async function computeContributionPerActiveGbp(practiceId, retentionRows) {
 
   if (activeIds.length === 0) return null;
 
+  const { queryInPatientChunks } = require('./pePatientQueryChunks');
   let contributionSum = 0;
-  for (let i = 0; i < activeIds.length; i += 300) {
-    const chunk = activeIds.slice(i, i + 300);
-    const { data, error } = await supabaseAdmin
-      .from('v_invoice_contribution')
+
+  const chunkRows = await queryInPatientChunks(activeIds, (chunk) =>
+    supabaseAdmin
+      .from('pe_invoice_contribution_facts')
       .select('contribution')
       .eq('practice_id', practiceId)
       .gte('invoice_date', since)
-      .in('patient_id', chunk);
+      .in('patient_id', chunk),
+  );
 
-    if (error) throw new Error(`v_invoice_contribution: ${error.message}`);
-    for (const row of data ?? []) {
+  if (chunkRows.length > 0) {
+    for (const row of chunkRows) {
       contributionSum += num(row.contribution);
+    }
+  } else {
+    for (let i = 0; i < activeIds.length; i += 100) {
+      const chunk = activeIds.slice(i, i + 100);
+      const { data, error } = await supabaseAdmin
+        .from('v_invoice_contribution')
+        .select('contribution')
+        .eq('practice_id', practiceId)
+        .gte('invoice_date', since)
+        .in('patient_id', chunk);
+
+      if (error) throw new Error(`v_invoice_contribution: ${error.message}`);
+      for (const row of data ?? []) {
+        contributionSum += num(row.contribution);
+      }
     }
   }
 

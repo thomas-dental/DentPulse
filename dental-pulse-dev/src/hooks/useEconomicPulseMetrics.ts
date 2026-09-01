@@ -42,6 +42,19 @@ function avgContributionPerActive(practices: PeGoalPracticeRow[]): number | null
   return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
 }
 
+function avgAnnualFromGrowth(
+  growth: {
+    activePatientCount: number;
+    totalRevenuePrivatePlan: number;
+    trailingMonths: number;
+  } | null | undefined,
+): number | null {
+  if (!growth || growth.activePatientCount <= 0) return null;
+  const months = growth.trailingMonths > 0 ? growth.trailingMonths : 12;
+  const annualized = (growth.totalRevenuePrivatePlan / months) * 12;
+  return Math.round(annualized / growth.activePatientCount);
+}
+
 export function useEconomicPulseMetrics() {
   const leakageQuery = useValueLeakageSummary();
   const retentionQuery = useRetentionContributionAtRisk();
@@ -52,11 +65,65 @@ export function useEconomicPulseMetrics() {
   const journeyQuery = useTreatmentEconomicJourney();
   const assumptionsQuery = useEconomicAssumptions();
 
-  const metrics = useMemo((): EconomicPulseMetrics | null => {
+  const heroMetrics = useMemo((): EconomicPulseMetrics | null => {
     if (!leakageQuery.data || !retentionQuery.data) return null;
 
+    const growth = growthQuery.data;
+    const projectedLtv =
+      growth != null
+        ? computePatientEconomicValueGbp(
+            growth.visitFrequency,
+            growth.valuePerVisit,
+            growth.projectedLifetimeYears,
+            growth.tenureYears,
+          )
+        : null;
+
+    const avgFromGoals =
+      goalsQuery.data?.practices.length > 0
+        ? avgContributionPerActive(goalsQuery.data.practices)
+        : goalsQuery.data?.contextMetrics?.contributionPerActive.actual ?? null;
+
+    const avgAnnualContribution =
+      avgFromGoals ?? avgAnnualFromGrowth(growth);
+
+    return {
+      opportunityWeighted: leakageQuery.data.opportunityWeighted,
+      opportunityGross: leakageQuery.data.opportunityGross,
+      opportunityWeightedTier: leakageQuery.data.opportunityWeightedTier,
+      atRiskContributionGbp: retentionQuery.data.group.atRiskContributionGbp,
+      retentionTier: retentionQuery.data.group.tier,
+      commitmentRate30d: leakageQuery.data.commitmentRate30d,
+      commitmentRate30dTier: leakageQuery.data.commitmentRate30dTier,
+      avgAnnualContribution,
+      projectedLtv,
+      projectedLtvTier: growth?.projectedLifetimeTier ?? 'Modelled',
+      highValueCount: 0,
+      highValueThresholdGbp:
+        assumptionsQuery.data?.assumptions?.reactivationHighValueAtRiskGbp ?? 500,
+      retentionOpenAtRiskGbp: 0,
+      plannedContributionGbp: null,
+      plannedTotalValueGbp: 0,
+      plannedItemCount: 0,
+      billingContributionGbp: null,
+      billingRevenueGapGbp: 0,
+      billingItemCount: 0,
+      billingPending: true,
+      totalIdentifiedGbp: leakageQuery.data.opportunityWeighted,
+    };
+  }, [
+    leakageQuery.data,
+    retentionQuery.data,
+    growthQuery.data,
+    goalsQuery.data,
+    assumptionsQuery.data,
+  ]);
+
+  const metrics = useMemo((): EconomicPulseMetrics | null => {
+    if (!heroMetrics) return null;
+
     const highValueThresholdGbp =
-      assumptionsQuery.data?.reactivationHighValueAtRiskGbp ??
+      assumptionsQuery.data?.assumptions?.reactivationHighValueAtRiskGbp ??
       recoveryQuery.data?.group.minContributionThresholdGbp ??
       500;
 
@@ -86,38 +153,12 @@ export function useEconomicPulseMetrics() {
           ? 0
           : null;
 
-    const opportunityWeighted = leakageQuery.data.opportunityWeighted;
+    const opportunityWeighted = heroMetrics.opportunityWeighted;
     const retentionOpenAtRiskGbp = recoveryQuery.data?.group.openValueGbp ?? 0;
     const billingPart = billingContributionGbp ?? 0;
 
-    const growth = growthQuery.data;
-    const projectedLtv =
-      growth != null
-        ? computePatientEconomicValueGbp(
-            growth.visitFrequency,
-            growth.valuePerVisit,
-            growth.projectedLifetimeYears,
-            growth.tenureYears,
-          )
-        : null;
-
-    const practices = goalsQuery.data?.practices ?? [];
-    const avgAnnualContribution =
-      practices.length > 0
-        ? avgContributionPerActive(practices)
-        : goalsQuery.data?.contextMetrics?.contributionPerActive.actual ?? null;
-
     return {
-      opportunityWeighted,
-      opportunityGross: leakageQuery.data.opportunityGross,
-      opportunityWeightedTier: leakageQuery.data.opportunityWeightedTier,
-      atRiskContributionGbp: retentionQuery.data.group.atRiskContributionGbp,
-      retentionTier: retentionQuery.data.group.tier,
-      commitmentRate30d: leakageQuery.data.commitmentRate30d,
-      commitmentRate30dTier: leakageQuery.data.commitmentRate30dTier,
-      avgAnnualContribution,
-      projectedLtv,
-      projectedLtvTier: growth?.projectedLifetimeTier ?? 'Modelled',
+      ...heroMetrics,
       highValueCount: highValueOpen.length,
       highValueThresholdGbp,
       retentionOpenAtRiskGbp,
@@ -131,25 +172,26 @@ export function useEconomicPulseMetrics() {
       totalIdentifiedGbp: opportunityWeighted + retentionOpenAtRiskGbp + billingPart,
     };
   }, [
-    leakageQuery.data,
-    retentionQuery.data,
+    heroMetrics,
     recoveryQuery.data,
-    growthQuery.data,
     plannedQuery.data,
-    goalsQuery.data,
     journeyQuery.data,
     journeyQuery.isLoading,
     assumptionsQuery.data,
   ]);
 
-  const isLoading =
+  const heroMetricsLoading =
     leakageQuery.isLoading ||
     retentionQuery.isLoading ||
+    growthQuery.isLoading;
+
+  const extendedMetricsLoading =
     recoveryQuery.isLoading ||
-    growthQuery.isLoading ||
     plannedQuery.isLoading ||
     goalsQuery.isLoading ||
     journeyQuery.isLoading;
+
+  const isLoading = heroMetricsLoading || extendedMetricsLoading;
 
   const isError =
     leakageQuery.isError ||
@@ -158,7 +200,10 @@ export function useEconomicPulseMetrics() {
 
   return {
     metrics,
+    heroMetrics,
     isLoading,
+    heroMetricsLoading,
+    extendedMetricsLoading,
     isError,
     queries: {
       leakageQuery,

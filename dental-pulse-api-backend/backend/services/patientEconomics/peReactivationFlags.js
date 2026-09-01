@@ -26,6 +26,7 @@ const {
 } = require('./peReactivationWorklistLogic');
 
 const PAGE_SIZE = 1000;
+const { queryInPatientChunks } = require('./pePatientQueryChunks');
 const AT_RISK_STATUSES = new Set(['drifting', 'lapsed', 'effectively_lost']);
 const DERIVED_TIER = 'Derived';
 const RECOVERY_TIER_NOTE =
@@ -151,27 +152,37 @@ async function loadPracticeNames(practiceIds) {
 async function fetchTrailingContributionByPatient(practiceId, trailingMonths) {
   const map = new Map();
   const since = trailingSinceIsoDate(trailingMonths);
-  let offset = 0;
+  const tables = ['pe_invoice_contribution_facts', 'v_invoice_contribution'];
 
-  for (let page = 0; page < 100; page++) {
-    const { data, error } = await supabaseAdmin
-      .from('v_invoice_contribution')
-      .select('patient_id, contribution')
-      .eq('practice_id', practiceId)
-      .gte('invoice_date', since)
-      .range(offset, offset + PAGE_SIZE - 1);
+  for (const table of tables) {
+    map.clear();
+    let offset = 0;
+    let found = false;
 
-    if (error) throw new Error(`v_invoice_contribution trailing: ${error.message}`);
+    for (let page = 0; page < 100; page++) {
+      const { data, error } = await supabaseAdmin
+        .from(table)
+        .select('patient_id, contribution')
+        .eq('practice_id', practiceId)
+        .gte('invoice_date', since)
+        .range(offset, offset + PAGE_SIZE - 1);
 
-    const batch = data ?? [];
-    for (const row of batch) {
-      if (row.patient_id == null) continue;
-      const pid = String(row.patient_id);
-      map.set(pid, (map.get(pid) ?? 0) + num(row.contribution));
+      if (error && error.code === '42P01') break;
+      if (error) throw new Error(`${table} trailing: ${error.message}`);
+
+      const batch = data ?? [];
+      if (batch.length > 0) found = true;
+      for (const row of batch) {
+        if (row.patient_id == null) continue;
+        const pid = String(row.patient_id);
+        map.set(pid, (map.get(pid) ?? 0) + num(row.contribution));
+      }
+
+      if (batch.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
     }
 
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+    if (found) return map;
   }
 
   return map;
@@ -179,27 +190,37 @@ async function fetchTrailingContributionByPatient(practiceId, trailingMonths) {
 
 async function sumContributionBetween(practiceId, patientId, fromIsoDate, toIsoDate) {
   let sum = 0;
-  let offset = 0;
+  const tables = ['pe_invoice_contribution_facts', 'v_invoice_contribution'];
 
-  for (let page = 0; page < 50; page++) {
-    const { data, error } = await supabaseAdmin
-      .from('v_invoice_contribution')
-      .select('contribution')
-      .eq('practice_id', practiceId)
-      .eq('patient_id', patientId)
-      .gte('invoice_date', fromIsoDate)
-      .lte('invoice_date', toIsoDate)
-      .range(offset, offset + PAGE_SIZE - 1);
+  for (const table of tables) {
+    sum = 0;
+    let offset = 0;
+    let found = false;
 
-    if (error) throw new Error(`v_invoice_contribution recovery sum: ${error.message}`);
+    for (let page = 0; page < 50; page++) {
+      const { data, error } = await supabaseAdmin
+        .from(table)
+        .select('contribution')
+        .eq('practice_id', practiceId)
+        .eq('patient_id', patientId)
+        .gte('invoice_date', fromIsoDate)
+        .lte('invoice_date', toIsoDate)
+        .range(offset, offset + PAGE_SIZE - 1);
 
-    const batch = data ?? [];
-    for (const row of batch) {
-      sum += num(row.contribution);
+      if (error && error.code === '42P01') break;
+      if (error) throw new Error(`${table} recovery sum: ${error.message}`);
+
+      const batch = data ?? [];
+      if (batch.length > 0) found = true;
+      for (const row of batch) {
+        sum += num(row.contribution);
+      }
+
+      if (batch.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
     }
 
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+    if (found) return round2(sum);
   }
 
   return round2(sum);
@@ -333,7 +354,13 @@ async function openFlagsForPractice(practiceId) {
     });
 
     if (error) {
-      if (String(error.message || '').includes('ux_pe_reactivation_flags_open_patient')) continue;
+      const msg = String(error.message || '');
+      if (
+        msg.includes('ux_pe_reactivation_flags_open_patient') ||
+        msg.includes('pe_reactivation_flags_one_open_per_patient')
+      ) {
+        continue;
+      }
       throw new Error(`pe_reactivation_flags insert: ${error.message}`);
     }
     opened += 1;
@@ -346,21 +373,32 @@ async function openFlagsForPractice(practiceId) {
 async function loadAtRiskPatients(practiceId) {
   const rows = [];
   let offset = 0;
+  const tables = ['pe_patient_contribution_facts', 'v_pe_retention_segment'];
 
-  for (let i = 0; i < 100; i++) {
-    const { data, error } = await supabaseAdmin
-      .from('v_patient_contribution')
-      .select('patient_id, retention_status')
-      .eq('practice_id', practiceId)
-      .in('retention_status', ['drifting', 'lapsed', 'effectively_lost'])
-      .range(offset, offset + PAGE_SIZE - 1);
+  for (const table of tables) {
+    rows.length = 0;
+    offset = 0;
+    let found = false;
 
-    if (error) throw new Error(`v_patient_contribution at-risk: ${error.message}`);
+    for (let i = 0; i < 100; i++) {
+      const { data, error } = await supabaseAdmin
+        .from(table)
+        .select('patient_id, retention_status')
+        .eq('practice_id', practiceId)
+        .in('retention_status', ['drifting', 'lapsed', 'effectively_lost'])
+        .range(offset, offset + PAGE_SIZE - 1);
 
-    const batch = data ?? [];
-    rows.push(...batch);
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+      if (error && error.code === '42P01') break;
+      if (error) throw new Error(`${table} at-risk: ${error.message}`);
+
+      const batch = data ?? [];
+      if (batch.length > 0) found = true;
+      rows.push(...batch);
+      if (batch.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+    }
+
+    if (found) return rows;
   }
 
   return rows;
@@ -482,18 +520,36 @@ async function loadPatientWorklistMeta(practiceId, patientIds) {
     }
   }
 
-  const { data: contribRows, error: contribError } = await supabaseAdmin
-    .from('v_patient_contribution')
-    .select('patient_id, retention_status')
-    .eq('practice_id', practiceId)
-    .in('patient_id', patientIds);
+  const contribRows = await queryInPatientChunks(patientIds, (chunk) =>
+    supabaseAdmin
+      .from('pe_patient_contribution_facts')
+      .select('patient_id, retention_status')
+      .eq('practice_id', practiceId)
+      .in('patient_id', chunk),
+  );
 
-  if (contribError) throw new Error(`patient contribution meta: ${contribError.message}`);
-  for (const row of contribRows ?? []) {
-    if (row.patient_id == null) continue;
-    const pid = String(row.patient_id);
-    if (row.retention_status != null) {
-      retentionStatuses.set(pid, String(row.retention_status));
+  if (contribRows.length === 0) {
+    const fallbackRows = await queryInPatientChunks(patientIds, (chunk) =>
+      supabaseAdmin
+        .from('v_patient_contribution')
+        .select('patient_id, retention_status')
+        .eq('practice_id', practiceId)
+        .in('patient_id', chunk),
+    );
+    for (const row of fallbackRows) {
+      if (row.patient_id == null) continue;
+      const pid = String(row.patient_id);
+      if (row.retention_status != null) {
+        retentionStatuses.set(pid, String(row.retention_status));
+      }
+    }
+  } else {
+    for (const row of contribRows) {
+      if (row.patient_id == null) continue;
+      const pid = String(row.patient_id);
+      if (row.retention_status != null) {
+        retentionStatuses.set(pid, String(row.retention_status));
+      }
     }
   }
 
@@ -535,7 +591,6 @@ async function buildScopedRecoveryPayload(
   unitType,
   locationId = null,
 ) {
-  await syncReactivationFlagsForPractice(organizationId);
   const allFlags = await loadAllFlags(organizationId);
 
   let flags = allFlags;

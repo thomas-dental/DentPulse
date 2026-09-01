@@ -48,6 +48,9 @@ const {
   getInvoiceContributionSummary,
 } = require('../services/patientEconomics/patientEconomicsRead');
 const {
+  getEconomicPulseHero,
+} = require('../services/patientEconomics/economicPulseHero');
+const {
   getPlannedUnscheduledLeakage,
 } = require('../services/patientEconomics/plannedUnscheduledLeakage');
 const {
@@ -63,7 +66,11 @@ const {
   getRetentionContributionAtRisk,
 } = require('../services/patientEconomics/retentionContributionAtRisk');
 const {
+  getPracticeContributionRollup,
+} = require('../services/patientEconomics/practiceContributionRollup');
+const {
   getRetentionRecoveryLoop,
+  syncReactivationFlagsForPractice,
 } = require('../services/patientEconomics/peReactivationFlags');
 const {
   getCltvByAcquisitionSource,
@@ -603,6 +610,31 @@ router.post('/sync/invoice-items', syncAuthMiddleware, (req, res) =>
 router.post('/sync/payments', syncAuthMiddleware, (req, res) =>
   handleSyncChunkRoute(req, res, syncPayments, '/sync/payments')
 );
+
+/**
+ * POST /api/economics-engine/sync/reactivation-flags
+ * Body: { practiceId }
+ * Opens/closes reactivation flags from current retention segments (not run on read).
+ */
+router.post('/sync/reactivation-flags', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.body?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const result = await syncReactivationFlagsForPractice(practiceId);
+    return res.json({ success: true, practiceId, ...result });
+  } catch (err) {
+    console.error('[EconomicsEngine] POST /sync/reactivation-flags error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to sync reactivation flags' });
+  }
+});
 
 function isServiceKeyAuth(req) {
   const serviceKey = req.headers['x-service-key'];
@@ -1152,6 +1184,44 @@ router.get('/read/invoice-contribution-summary', syncAuthMiddleware, async (req,
   } catch (err) {
     console.error('[EconomicsEngine] GET /read/invoice-contribution-summary error:', err.message);
     return res.status(500).json({ success: false, error: 'Failed to load invoice contribution summary' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/economic-pulse-hero?practiceId=
+ * Combined hero-row metrics (invoice, leakage, retention at-risk, growth LTV inputs).
+ */
+router.get('/read/economic-pulse-hero', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const hero = await getEconomicPulseHero(practiceId);
+    return res.json({ success: true, practiceId, ...hero });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/economic-pulse-hero error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load Economic Pulse hero metrics' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/practice-contribution-rollup
+ * Multi-practice / per-location contribution rollup (replaces browser v_invoice_contribution scan).
+ */
+router.get('/read/practice-contribution-rollup', syncAuthMiddleware, async (req, res) => {
+  try {
+    const payload = await getPracticeContributionRollup(req.user.id);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/practice-contribution-rollup error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load practice contribution rollup' });
   }
 });
 

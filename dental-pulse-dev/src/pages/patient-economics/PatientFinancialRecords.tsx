@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, ChevronDown, ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -307,6 +307,28 @@ function ExpandedInvoiceBreakdown({
 }) {
   const { data: invoices, isLoading, isError } = usePatientInvoices(patientId);
 
+  const invoiceTotals = useMemo(() => {
+    if (!invoices?.length) return null;
+    return invoices.reduce(
+      (acc, inv) => ({
+        revenuePrivatePlan: acc.revenuePrivatePlan + inv.revenuePrivatePlan,
+        clinicianCost: acc.clinicianCost + inv.clinicianCost,
+        labCost: acc.labCost + inv.labCost,
+        materialsCost: acc.materialsCost + inv.materialsCost,
+        directCost: acc.directCost + inv.directCost,
+        contribution: acc.contribution + inv.contribution,
+      }),
+      {
+        revenuePrivatePlan: 0,
+        clinicianCost: 0,
+        labCost: 0,
+        materialsCost: 0,
+        directCost: 0,
+        contribution: 0,
+      },
+    );
+  }, [invoices]);
+
   return (
     <tr>
       <td />
@@ -380,19 +402,19 @@ function ExpandedInvoiceBreakdown({
               <tr className="border-t border-border">
                 <td className="px-3 py-3 font-bold text-foreground">Total</td>
                 <td className="px-3 py-3 text-right font-bold tabular-nums">
-                  {formatGbpCompact(row.revenuePrivatePlan)}
+                  {formatGbpCompact(invoiceTotals?.revenuePrivatePlan ?? 0)}
                 </td>
                 <td className="px-3 py-3" />
                 <td className="px-3 py-3 text-right font-bold tabular-nums text-danger">
-                  {formatGbpCompact(row.clinicianCost)}
+                  {formatGbpCompact(invoiceTotals?.clinicianCost ?? 0)}
                 </td>
                 <td className="px-3 py-3" />
                 <td className="px-3 py-3" />
                 <td className="px-3 py-3 text-right font-bold tabular-nums text-danger">
-                  {formatGbpCompact(row.directCost)}
+                  {formatGbpCompact(invoiceTotals?.directCost ?? 0)}
                 </td>
                 <td className="px-3 py-3 text-right font-bold tabular-nums text-success">
-                  {formatGbpCompact(row.contribution)}
+                  {formatGbpCompact(invoiceTotals?.contribution ?? 0)}
                 </td>
                 <td className="px-3 py-3" />
                 <td className="px-3 py-3" />

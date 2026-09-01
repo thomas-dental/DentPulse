@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useOrganization } from '@/hooks/useOrganization';
 import { fetchGrowthLeversSummaryApi } from '@/services/integrations/patientEconomicsService';
+import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
 
 export type GrowthLeversMonthlyRow = {
   month: string;
@@ -45,6 +46,7 @@ export function useGrowthLeversSummary() {
   return useQuery({
     queryKey: ['growth-levers-summary', organizationId],
     enabled: !!organizationId,
+    staleTime: PE_READ_STALE_MS,
     queryFn: async (): Promise<GrowthLeversSummary> => {
       const body = await fetchGrowthLeversSummaryApi(organizationId!);
       return {

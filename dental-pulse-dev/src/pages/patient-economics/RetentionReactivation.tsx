@@ -2,9 +2,9 @@
  * Retention & Reactivation — mockup v5.1 layout.
  */
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 
-import { AlertCircle, Search, Settings2 } from 'lucide-react';
+import { AlertCircle, ChevronLeft, ChevronRight, Search, Settings2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -165,6 +165,8 @@ const WORKLIST_OWNER_FILTERS: { key: WorklistOwnerFilter; label: string }[] = [
   { key: 'assigned', label: 'Assigned' },
 ];
 
+const WORKLIST_PAGE_SIZE_OPTIONS = [5, 10, 25, 50, 100];
+
 function SimpleChartCard({
   title,
   subtitle,
@@ -191,6 +193,8 @@ export function RetentionReactivation() {
   const [worklistStatusFilter, setWorklistStatusFilter] = useState<WorklistStatusFilter>('all');
   const [worklistOwnerFilter, setWorklistOwnerFilter] = useState<WorklistOwnerFilter>('all');
   const [worklistHighValueOnly, setWorklistHighValueOnly] = useState(false);
+  const [worklistPage, setWorklistPage] = useState(1);
+  const [worklistPageSize, setWorklistPageSize] = useState(5);
 
   const atRiskQuery = useRetentionContributionAtRisk();
   const recoveryQuery = useRetentionRecoveryLoop();
@@ -264,6 +268,34 @@ export function RetentionReactivation() {
     worklistHighValueOnly,
     highValueThreshold,
   ]);
+
+  const worklistTotalRows = filteredWorklistRows.length;
+  const worklistTotalPages = Math.max(1, Math.ceil(worklistTotalRows / worklistPageSize));
+  const worklistEffectivePage = Math.min(worklistPage, worklistTotalPages);
+
+  useEffect(() => {
+    setWorklistPage(1);
+  }, [
+    worklistSearch,
+    worklistLocationFilter,
+    worklistStatusFilter,
+    worklistOwnerFilter,
+    worklistHighValueOnly,
+  ]);
+
+  useEffect(() => {
+    if (worklistPage > worklistTotalPages) setWorklistPage(worklistTotalPages);
+  }, [worklistPage, worklistTotalPages]);
+
+  const worklistPageRows = useMemo(() => {
+    const start = (worklistEffectivePage - 1) * worklistPageSize;
+    return filteredWorklistRows.slice(start, start + worklistPageSize);
+  }, [filteredWorklistRows, worklistEffectivePage, worklistPageSize]);
+
+  const onWorklistPageSizeChange = (size: number) => {
+    setWorklistPageSize(size);
+    setWorklistPage(1);
+  };
 
   const reactivationPractices = recoveryGroup?.practices ?? [];
   const reactivationChartPractices =
@@ -532,13 +564,74 @@ export function RetentionReactivation() {
             )}
           </div>
 
-          <div className="overflow-x-auto px-5 pb-5">
+          <div className="overflow-x-auto px-5">
             <ReactivationWorklistTable
-              rows={filteredWorklistRows}
+              rows={worklistPageRows}
               showPractice={multiPractice}
               isFiltered={worklistHasActiveFilters && worklistRows.length > 0}
             />
           </div>
+
+          {worklistTotalRows > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3 text-[12px] text-muted-foreground">
+              <span>
+                Showing {(worklistEffectivePage - 1) * worklistPageSize + 1}–
+                {Math.min(worklistEffectivePage * worklistPageSize, worklistTotalRows)} of{' '}
+                {worklistTotalRows.toLocaleString('en-GB')} patients
+                {worklistTotalRows !== worklistRows.length
+                  ? ` (filtered from ${worklistRows.length.toLocaleString('en-GB')})`
+                  : ''}
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {worklistTotalPages > 1 && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 w-8 px-0"
+                      onClick={() => setWorklistPage((p) => Math.max(1, p - 1))}
+                      disabled={worklistEffectivePage <= 1}
+                      aria-label="Previous page"
+                      title="Previous"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <span className="tabular-nums">
+                      Page {worklistEffectivePage} of {worklistTotalPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 w-8 px-0"
+                      onClick={() =>
+                        setWorklistPage((p) => Math.min(worklistTotalPages, p + 1))
+                      }
+                      disabled={worklistEffectivePage >= worklistTotalPages}
+                      aria-label="Next page"
+                      title="Next"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </>
+                )}
+                <Select
+                  value={String(worklistPageSize)}
+                  onValueChange={(v) => onWorklistPageSizeChange(Number(v))}
+                >
+                  <SelectTrigger className="h-8 w-[64px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {WORKLIST_PAGE_SIZE_OPTIONS.map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        {n}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

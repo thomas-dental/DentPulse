@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useOrganization } from '@/hooks/useOrganization';
 import { fetchInvoiceContributionSummaryApi } from '@/services/integrations/patientEconomicsService';
+import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
 
 /** Practice rollup from invoice-grained v_invoice_contribution + UDA lens. */
 export type InvoiceContributionSummary = {
@@ -50,7 +51,7 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function mapInvoiceContributionSummary(raw: Record<string, unknown>): InvoiceContributionSummary {
+export function mapInvoiceContributionSummary(raw: Record<string, unknown>): InvoiceContributionSummary {
   const dominant = String(raw.dominantProvenanceStatus || 'complete');
   return {
     invoiceCount: num(raw.invoiceCount),
@@ -95,12 +96,13 @@ async function fetchInvoiceContributionSummary(
   return mapInvoiceContributionSummary(summary);
 }
 
-export function useInvoiceContributionSummary() {
+export function useInvoiceContributionSummary(options?: { enabled?: boolean }) {
   const { organizationId } = useOrganization();
 
   return useQuery({
     queryKey: ['invoice-contribution-summary', organizationId],
-    enabled: !!organizationId,
+    enabled: !!organizationId && (options?.enabled ?? true),
+    staleTime: PE_READ_STALE_MS,
     queryFn: () => fetchInvoiceContributionSummary(organizationId!),
   });
 }

@@ -45,6 +45,7 @@ import {
   useEconomicPulseMetrics,
   type EconomicPulseMetrics,
 } from '@/hooks/useEconomicPulseMetrics';
+import { useEconomicPulseHero } from '@/hooks/useEconomicPulseHero';
 
 type HeroTone = 'default' | 'opp' | 'risk' | 'conv' | 'qual';
 
@@ -1192,11 +1193,11 @@ function PerPracticeEconomicsTable() {
 }
 
 function EconomicPulseBelowFold() {
-  const { metrics, isLoading } = useEconomicPulseMetrics();
+  const { metrics, extendedMetricsLoading } = useEconomicPulseMetrics();
 
   return (
     <>
-      <OpportunityActions metrics={metrics} isLoading={isLoading} />
+      <OpportunityActions metrics={metrics} isLoading={extendedMetricsLoading} />
       <WhereTheValueSits />
       <PerPracticeEconomicsTable />
     </>
@@ -1223,17 +1224,55 @@ function PendingTabPanel({ title }: { title: string }) {
 }
 
 function EconomicPulseHeroes() {
-  const { data, isLoading, isError, error, refetch, isFetching } =
-    useInvoiceContributionSummary();
+  const heroQuery = useEconomicPulseHero();
+  const useLegacy = heroQuery.isError;
+  const legacyInvoice = useInvoiceContributionSummary({ enabled: useLegacy });
   const pulseMetrics = useEconomicPulseMetrics();
-  const metrics = pulseMetrics.metrics;
+
+  const data = heroQuery.data?.invoiceSummary ?? legacyInvoice.data;
+  const metrics: EconomicPulseMetrics | null = heroQuery.data
+    ? ({
+        opportunityWeighted: heroQuery.data.heroMetrics.opportunityWeighted,
+        opportunityGross: heroQuery.data.heroMetrics.opportunityGross,
+        opportunityWeightedTier: heroQuery.data.heroMetrics.opportunityWeightedTier,
+        atRiskContributionGbp: heroQuery.data.heroMetrics.atRiskContributionGbp,
+        retentionTier: heroQuery.data.heroMetrics.retentionTier,
+        commitmentRate30d: heroQuery.data.heroMetrics.commitmentRate30d,
+        commitmentRate30dTier: heroQuery.data.heroMetrics.commitmentRate30dTier,
+        avgAnnualContribution: heroQuery.data.heroMetrics.avgAnnualContribution,
+        projectedLtv: heroQuery.data.heroMetrics.projectedLtv,
+        projectedLtvTier: heroQuery.data.heroMetrics.projectedLtvTier,
+        highValueCount: 0,
+        highValueThresholdGbp: 500,
+        retentionOpenAtRiskGbp: 0,
+        plannedContributionGbp: null,
+        plannedTotalValueGbp: 0,
+        plannedItemCount: 0,
+        billingContributionGbp: null,
+        billingRevenueGapGbp: 0,
+        billingItemCount: 0,
+        billingPending: true,
+        totalIdentifiedGbp: heroQuery.data.heroMetrics.opportunityWeighted,
+      } satisfies EconomicPulseMetrics)
+    : pulseMetrics.heroMetrics;
+
+  const isLoading = useLegacy ? legacyInvoice.isLoading : heroQuery.isLoading;
+  const isError = useLegacy && legacyInvoice.isError;
+  const error = legacyInvoice.error;
+  const refetch = () => {
+    if (useLegacy) legacyInvoice.refetch();
+    else heroQuery.refetch();
+  };
+  const isFetching = useLegacy ? legacyInvoice.isFetching : heroQuery.isFetching;
 
   const hasSyncedFinancials =
     !!data && (data.totalRevenue > 0 || data.revenueNhs > 0);
   const isEmpty =
     !!data && data.totalRevenue <= 0 && data.revenueNhs <= 0 && !isLoading;
 
-  const heroesLoading = isLoading || pulseMetrics.isLoading;
+  const heroesLoading = useLegacy
+    ? legacyInvoice.isLoading || pulseMetrics.heroMetricsLoading
+    : heroQuery.isLoading;
 
   return (
     <>
@@ -1447,9 +1486,9 @@ function EconomicPulseHeroes() {
         </div>
       )}
 
-      {!isError && (isLoading || hasSyncedFinancials) && (
+      {!isError && (heroesLoading || hasSyncedFinancials) && (
         <RevenueMixCard
-          isLoading={isLoading}
+          isLoading={heroesLoading}
           revenuePrivate={data?.revenuePrivate ?? 0}
           revenuePlan={data?.revenuePlan ?? 0}
           revenueNhs={data?.revenueNhs ?? 0}

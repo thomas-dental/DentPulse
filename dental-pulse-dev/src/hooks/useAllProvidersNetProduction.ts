@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useOrganization } from './useOrganization';
-import { startOfMonth, endOfMonth, format } from 'date-fns';
+import { startOfMonth, endOfMonth, format, subMonths } from 'date-fns';
 import { fetchDentpulseNhsMonthlyOverlay } from '@/utils/dentpulseNhsIncome';
 import { dentistNamesLikelyMatch } from '@/lib/dentistNameMatch';
 import { jsonbHasNumericPlanIds } from '@/lib/setupCategoryPaymentPlans';
@@ -73,6 +73,16 @@ export type FetchAllProvidersNetProductionArgs = {
 };
 
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+
+/** Cap net-production RPC window to avoid statement timeouts on very wide ranges. */
+const MAX_NET_PRODUCTION_MONTHS = 24;
+
+function clampNetProductionRange(start: Date, end: Date): { rangeStart: Date; rangeEnd: Date } {
+  const rangeEnd = endOfMonth(end);
+  const minStart = startOfMonth(subMonths(rangeEnd, MAX_NET_PRODUCTION_MONTHS));
+  const rangeStart = start < minStart ? minStart : startOfMonth(start);
+  return { rangeStart, rangeEnd };
+}
 
 /** TPI not classified as Setup Categories Private Income. Private + this = rawTotal. */
 export function tpiUnmappedAmount(rawTotal: number, mappedPrivate: number): number {
@@ -219,8 +229,9 @@ export async function fetchAllProvidersNetProduction(
   }
 
   const now = new Date();
-  const rangeStart = startDate && endDate ? startDate : startOfMonth(now);
-  const rangeEnd = startDate && endDate ? endDate : endOfMonth(now);
+  const rawStart = startDate && endDate ? startDate : startOfMonth(now);
+  const rawEnd = startDate && endDate ? endDate : endOfMonth(now);
+  const { rangeStart, rangeEnd } = clampNetProductionRange(rawStart, rawEnd);
 
   // Include inactive providers — Production Data must still show historical
   // figures for leavers. Soft-deleted rows stay excluded via deleted_at.

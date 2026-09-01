@@ -14,6 +14,7 @@ const {
 } = require('./peRetentionSegmentation');
 
 const PAGE_SIZE = 1000;
+const { withPeReadCache } = require('./peReadCache');
 
 const SEGMENT_ORDER = ['active', 'drifting', 'lapsed', 'effectively_lost'];
 const AT_RISK_STATUSES = new Set(['drifting', 'lapsed', 'effectively_lost']);
@@ -108,39 +109,122 @@ async function loadPracticeNames(practiceIds) {
   return map;
 }
 
+function rollupFromSegmentRpc(segments) {
+  const buckets = Object.fromEntries(
+    SEGMENT_ORDER.map((status) => [status, { patientCount: 0, contributionGbp: 0 }]),
+  );
+
+  for (const seg of segments ?? []) {
+    const status = parseRetentionStatus(seg.retention_status);
+    if (!buckets[status]) continue;
+    buckets[status].patientCount += num(seg.patient_count);
+    buckets[status].contributionGbp += num(seg.contribution_gbp);
+  }
+
+  const segmentRows = SEGMENT_ORDER.map((status) => ({
+    status,
+    label: retentionStatusLabel(status),
+    patientCount: buckets[status].patientCount,
+    contributionGbp: round2(buckets[status].contributionGbp),
+  }));
+
+  const totalContributionGbp = round2(
+    segmentRows.reduce((sum, s) => sum + s.contributionGbp, 0),
+  );
+  const totalPatientCount = segmentRows.reduce((sum, s) => sum + s.patientCount, 0);
+  const atRiskContributionGbp = round2(
+    segmentRows
+      .filter((s) => AT_RISK_STATUSES.has(s.status))
+      .reduce((sum, s) => sum + s.contributionGbp, 0),
+  );
+  const atRiskPatientCount = segmentRows
+    .filter((s) => AT_RISK_STATUSES.has(s.status))
+    .reduce((sum, s) => sum + s.patientCount, 0);
+
+  return {
+    segments: segmentRows,
+    totalContributionGbp,
+    totalPatientCount,
+    atRiskContributionGbp,
+    atRiskPatientCount,
+    tier: DERIVED_TIER,
+    tierNote: TIER_NOTE,
+  };
+}
+
+async function loadSegmentRollupFromRpc(practiceId, locationId = null) {
+  const { data, error } = await supabaseAdmin.rpc('pe_retention_segment_rollup', {
+    p_practice_id: practiceId,
+    p_location_id: locationId,
+  });
+  if (error) throw new Error(`pe_retention_segment_rollup: ${error.message}`);
+  return rollupFromSegmentRpc(data);
+}
+
 async function loadContributionRowsForPractice(practiceId, locationId = null) {
+  if (!locationId) {
+    const rows = [];
+    const tables = ['pe_patient_contribution_facts', 'v_pe_retention_segment'];
+
+    for (const table of tables) {
+      let offset = 0;
+      let found = false;
+
+      for (let i = 0; i < 200; i++) {
+        const { data, error } = await supabaseAdmin
+          .from(table)
+          .select('patient_id, retention_status, contribution')
+          .eq('practice_id', practiceId)
+          .range(offset, offset + PAGE_SIZE - 1);
+
+        if (error && error.code === '42P01') break;
+        if (error) throw new Error(`${table}: ${error.message}`);
+
+        const batch = data ?? [];
+        if (batch.length > 0) found = true;
+        rows.push(...batch);
+        if (batch.length < PAGE_SIZE) break;
+        offset += PAGE_SIZE;
+      }
+
+      if (found) return rows;
+    }
+
+    return rows;
+  }
+
   const rows = [];
-  let offset = 0;
-  const patientUuids = locationId
-    ? await loadPatientUuidsForLocation(practiceId, locationId)
-    : null;
+  const patientUuids = await loadPatientUuidsForLocation(practiceId, locationId);
 
-  if (patientUuids && patientUuids.length === 0) return rows;
+  if (patientUuids.length === 0) return rows;
 
-  for (let i = 0; i < 200; i++) {
-    let query = supabaseAdmin
-      .from('v_patient_contribution')
-      .select('retention_status, contribution')
-      .eq('practice_id', practiceId);
+  const tables = ['pe_patient_contribution_facts', 'v_patient_contribution'];
+  const { queryInPatientChunks } = require('./pePatientQueryChunks');
 
-    if (patientUuids) query = query.in('patient_id', patientUuids);
+  for (const table of tables) {
+    const chunkRows = await queryInPatientChunks(patientUuids, (chunk) =>
+      supabaseAdmin
+        .from(table)
+        .select('retention_status, contribution')
+        .eq('practice_id', practiceId)
+        .in('patient_id', chunk),
+    );
 
-    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
-
-    if (error) throw new Error(`v_patient_contribution: ${error.message}`);
-
-    const batch = data ?? [];
-    rows.push(...batch);
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+    if (chunkRows.length > 0) {
+      return chunkRows;
+    }
   }
 
   return rows;
 }
 
 async function rollupPractice(practiceId, locationId = null) {
-  const rows = await loadContributionRowsForPractice(practiceId, locationId);
-  return rollupFromContributionRows(rows);
+  return withPeReadCache(
+    'retention-segment-rollup',
+    practiceId,
+    () => loadSegmentRollupFromRpc(practiceId, locationId),
+    { extra: locationId ?? 'all' },
+  );
 }
 
 function rollupGroupFromPracticeRollups(practiceRollups) {

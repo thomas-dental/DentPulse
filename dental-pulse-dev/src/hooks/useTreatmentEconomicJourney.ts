@@ -7,6 +7,7 @@ import {
   type TreatmentEconomicJourneyResponse,
   type TreatmentEconomicJourneyStage,
 } from '@/services/integrations/patientEconomicsService';
+import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
 
 /** Funnel stages mapped 1:1 to ledger event_types (display contract). */
 export const JOURNEY_STAGES = [
@@ -28,6 +29,7 @@ export function useTreatmentEconomicJourney() {
   return useQuery({
     queryKey: ['treatment-economic-journey', 'api', organizationId],
     enabled: !!organizationId,
+    staleTime: PE_READ_STALE_MS,
     queryFn: () => fetchTreatmentEconomicJourney(organizationId!),
   });
 }

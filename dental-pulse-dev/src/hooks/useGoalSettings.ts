@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useOrganization } from '@/hooks/useOrganization';
 import { fetchGoalSettingsApi } from '@/services/integrations/patientEconomicsService';
 import type { PeGoalSettingsSummary } from '@/types/peGoalSettings';
+import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
 
 export function useGoalSettings() {
   const { organizationId } = useOrganization();
@@ -9,6 +10,7 @@ export function useGoalSettings() {
   return useQuery({
     queryKey: ['pe-goal-settings', organizationId],
     enabled: !!organizationId,
+    staleTime: PE_READ_STALE_MS,
     queryFn: async (): Promise<PeGoalSettingsSummary> => {
       const body = await fetchGoalSettingsApi(organizationId!);
       return {

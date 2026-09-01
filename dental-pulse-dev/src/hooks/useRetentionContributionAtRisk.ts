@@ -7,6 +7,7 @@ import {
 } from '@/services/integrations/patientEconomicsService';
 import { parseRetentionStatus } from '@/lib/peRetentionSegmentation';
 import type { PeRetentionStatus } from '@/lib/peRetentionConstants';
+import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
 
 export type RetentionContributionAtRisk = {
   practiceId: string;
@@ -48,6 +49,7 @@ export function useRetentionContributionAtRisk() {
   return useQuery({
     queryKey: ['retention-contribution-at-risk', organizationId],
     enabled: !!organizationId,
+    staleTime: PE_READ_STALE_MS,
     queryFn: async (): Promise<RetentionContributionAtRisk> => {
       const body = await fetchRetentionContributionAtRiskApi(organizationId!);
       const groupRaw = body.group as Record<string, unknown>;
