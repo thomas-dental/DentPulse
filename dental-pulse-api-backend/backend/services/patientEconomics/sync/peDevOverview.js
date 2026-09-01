@@ -51,11 +51,25 @@ const COUNT_SPECS = [
   { key: 'membership', table: 'membership_upload_members' },
 ];
 
-async function countTable(table, practiceId, orFilter = null) {
+const LEDGER_EVENT_TYPES = [
+  'PLAN_CREATED',
+  'TREATMENT_STARTED',
+  'PLAN_COMPLETED',
+  'APPOINTMENT_LINKED',
+  'APPOINTMENT_UNLINKED',
+  'ITEM_COMPLETED',
+  'INVOICE_RAISED',
+  'PAYMENT_ALLOCATED',
+  'PATIENT_REACTIVATED',
+  'RECALL_DUE',
+  'RECALL_OVERDUE',
+];
+
+async function countTable(table, practiceId, orFilter = null, idColumn = 'organization_id') {
   let query = supabaseAdmin
     .from(table)
     .select('*', { count: 'exact', head: true })
-    .eq('organization_id', practiceId);
+    .eq(idColumn, practiceId);
   if (orFilter) {
     query = query.or(orFilter);
   }
@@ -94,11 +108,44 @@ function resolvePatDisplay(validity) {
   };
 }
 
+async function getLedgerCounts(practiceId) {
+  const { count: total, error: totalError } = await supabaseAdmin
+    .from('event_ledger')
+    .select('*', { count: 'exact', head: true })
+    .eq('practice_id', practiceId);
+
+  const byType = {};
+  await Promise.all(
+    LEDGER_EVENT_TYPES.map(async (eventType) => {
+      const { count, error } = await supabaseAdmin
+        .from('event_ledger')
+        .select('*', { count: 'exact', head: true })
+        .eq('practice_id', practiceId)
+        .eq('event_type', eventType);
+      byType[eventType] = {
+        count: error ? null : count ?? 0,
+        error: error?.message || null,
+      };
+    }),
+  );
+
+  return {
+    total: totalError ? null : total ?? 0,
+    totalError: totalError?.message || null,
+    byType,
+  };
+}
+
 async function getDevCounts(practiceId) {
   const counts = {};
   await Promise.all(
     COUNT_SPECS.map(async (spec) => {
-      const result = await countTable(spec.table, practiceId, spec.orFilter || null);
+      const result = await countTable(
+        spec.table,
+        practiceId,
+        spec.orFilter || null,
+        spec.idColumn || 'organization_id',
+      );
       counts[spec.key] = {
         table: spec.table,
         count: result.count,
@@ -107,7 +154,19 @@ async function getDevCounts(practiceId) {
       };
     })
   );
-  return { practiceId, counts };
+
+  counts.event_ledger = {
+    table: 'event_ledger',
+    count: null,
+    error: null,
+    note: 'see ledger section',
+  };
+
+  const ledger = await getLedgerCounts(practiceId);
+  counts.event_ledger.count = ledger.total;
+  counts.event_ledger.error = ledger.totalError;
+
+  return { practiceId, counts, ledger };
 }
 
 async function getDevOverview(practiceId) {
@@ -354,8 +413,10 @@ module.exports = {
   COUNT_SPECS,
   BROWSE_SPECS,
   RECALL_ROWS_OR,
+  LEDGER_EVENT_TYPES,
   getDevCounts,
   getDevOverview,
   getDevOverviewWithCounts,
   browseDevRows,
+  getLedgerCounts,
 };

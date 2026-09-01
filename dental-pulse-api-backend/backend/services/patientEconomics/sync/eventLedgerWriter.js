@@ -320,6 +320,7 @@ async function writeLedgerEventsFromUpsert({
   newRows,
   existingByEntityId,
   existingLedgerKeys,
+  payloadSource = 'dentally_sync',
 }) {
   if (!isLedgerEntity(entityAlias) || newRows.length === 0) return { written: 0 };
 
@@ -363,7 +364,7 @@ async function writeLedgerEventsFromUpsert({
         event_type: evt.event_type,
         payload: {
           ...evt.payload,
-          source: 'dentally_sync',
+          source: payloadSource,
           sync_run_id: syncRunId ?? null,
         },
         created_at: evt.created_at,
@@ -393,4 +394,7 @@ module.exports = {
   loadLedgerExistingState,
   writeLedgerEventsFromUpsert,
   enrichAppointmentRowsWithPlanValue,
+  loadExistingLedgerKeys,
+  candidateKeysForRows,
+  normalizeEntityId,
 };

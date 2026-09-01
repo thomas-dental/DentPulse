@@ -27,6 +27,7 @@ const {
 } = require('../services/patientEconomics/sync/peScheduleKickoff');
 const { getSyncStatusByPractice } = require('../services/patientEconomics/sync/cursorStore');
 const { getDevOverview, getDevCounts, browseDevRows } = require('../services/patientEconomics/sync/peDevOverview');
+const { backfillPracticeEventLedger } = require('../services/patientEconomics/sync/eventLedgerBackfill');
 const { listTicks } = require('../services/patientEconomics/sync/peTickHistory');
 const {
   listPractitionerRates,
@@ -782,6 +783,35 @@ router.get('/sync/dev/ticks', syncAuthMiddleware, async (req, res) => {
   } catch (err) {
     console.error('[EconomicsEngine] GET /sync/dev/ticks error:', err.message);
     return res.status(500).json({ success: false, error: 'Internal error' });
+  }
+});
+
+/**
+ * POST /api/economics-engine/sync/dev/backfill-ledger
+ * Body: { practiceId, entities?: string[] }
+ * Emits missing event_ledger rows from already-synced PE tables (heal-only diff).
+ */
+router.post('/sync/dev/backfill-ledger', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.body?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const entities = Array.isArray(req.body?.entities)
+      ? req.body.entities.filter((e) => typeof e === 'string')
+      : undefined;
+
+    const result = await backfillPracticeEventLedger(practiceId, { entities });
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[EconomicsEngine] POST /sync/dev/backfill-ledger error:', err.message);
+    return res.status(500).json({ success: false, error: err.message || 'Internal error' });
   }
 });
 

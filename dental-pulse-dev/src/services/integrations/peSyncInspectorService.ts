@@ -40,6 +40,17 @@ export type PeRowCounts = Record<
   { table: string; count: number | null; error: string | null; note: string | null }
 >;
 
+export type PeLedgerCounts = {
+  total: number | null;
+  totalError: string | null;
+  byType: Record<string, { count: number | null; error: string | null }>;
+};
+
+export type PeDevCountsResponse = {
+  counts: PeRowCounts;
+  ledger: PeLedgerCounts | null;
+};
+
 export type PeDevOverview = {
   practiceId: string;
   pat: {
@@ -238,7 +249,7 @@ export const TRIGGER_PATH: Record<string, string> = {
   payments: '/sync/payments',
 };
 
-export async function fetchPeDevCounts(practiceId: string): Promise<PeRowCounts> {
+export async function fetchPeDevCounts(practiceId: string): Promise<PeDevCountsResponse> {
   const headers = await getAuthHeaders();
   const res = await fetch(
     `${getBackendUrl()}/api/economics-engine/sync/dev/counts?practiceId=${encodeURIComponent(practiceId)}`,
@@ -248,7 +259,10 @@ export async function fetchPeDevCounts(practiceId: string): Promise<PeRowCounts>
   if (!res.ok || !body.success) {
     throw new Error(body.error || `Counts failed (${res.status})`);
   }
-  return (body.counts || {}) as PeRowCounts;
+  return {
+    counts: (body.counts || {}) as PeRowCounts,
+    ledger: (body.ledger || null) as PeLedgerCounts | null,
+  };
 }
 
 export async function fetchPeDevOverview(practiceId: string): Promise<PeDevOverview> {
@@ -272,6 +286,23 @@ export async function fetchPeDevTicks(): Promise<PeTick[]> {
     throw new Error(body.error || `Ticks failed (${res.status})`);
   }
   return (body.ticks || []) as PeTick[];
+}
+
+export async function triggerPeLedgerBackfill(
+  practiceId: string,
+  entities?: string[]
+): Promise<Record<string, unknown>> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${getBackendUrl()}/api/economics-engine/sync/dev/backfill-ledger`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ practiceId, entities }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.success === false) {
+    throw new Error(body.error || `Ledger backfill failed (${res.status})`);
+  }
+  return body;
 }
 
 export async function triggerPeSyncChunk(

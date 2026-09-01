@@ -24,10 +24,12 @@ import {
   BROWSE_RESOURCES,
   BrowseResource,
   PeDevOverview,
+  PeLedgerCounts,
   PeRowCounts,
   browsePeRows,
   fetchPeDevCounts,
   fetchPeDevOverview,
+  triggerPeLedgerBackfill,
   triggerPeSyncChunk,
 } from '@/services/integrations/peSyncInspectorService';
 import { Loader2, RefreshCw } from 'lucide-react';
@@ -55,6 +57,7 @@ export default function PeSyncInspector() {
   const allowed = isOwner() || isAdmin();
 
   const [counts, setCounts] = useState<PeRowCounts | null>(null);
+  const [ledgerCounts, setLedgerCounts] = useState<PeLedgerCounts | null>(null);
   const [countsLoading, setCountsLoading] = useState(true);
   const [countsError, setCountsError] = useState<string | null>(null);
 
@@ -63,6 +66,7 @@ export default function PeSyncInspector() {
   const [metaError, setMetaError] = useState<string | null>(null);
 
   const [triggering, setTriggering] = useState<string | null>(null);
+  const [backfillingLedger, setBackfillingLedger] = useState(false);
 
   const [browseResource, setBrowseResource] = useState<BrowseResource | null>(null);
   const [browsePage, setBrowsePage] = useState(0);
@@ -77,7 +81,8 @@ export default function PeSyncInspector() {
     setCountsError(null);
     try {
       const next = await fetchPeDevCounts(currentOrgId);
-      setCounts(next);
+      setCounts(next.counts);
+      setLedgerCounts(next.ledger);
     } catch (err) {
       setCountsError(err instanceof Error ? err.message : 'Failed to load counts');
     } finally {
@@ -151,6 +156,20 @@ export default function PeSyncInspector() {
     setBrowseRows([]);
     setBrowseQueryTotal(null);
     setBrowseError(null);
+  };
+
+  const onBackfillLedger = async () => {
+    if (!currentOrgId) return;
+    setBackfillingLedger(true);
+    setMetaError(null);
+    try {
+      await triggerPeLedgerBackfill(currentOrgId);
+      await loadCounts();
+    } catch (err) {
+      setMetaError(err instanceof Error ? err.message : 'Ledger backfill failed');
+    } finally {
+      setBackfillingLedger(false);
+    }
   };
 
   const onTrigger = async (resourceType: string) => {
@@ -271,6 +290,86 @@ export default function PeSyncInspector() {
                       </TableCell>
                     </TableRow>
                   ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        </section>
+
+        {/* Event ledger */}
+        <section>
+          <div className="flex items-center justify-between gap-4 mb-2">
+            <h2 className="text-sm font-medium">Event ledger</h2>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={backfillingLedger || !currentOrgId}
+              onClick={onBackfillLedger}
+            >
+              {backfillingLedger ? (
+                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+              ) : null}
+              Backfill missing events
+            </Button>
+          </div>
+          <p className="text-[11px] text-muted-foreground mb-2">
+            Compare source row counts above with ledger events below. Backfill emits missing
+            historical events from synced tables (safe to re-run).
+          </p>
+          <div className="overflow-x-auto border rounded min-h-[80px]">
+            {countsLoading && !ledgerCounts ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground p-4">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading ledger counts…
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Event type</TableHead>
+                    <TableHead className="text-right">Count</TableHead>
+                    <TableHead>Source rows (hint)</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow>
+                    <TableCell className="font-mono text-xs">total</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {ledgerCounts?.totalError ? 'err' : ledgerCounts?.total ?? '—'}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">event_ledger</TableCell>
+                  </TableRow>
+                  {Object.entries(ledgerCounts?.byType || {}).map(([eventType, row]) => {
+                    const hintKey =
+                      eventType === 'PLAN_CREATED' ||
+                      eventType === 'TREATMENT_STARTED' ||
+                      eventType === 'PLAN_COMPLETED'
+                        ? 'treatment_plans'
+                        : eventType === 'APPOINTMENT_LINKED' || eventType === 'APPOINTMENT_UNLINKED'
+                          ? 'treatment_appointments'
+                          : eventType === 'ITEM_COMPLETED'
+                            ? 'treatment_items'
+                            : eventType === 'INVOICE_RAISED'
+                              ? 'invoices'
+                              : eventType === 'PAYMENT_ALLOCATED'
+                                ? 'payments'
+                                : eventType === 'RECALL_DUE' ||
+                                    eventType === 'RECALL_OVERDUE' ||
+                                    eventType === 'PATIENT_REACTIVATED'
+                                  ? 'patients'
+                                  : null;
+                    const hintCount = hintKey ? countLabel(counts, hintKey) : null;
+                    return (
+                      <TableRow key={eventType}>
+                        <TableCell className="font-mono text-xs">{eventType}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {row.error ? 'err' : row.count ?? '—'}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {hintKey && hintCount != null ? `${hintKey}: ${hintCount}` : '—'}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}
