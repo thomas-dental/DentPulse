@@ -150,6 +150,7 @@ import {
 } from "@/types/provider";
 import { PayslipTab } from "@/components/providers/PayslipTab";
 import { ContractAttachmentsCard } from "@/components/providers/ContractAttachmentsCard";
+import { PePrivateShareProviderPanel } from "@/components/patient-economics/PePractitionerPrivateShareUi";
 import { ContractHistoryCard } from "@/components/providers/ContractHistoryCard";
 import { SpecialTreatmentsCard } from "@/components/providers/SpecialTreatmentsCard";
 import { SlidingScaleBandEditor } from "@/components/providers/SlidingScaleBandEditor";
@@ -5926,34 +5927,6 @@ export default function ProviderDetail() {
                             )}
                           </div>
                         </div>
-                        {editFormData.splitSourceMethod ===
-                          "flat-percentage" && (
-                          <div className="space-y-2">
-                            <Label htmlFor="contract-associate-split-percentage">
-                              Split Percentage
-                            </Label>
-                            <div className="flex h-10 w-full items-center rounded-md border border-input bg-background">
-                              <Input
-                                id="contract-associate-split-percentage"
-                                type="number"
-                                value={editFormData.associateSplitPercentage}
-                                onChange={(e) =>
-                                  setEditFormData({
-                                    ...editFormData,
-                                    associateSplitPercentage: Number(
-                                      e.target.value,
-                                    ),
-                                  })
-                                }
-                                placeholder="50"
-                                className="h-full border-0 bg-transparent hover:border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
-                              />
-                              <span className="px-3 text-sm text-muted-foreground">
-                                %
-                              </span>
-                            </div>
-                          </div>
-                        )}
                         {editFormData.splitSourceMethod === "per-case" && (
                           <div className="space-y-2">
                             <Label htmlFor="contract-per-case-rate">
@@ -6454,6 +6427,16 @@ export default function ProviderDetail() {
                 </CardContent>
               </Card>
             )}
+
+            <Card>
+              <CardContent className="pt-6">
+                <PePrivateShareProviderPanel
+                  organizationId={organizationId}
+                  practitionerId={provider?.id}
+                  practitionerName={provider?.name}
+                />
+              </CardContent>
+            </Card>
 
             <ContractAttachmentsCard providerId={provider?.id} />
 

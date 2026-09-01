@@ -33,31 +33,38 @@ async function loadGrowthLeversTrailingMonths(practiceId) {
   return assumptions.growthLeversTrailingMonths || DEFAULT_GROWTH_LEVERS_TRAILING_MONTHS;
 }
 
-async function countActivePatients(practiceId) {
-  const { count, error } = await supabaseAdmin
+async function countActivePatients(practiceId, locationId = null) {
+  let query = supabaseAdmin
     .from('patients')
     .select('*', { count: 'exact', head: true })
     .eq('organization_id', practiceId)
     .eq('is_active', true)
     .is('deleted_at', null);
 
+  if (locationId) query = query.eq('location_id', locationId);
+
+  const { count, error } = await query;
+
   if (error) throw new Error(`patients active count: ${error.message}`);
   return count ?? 0;
 }
 
-async function loadCompletedVisits(practiceId, sinceDate) {
+async function loadCompletedVisits(practiceId, sinceDate, locationId = null) {
   const sinceIso = `${sinceDate}T00:00:00`;
   let total = 0;
   const byMonth = new Map();
   let offset = 0;
 
   for (let page = 0; page < 200; page++) {
-    const { data, error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from('appointments')
       .select('apmt_completed_at, apmt_state')
       .eq('organization_id', practiceId)
-      .gte('apmt_completed_at', sinceIso)
-      .range(offset, offset + PAGE_SIZE - 1);
+      .gte('apmt_completed_at', sinceIso);
+
+    if (locationId) query = query.eq('location_id', locationId);
+
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
     if (error) throw new Error(`appointments visits: ${error.message}`);
 
@@ -78,18 +85,25 @@ async function loadCompletedVisits(practiceId, sinceDate) {
   return { total, byMonth };
 }
 
-async function loadRevenuePrivatePlan(practiceId, sinceDate) {
+async function loadRevenuePrivatePlan(practiceId, sinceDate, patientUuids = null) {
   let total = 0;
   const byMonth = new Map();
   let offset = 0;
 
+  if (patientUuids && patientUuids.length === 0) {
+    return { total: round2(0), byMonth };
+  }
+
   for (let page = 0; page < 200; page++) {
-    const { data, error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from('v_invoice_contribution')
       .select('invoice_date, revenue_private_plan')
       .eq('practice_id', practiceId)
-      .gte('invoice_date', sinceDate)
-      .range(offset, offset + PAGE_SIZE - 1);
+      .gte('invoice_date', sinceDate);
+
+    if (patientUuids) query = query.in('patient_id', patientUuids);
+
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
     if (error) throw new Error(`v_invoice_contribution revenue: ${error.message}`);
 
@@ -114,18 +128,21 @@ function todayIsoDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
-async function loadActivePatients(practiceId) {
+async function loadActivePatients(practiceId, locationId = null) {
   const rows = [];
   let offset = 0;
 
   for (let page = 0; page < 200; page++) {
-    const { data, error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from('patients')
       .select('id, pt_id')
       .eq('organization_id', practiceId)
       .eq('is_active', true)
-      .is('deleted_at', null)
-      .range(offset, offset + PAGE_SIZE - 1);
+      .is('deleted_at', null);
+
+    if (locationId) query = query.eq('location_id', locationId);
+
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
     if (error) throw new Error(`patients active list: ${error.message}`);
 
@@ -138,17 +155,20 @@ async function loadActivePatients(practiceId) {
   return rows;
 }
 
-async function loadFirstCompletedVisitByPtId(practiceId) {
+async function loadFirstCompletedVisitByPtId(practiceId, locationId = null) {
   const map = new Map();
   let offset = 0;
 
   for (let page = 0; page < 300; page++) {
-    const { data, error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from('appointments')
       .select('apmt_patient_id, apmt_completed_at, apmt_state')
       .eq('organization_id', practiceId)
-      .not('apmt_completed_at', 'is', null)
-      .range(offset, offset + PAGE_SIZE - 1);
+      .not('apmt_completed_at', 'is', null);
+
+    if (locationId) query = query.eq('location_id', locationId);
+
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
     if (error) throw new Error(`appointments first visit: ${error.message}`);
 
@@ -170,17 +190,22 @@ async function loadFirstCompletedVisitByPtId(practiceId) {
   return map;
 }
 
-async function loadFirstInvoiceDateByPatientId(practiceId) {
+async function loadFirstInvoiceDateByPatientId(practiceId, patientUuids = null) {
   const map = new Map();
   let offset = 0;
 
+  if (patientUuids && patientUuids.length === 0) return map;
+
   for (let page = 0; page < 300; page++) {
-    const { data, error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from('v_invoice_contribution')
       .select('patient_id, invoice_date')
       .eq('practice_id', practiceId)
-      .not('invoice_date', 'is', null)
-      .range(offset, offset + PAGE_SIZE - 1);
+      .not('invoice_date', 'is', null);
+
+    if (patientUuids) query = query.in('patient_id', patientUuids);
+
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
     if (error) throw new Error(`v_invoice_contribution first invoice: ${error.message}`);
 
@@ -226,18 +251,18 @@ async function loadRetentionStatusByPatientId(practiceId, patientIds) {
 /**
  * Tenure (Derived) and projected lifetime (Modelled) — always separate outputs.
  */
-async function computePatientLifetimeMetrics(practiceId) {
+async function computePatientLifetimeMetrics(practiceId, locationId = null) {
   const { loadPeEconomicAssumptions, projectedLifetimeYearsMap } = require('./peEconomicAssumptions');
   const assumptions = await loadPeEconomicAssumptions(practiceId);
   const lifetimeMap = projectedLifetimeYearsMap(assumptions);
   const today = todayIsoDate();
-  const activePatients = await loadActivePatients(practiceId);
+  const activePatients = await loadActivePatients(practiceId, locationId);
   const patientIds = activePatients.map((p) => String(p.id));
 
   const [firstVisitByPtId, firstInvoiceByPatientId, retentionByPatientId] =
     await Promise.all([
-      loadFirstCompletedVisitByPtId(practiceId),
-      loadFirstInvoiceDateByPatientId(practiceId),
+      loadFirstCompletedVisitByPtId(practiceId, locationId),
+      loadFirstInvoiceDateByPatientId(practiceId, locationId ? patientIds : null),
       loadRetentionStatusByPatientId(practiceId, patientIds),
     ]);
 
@@ -302,17 +327,24 @@ function buildMonthlySeries(monthKeys, visitsByMonth, revenueByMonth) {
 
 /**
  * @param {string} practiceId
+ * @param {{ locationId?: string | null }} [options]
  */
-async function getGrowthLeversSummary(practiceId) {
+async function getGrowthLeversSummary(practiceId, options = {}) {
+  const locationId = options.locationId || null;
   const trailingMonths = await loadGrowthLeversTrailingMonths(practiceId);
   const sinceDate = trailingSinceIsoDate(trailingMonths);
   const monthKeys = buildTrailingMonthKeys(sinceDate, trailingMonths);
 
+  const { loadPatientUuidsForLocation } = require('./peLocationScope');
+  const patientUuids = locationId
+    ? await loadPatientUuidsForLocation(practiceId, locationId)
+    : null;
+
   const [activePatientCount, visits, revenue, lifetime] = await Promise.all([
-    countActivePatients(practiceId),
-    loadCompletedVisits(practiceId, sinceDate),
-    loadRevenuePrivatePlan(practiceId, sinceDate),
-    computePatientLifetimeMetrics(practiceId),
+    countActivePatients(practiceId, locationId),
+    loadCompletedVisits(practiceId, sinceDate, locationId),
+    loadRevenuePrivatePlan(practiceId, sinceDate, patientUuids),
+    computePatientLifetimeMetrics(practiceId, locationId),
   ]);
 
   const levers = computePracticeLevers(

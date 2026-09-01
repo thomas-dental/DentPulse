@@ -2,12 +2,21 @@
  * Retention & Reactivation — mockup v5.1 layout.
  */
 
-import type { ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 
-import { AlertCircle, Settings2 } from 'lucide-react';
+import { AlertCircle, Search, Settings2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import type { ReactivationWorklistRow } from '@/services/integrations/patientEconomicsService';
 import {
   ContributionAtRiskBySegmentChart,
   RecoveryLoopFunnelChart,
@@ -115,6 +124,47 @@ function RetentionHeroGrid({
   );
 }
 
+function FilterChip({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors',
+        active
+          ? 'border-primary/30 bg-primary/12 text-primary'
+          : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground',
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+type WorklistStatusFilter = 'all' | ReactivationWorklistRow['workflowStatus'];
+type WorklistOwnerFilter = 'all' | 'unassigned' | 'assigned';
+
+const WORKLIST_STATUS_FILTERS: { key: WorklistStatusFilter; label: string }[] = [
+  { key: 'all', label: 'All statuses' },
+  { key: 'new', label: 'New' },
+  { key: 'contacted', label: 'Contacted' },
+  { key: 'booked', label: 'Booked' },
+];
+
+const WORKLIST_OWNER_FILTERS: { key: WorklistOwnerFilter; label: string }[] = [
+  { key: 'all', label: 'All owners' },
+  { key: 'unassigned', label: 'Unassigned' },
+  { key: 'assigned', label: 'Assigned' },
+];
+
 function SimpleChartCard({
   title,
   subtitle,
@@ -136,6 +186,12 @@ function SimpleChartCard({
 }
 
 export function RetentionReactivation() {
+  const [worklistSearch, setWorklistSearch] = useState('');
+  const [worklistLocationFilter, setWorklistLocationFilter] = useState('all');
+  const [worklistStatusFilter, setWorklistStatusFilter] = useState<WorklistStatusFilter>('all');
+  const [worklistOwnerFilter, setWorklistOwnerFilter] = useState<WorklistOwnerFilter>('all');
+  const [worklistHighValueOnly, setWorklistHighValueOnly] = useState(false);
+
   const atRiskQuery = useRetentionContributionAtRisk();
   const recoveryQuery = useRetentionRecoveryLoop();
   const assumptionsQuery = useEconomicAssumptions();
@@ -145,6 +201,10 @@ export function RetentionReactivation() {
   const segmentRollup = data ? (multiPractice ? data.group : data.practice) : null;
 
   const recoveryData = recoveryQuery.data;
+  const rollupUnitLabel =
+    recoveryData?.rollupMode === 'location' || data?.rollupMode === 'location'
+      ? 'location'
+      : 'practice';
   const recoveryPractice = recoveryData?.practice;
   const recoveryGroup = recoveryData?.group;
   const recoveryRollup =
@@ -158,6 +218,52 @@ export function RetentionReactivation() {
   const highValueOverdueCount = worklistRows.filter(
     (r) => r.histContributionYr >= highValueThreshold,
   ).length;
+
+  const worklistLocationOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of worklistRows) {
+      if (row.practiceId && row.practiceName) {
+        map.set(row.practiceId, row.practiceName);
+      }
+    }
+    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [worklistRows]);
+
+  const worklistHasActiveFilters =
+    worklistSearch.trim() !== '' ||
+    worklistLocationFilter !== 'all' ||
+    worklistStatusFilter !== 'all' ||
+    worklistOwnerFilter !== 'all' ||
+    worklistHighValueOnly;
+
+  const filteredWorklistRows = useMemo(() => {
+    const q = worklistSearch.trim().toLowerCase();
+    return worklistRows.filter((row) => {
+      if (worklistLocationFilter !== 'all' && row.practiceId !== worklistLocationFilter) {
+        return false;
+      }
+      if (worklistStatusFilter !== 'all' && row.workflowStatus !== worklistStatusFilter) {
+        return false;
+      }
+      const owner = row.ownerName?.trim() || 'Unassigned';
+      if (worklistOwnerFilter === 'unassigned' && owner !== 'Unassigned') return false;
+      if (worklistOwnerFilter === 'assigned' && owner === 'Unassigned') return false;
+      if (worklistHighValueOnly && row.histContributionYr < highValueThreshold) return false;
+      if (q) {
+        const hay = `${row.patientName} ${row.practiceName ?? ''} ${owner}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [
+    worklistRows,
+    worklistSearch,
+    worklistLocationFilter,
+    worklistStatusFilter,
+    worklistOwnerFilter,
+    worklistHighValueOnly,
+    highValueThreshold,
+  ]);
 
   const reactivationPractices = recoveryGroup?.practices ?? [];
   const reactivationChartPractices =
@@ -243,7 +349,7 @@ export function RetentionReactivation() {
             </SimpleChartCard>
 
             <SimpleChartCard
-              title="Reactivation value by practice"
+              title={`Reactivation value by ${rollupUnitLabel}`}
               subtitle="Recoverable contribution from lapsed patients"
             >
               {recoveryQuery.isLoading ? (
@@ -344,24 +450,94 @@ export function RetentionReactivation() {
       )}
 
       {!recoveryQuery.isLoading && !recoveryQuery.isError && recoveryData && (
-        <div className="rounded-[14px] border border-border bg-card shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
-            <div>
+        <div className="overflow-hidden rounded-[14px] border border-border bg-card shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-border px-5 py-3">
+            <div className="min-w-0 flex-1 basis-[240px]">
               <h2 className="text-[15px] font-bold tracking-tight text-foreground">
                 Financially-prioritised reactivation worklist
               </h2>
-              <p className="mt-1 text-[12.5px] text-muted-foreground">
-                Highest contribution at risk first, not an alphabetical recall list
+              <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+                Highest contribution at risk first · Search and filter, then open a patient record
               </p>
             </div>
-            {highValueOverdueCount > 0 && (
-              <span className="rounded-full border border-danger/30 bg-danger-muted px-2.5 py-0.5 text-[11px] font-semibold text-danger-strong">
+            <div className="flex flex-wrap items-center gap-3">
+              {multiPractice && worklistLocationOptions.length > 1 && (
+                <Select
+                  value={worklistLocationFilter}
+                  onValueChange={setWorklistLocationFilter}
+                >
+                  <SelectTrigger className="h-9 w-[200px] max-w-full">
+                    <SelectValue placeholder="All locations" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All locations</SelectItem>
+                    {worklistLocationOptions.map(([id, name]) => (
+                      <SelectItem key={id} value={id}>
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              <div className="relative w-[220px] max-w-full">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={worklistSearch}
+                  onChange={(e) => setWorklistSearch(e.target.value)}
+                  placeholder="Search patient…"
+                  className="pl-9"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-5 py-2.5">
+            {WORKLIST_STATUS_FILTERS.map((f) => (
+              <FilterChip
+                key={f.key}
+                label={f.label}
+                active={worklistStatusFilter === f.key}
+                onClick={() => setWorklistStatusFilter(f.key)}
+              />
+            ))}
+            <span className="mx-1 h-4 w-px bg-border" />
+            {WORKLIST_OWNER_FILTERS.map((f) => (
+              <FilterChip
+                key={f.key}
+                label={f.label}
+                active={worklistOwnerFilter === f.key}
+                onClick={() => setWorklistOwnerFilter(f.key)}
+              />
+            ))}
+            {highValueThreshold > 0 && (
+              <>
+                <span className="mx-1 h-4 w-px bg-border" />
+                <FilterChip
+                  label={`High value (≥${formatGbpCompact(highValueThreshold)})`}
+                  active={worklistHighValueOnly}
+                  onClick={() => setWorklistHighValueOnly((v) => !v)}
+                />
+              </>
+            )}
+            {worklistHasActiveFilters && (
+              <span className="ml-2 text-[11.5px] text-muted-foreground">
+                {filteredWorklistRows.length.toLocaleString('en-GB')} of{' '}
+                {worklistRows.length.toLocaleString('en-GB')}
+              </span>
+            )}
+            {highValueOverdueCount > 0 && !worklistHasActiveFilters && (
+              <span className="ml-2 rounded-full border border-danger/30 bg-danger-muted px-2.5 py-0.5 text-[11px] font-semibold text-danger-strong">
                 {highValueOverdueCount} high-value overdue
               </span>
             )}
           </div>
-          <div className="px-5 py-4">
-            <ReactivationWorklistTable rows={worklistRows} showPractice={multiPractice} />
+
+          <div className="overflow-x-auto px-5 pb-5">
+            <ReactivationWorklistTable
+              rows={filteredWorklistRows}
+              showPractice={multiPractice}
+              isFiltered={worklistHasActiveFilters && worklistRows.length > 0}
+            />
           </div>
         </div>
       )}

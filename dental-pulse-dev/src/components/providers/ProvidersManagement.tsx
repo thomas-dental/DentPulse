@@ -118,6 +118,8 @@ import {
 } from "@/hooks/useAllProvidersCounts";
 import { useQueryClient } from "@tanstack/react-query";
 import { useOrganization } from "@/hooks/useOrganization";
+import { usePractitionerPrivateShareRatesMap } from "@/hooks/usePractitionerPrivateShareRates";
+import { PePrivateShareListCell } from "@/components/patient-economics/PePractitionerPrivateShareUi";
 import { useOrganizationSettings } from "@/hooks/useOrganizationSettings";
 import { useFilters } from "@/contexts/FilterContext";
 import { EntitySyncButton } from "@/components/sync/EntitySyncButton";
@@ -995,6 +997,10 @@ export function ProvidersManagement({
   } = useProviders(undefined, undefined, { includeInactive: true });
   const { activeProviderTypes } = useProviderTypes();
   const { organizationId } = useOrganization();
+  const {
+    data: pePrivateShareRatesMap,
+    isLoading: isPePrivateShareRatesLoading,
+  } = usePractitionerPrivateShareRatesMap(organizationId);
   const { allAvailableLocations } = useLocations();
   const locationMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -4651,12 +4657,17 @@ export function ProvidersManagement({
                                 )}
                               </td>
                             )}
-                            <ContractSplitCell
-                              method={getSplitMethodLabel(
-                                provider.split_source_method,
-                              )}
-                              rate={getAssociateSplitRate(provider)}
-                            />
+                            <td className="text-center">
+                              <PePrivateShareListCell
+                                rateConfigured={
+                                  pePrivateShareRatesMap?.get(provider.id)?.rateConfigured
+                                }
+                                currentRate={
+                                  pePrivateShareRatesMap?.get(provider.id)?.currentRate ?? null
+                                }
+                                isLoading={isPePrivateShareRatesLoading}
+                              />
+                            </td>
                             <ContractSplitCell
                               method={getSplitMethodLabel(
                                 provider.split_source_method,

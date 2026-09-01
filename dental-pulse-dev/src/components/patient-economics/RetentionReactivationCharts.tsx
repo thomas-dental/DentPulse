@@ -3,7 +3,6 @@
  */
 
 import { Link } from 'react-router-dom';
-import { Button } from '@/components/ui/button';
 
 import type {
   ReactivationFlagRow,
@@ -18,6 +17,10 @@ import {
 } from '@/lib/peRetentionConstants';
 import { cn } from '@/lib/utils';
 import {
+  PE_CHART_CAPTION_CLASS,
+  PE_CHART_CAPTION_PX,
+  PE_CHART_LABEL_PX,
+  PE_CHART_VALUE_PX,
   PE_TABLE_BODY_CELL_CLASS,
   PE_TABLE_HEAD_CELL_CLASS,
   PE_TABLE_ROW_CLASS,
@@ -99,10 +102,11 @@ export function ContributionAtRiskBySegmentChart({
       (s.status === 'drifting' || s.status === 'lapsed' || s.status === 'effectively_lost'),
   );
   const maxVal = Math.max(...barSegments.map((s) => s.contributionGbp), 1);
-  const W = 520;
+  const W = 560;
   const rowH = 44;
   const pl = 110;
-  const pr = 54;
+  /** Space for longest value ("£x,xxx.xx not recoverable") so text is never clipped. */
+  const pr = 168;
   const H = segments.length * rowH + 16;
   const bw = W - pl - pr;
   const muted = 'hsl(var(--muted-foreground))';
@@ -134,10 +138,17 @@ export function ContributionAtRiskBySegmentChart({
 
         return (
           <g key={row.status}>
-            <text x={pl - 8} y={yy + 16} textAnchor="end" fontSize={11} fontWeight={600} fill={labelColor}>
+            <text
+              x={pl - 8}
+              y={yy + 16}
+              textAnchor="end"
+              fontSize={PE_CHART_LABEL_PX}
+              fontWeight={600}
+              fill={labelColor}
+            >
               {row.label}
             </text>
-            <text x={pl - 8} y={yy + 29} textAnchor="end" fontSize={9.5} fill={muted}>
+            <text x={pl - 8} y={yy + 29} textAnchor="end" fontSize={PE_CHART_CAPTION_PX} fill={muted}>
               {row.patientCount.toLocaleString('en-GB')} patients
             </text>
             {showBar ? (
@@ -151,12 +162,18 @@ export function ContributionAtRiskBySegmentChart({
                   fill={color}
                   opacity={row.status === 'effectively_lost' ? 0.55 : 1}
                 />
-                <text x={pl + barWidth + 6} y={yy + 20} fontSize={11} fontWeight={700} fill={color}>
+                <text
+                  x={pl + barWidth + 6}
+                  y={yy + 20}
+                  fontSize={PE_CHART_VALUE_PX}
+                  fontWeight={700}
+                  fill={color}
+                >
                   {valueLabel}
                 </text>
               </>
             ) : (
-              <text x={pl} y={yy + 20} fontSize={10.5} fill={muted}>
+              <text x={pl} y={yy + 20} fontSize={PE_CHART_VALUE_PX} fill={muted}>
                 {row.status === 'active' ? 'no contribution at risk' : '—'}
               </text>
             )}
@@ -206,7 +223,7 @@ export function RecoveryLoopFunnelChart({ funnel }: { funnel: RecoveryFunnel }) 
               x={pl - 8}
               y={yy + 18}
               textAnchor="end"
-              fontSize={11}
+              fontSize={PE_CHART_LABEL_PX}
               fontWeight={600}
               fill={labelColor}
             >
@@ -214,7 +231,7 @@ export function RecoveryLoopFunnelChart({ funnel }: { funnel: RecoveryFunnel }) 
             </text>
             <rect x={pl} y={yy + 4} width={bw} height={21} rx={4} fill={grid} opacity={0.45} />
             <rect x={pl} y={yy + 4} width={w} height={21} rx={4} fill={col} />
-            <text x={pl + w + 6} y={yy + 20} fontSize={11} fontWeight={700} fill={col}>
+            <text x={pl + w + 6} y={yy + 20} fontSize={PE_CHART_VALUE_PX} fontWeight={700} fill={col}>
               {formatGbpCompact(stage.valueGbp)}
             </text>
           </g>
@@ -273,12 +290,25 @@ export function AtRiskContributionByPracticeChart({
             : row.practiceName;
         return (
           <g key={row.practiceId}>
-            <text x={pl - 8} y={yy + 18} textAnchor="end" fontSize="11" fill={muted}>
+            <text
+              x={pl - 8}
+              y={yy + 18}
+              textAnchor="end"
+              fontSize={PE_CHART_LABEL_PX}
+              fontWeight={600}
+              fill={muted}
+            >
               {name}
             </text>
             <rect x={pl} y={yy + 6} width={bw} height={16} rx={4} fill={grid} opacity={0.5} />
             <rect x={pl} y={yy + 6} width={w} height={16} rx={4} fill={col} opacity={0.9} />
-            <text x={pl + w + 6} y={yy + 18} fontSize="10.5" fontWeight="700" fill={col}>
+            <text
+              x={pl + w + 6}
+              y={yy + 18}
+              fontSize={PE_CHART_VALUE_PX}
+              fontWeight={700}
+              fill={col}
+            >
               {formatGbpCompact(val)}
             </text>
           </g>
@@ -288,15 +318,17 @@ export function AtRiskContributionByPracticeChart({
   );
 }
 
-/** Open-flag reactivation value £ per practice. */
+/** Open-flag reactivation value £ per practice/location (includes £0 rows).
+ *  Layout matches CltvByAcquisitionSourceChart: SVG bars, end-ellipsis labels.
+ */
 export function ReactivationValueByPracticeChart({
   practices,
 }: {
   practices: ReactivationValueByPracticeRow[];
 }) {
-  const data = practices
-    .filter((p) => p.reactivationValueGbp > 0)
-    .sort((a, b) => b.reactivationValueGbp - a.reactivationValueGbp);
+  const data = [...practices].sort(
+    (a, b) => b.reactivationValueGbp - a.reactivationValueGbp,
+  );
 
   if (data.length === 0) {
     return (
@@ -307,44 +339,77 @@ export function ReactivationValueByPracticeChart({
   }
 
   const W = 560;
-  const rowH = 32;
-  const pl = 108;
+  const rowH = 30;
+  const pl = 120;
   const pr = 72;
-  const H = data.length * rowH + 12;
+  const H = data.length * rowH + 16;
   const bw = W - pl - pr;
   const max = Math.max(...data.map((r) => r.reactivationValueGbp), 1);
   const primary = 'hsl(var(--primary))';
   const muted = 'hsl(var(--muted-foreground))';
   const grid = 'hsl(var(--border))';
+  const anyOpen = data.some((r) => r.reactivationValueGbp > 0);
 
   return (
-    <svg
-      viewBox={`0 0 ${W} ${H}`}
-      width="100%"
-      className="max-w-full"
-      role="img"
-      aria-label="Reactivation value by practice"
-    >
-      {data.map((row, i) => {
-        const val = row.reactivationValueGbp;
-        const yy = 6 + i * rowH;
-        const w = bw * (val / max);
-        return (
-          <g key={row.practiceId}>
-            <text x={pl - 8} y={yy + 18} textAnchor="end" fontSize="11" fill={muted}>
-              {row.practiceName.length > 16
-                ? `${row.practiceName.slice(0, 15)}…`
-                : row.practiceName}
-            </text>
-            <rect x={pl} y={yy + 6} width={bw} height={16} rx={4} fill={grid} opacity={0.5} />
-            <rect x={pl} y={yy + 6} width={w} height={16} rx={4} fill={primary} opacity={0.9} />
-            <text x={pl + w + 6} y={yy + 18} fontSize="10.5" fontWeight={700} fill={primary}>
-              {formatGbpCompact(val)}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+    <div className="space-y-1">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        width="100%"
+        className="max-w-full"
+        role="img"
+        aria-label="Reactivation value by practice"
+      >
+        {data.map((row, i) => {
+          const yy = 8 + i * rowH;
+          const val = row.reactivationValueGbp;
+          const w = val > 0 ? bw * (val / max) : 0;
+          const label =
+            row.practiceName.length > 16
+              ? `${row.practiceName.slice(0, 15)}…`
+              : row.practiceName;
+          return (
+            <g key={row.practiceId}>
+              <title>{`${row.practiceName}: ${formatGbpCompact(val)}`}</title>
+              <text
+                x={pl - 8}
+                y={yy + 15}
+                textAnchor="end"
+                fontSize={PE_CHART_LABEL_PX}
+                fill={muted}
+              >
+                {label}
+              </text>
+              <rect x={pl} y={yy + 4} width={bw} height={15} rx={4} fill={grid} opacity={0.5} />
+              {w > 0 && (
+                <rect
+                  x={pl}
+                  y={yy + 4}
+                  width={w}
+                  height={15}
+                  rx={4}
+                  fill={primary}
+                  opacity={0.95}
+                />
+              )}
+              <text
+                x={pl + (w > 0 ? w + 6 : 6)}
+                y={yy + 16}
+                fontSize={PE_CHART_VALUE_PX}
+                fontWeight={700}
+                fill={val > 0 ? primary : muted}
+              >
+                {formatGbpCompact(val)}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      {!anyOpen && (
+        <p className={cn('text-center', PE_CHART_CAPTION_CLASS)}>
+          No open flags yet — locations shown at £0
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -400,13 +465,13 @@ export function RecoveryLoopValueChart({
             opacity={0.85}
           />
         )}
-        <text x={W / 2} y={28} textAnchor="middle" fontSize="13" fontWeight={700} fill={muted}>
+        <text x={W / 2} y={28} textAnchor="middle" fontSize={PE_CHART_VALUE_PX} fontWeight={700} fill={muted}>
           {recoveryRatePct != null
             ? `${Math.round(recoveryRatePct * 100)}% value recovered`
             : '—'}
         </text>
       </svg>
-      <div className="flex flex-wrap gap-4 text-[12px] text-muted-foreground">
+      <div className={cn('flex flex-wrap gap-4', PE_CHART_CAPTION_CLASS)}>
         <span>
           <span className="font-semibold text-success">Recovered</span>{' '}
           {formatGbpCompact(recoveredValueGbp)}
@@ -450,11 +515,20 @@ function WorkflowStatusPill({ status }: { status: ReactivationWorklistRow['workf
 export function ReactivationWorklistTable({
   rows,
   showPractice = true,
+  isFiltered = false,
 }: {
   rows: ReactivationWorklistRow[];
   showPractice?: boolean;
+  isFiltered?: boolean;
 }) {
   if (rows.length === 0) {
+    if (isFiltered) {
+      return (
+        <p className="py-10 text-center text-[13px] text-muted-foreground">
+          No patients match your search or filters.
+        </p>
+      );
+    }
     return (
       <div className="rounded-lg border border-success/25 bg-success/5 px-4 py-8 text-center">
         <p className="text-sm font-semibold text-foreground">No open reactivation targets</p>
@@ -469,28 +543,17 @@ export function ReactivationWorklistTable({
     <div className="overflow-x-auto">
       <table className="w-full min-w-[960px] border-collapse text-[13px]">
         <thead>
-          <tr className="border-b border-border">
-            <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-left')}>Patient</th>
+          <tr className="border-b border-border text-left text-[12px] font-semibold text-muted-foreground">
+            <th className="whitespace-nowrap px-3 py-2.5">Patient</th>
             {showPractice && (
-              <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-left')}>Practice</th>
+              <th className="whitespace-nowrap px-3 py-2.5">Practice</th>
             )}
-            <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-left')}>Last visit</th>
-            <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-right')}>
-              Days overdue
-              <span className="block text-[10px] font-normal normal-case tracking-normal text-muted-foreground">
-                since last completed visit
-              </span>
-            </th>
-            <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-right')}>
-              Hist. contribution/yr
-              <span className="block text-[10px] font-normal normal-case tracking-normal text-muted-foreground">
-                trailing window annualised
-              </span>
-            </th>
-            <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-right')}>Contribution at risk</th>
-            <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-left')}>Owner</th>
-            <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-left')}>Status</th>
-            <th className={cn(PE_TABLE_HEAD_CELL_CLASS, 'text-center')}>Action</th>
+            <th className="whitespace-nowrap px-3 py-2.5">Last visit</th>
+            <th className="whitespace-nowrap px-3 py-2.5 text-right">Days overdue</th>
+            <th className="whitespace-nowrap px-3 py-2.5 text-right">Hist. contribution/yr</th>
+            <th className="whitespace-nowrap px-3 py-2.5 text-right">Contribution at risk</th>
+            <th className="whitespace-nowrap px-3 py-2.5">Owner</th>
+            <th className="whitespace-nowrap px-3 py-2.5">Status</th>
           </tr>
         </thead>
         <tbody>
@@ -504,58 +567,45 @@ export function ReactivationWorklistTable({
                   : 'text-muted-foreground';
 
             return (
-              <tr key={row.flagId} className={PE_TABLE_ROW_CLASS}>
-                <td className={cn(PE_TABLE_BODY_CELL_CLASS, 'font-semibold text-foreground')}>
+              <tr
+                key={row.flagId}
+                className="border-b border-border/60 last:border-b-0 hover:bg-primary/[0.04]"
+              >
+                <td className="px-3 py-3">
                   <Link
                     to={`/patients?tab=patient-records&patientId=${encodeURIComponent(row.patientId)}`}
-                    className="hover:text-primary hover:underline"
+                    className="font-semibold text-primary hover:underline"
                   >
                     {row.patientName}
                   </Link>
                 </td>
                 {showPractice && (
-                  <td className={cn(PE_TABLE_BODY_CELL_CLASS, 'text-foreground')}>
-                    {row.practiceName ?? '—'}
-                  </td>
+                  <td className="px-3 py-3 text-foreground">{row.practiceName ?? '—'}</td>
                 )}
-                <td className={cn(PE_TABLE_BODY_CELL_CLASS, 'text-muted-foreground')}>
+                <td className="px-3 py-3 text-muted-foreground">
                   {formatVisitDate(row.lastVisitAt)}
                 </td>
-                <td className={cn(PE_TABLE_BODY_CELL_CLASS, 'text-right tabular-nums')}>
+                <td className="px-3 py-3 text-right tabular-nums">
                   <span className={cn('font-semibold', overdueTone)}>
                     {row.daysOverdue > 0 ? `${row.daysOverdue}d` : '—'}
                   </span>
                 </td>
-                <td className={cn(PE_TABLE_BODY_CELL_CLASS, 'text-right tabular-nums')}>
-                  {formatGbp(row.histContributionYr)}
+                <td className="px-3 py-3 text-right tabular-nums">
+                  {formatGbpCompact(row.histContributionYr)}
+                </td>
+                <td className="px-3 py-3 text-right font-bold tabular-nums text-danger-strong">
+                  {formatGbpCompact(row.contributionAtRiskAtFlagTime)}
                 </td>
                 <td
                   className={cn(
-                    PE_TABLE_BODY_CELL_CLASS,
-                    'text-right font-bold tabular-nums text-danger-strong',
-                  )}
-                >
-                  {formatGbp(row.contributionAtRiskAtFlagTime)}
-                </td>
-                <td
-                  className={cn(
-                    PE_TABLE_BODY_CELL_CLASS,
+                    'px-3 py-3',
                     owner === 'Unassigned' ? 'text-muted-foreground' : 'text-foreground',
                   )}
                 >
                   {owner}
                 </td>
-                <td className={PE_TABLE_BODY_CELL_CLASS}>
+                <td className="px-3 py-3">
                   <WorkflowStatusPill status={row.workflowStatus} />
-                </td>
-                <td className={cn(PE_TABLE_BODY_CELL_CLASS, 'text-center')}>
-                  <Button variant="outline" size="sm" className="h-7 px-3 text-[12px]" asChild>
-                    <Link
-                      to={`/patients?tab=patient-records&patientId=${encodeURIComponent(row.patientId)}`}
-                    >
-                      {owner === 'Unassigned' ? 'Assign' : 'Open'}
-                    </Link>
-                  </Button>
                 </td>
               </tr>
             );

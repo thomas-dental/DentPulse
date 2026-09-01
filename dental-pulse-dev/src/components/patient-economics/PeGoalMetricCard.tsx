@@ -36,9 +36,11 @@ type PeGoalMetricCardProps = {
   targetFieldLabel: string;
   actualColumnLabel?: string;
   targetInputValue: string;
-  onTargetInputChange: (value: string) => void;
+  onTargetInputChange?: (value: string) => void;
   targetSuffix?: string;
   footerHint?: string;
+  /** Sidebar mode — show effective target as text (edited in the table). */
+  readOnlyTarget?: boolean;
 };
 
 export function PeGoalMetricCard({
@@ -52,6 +54,7 @@ export function PeGoalMetricCard({
   onTargetInputChange,
   targetSuffix,
   footerHint,
+  readOnlyTarget = false,
 }: PeGoalMetricCardProps) {
   const { actual, target, onTrack: savedOnTrack } = metric;
   const progressFormat = format as PeGoalProgressFormat;
@@ -168,17 +171,26 @@ export function PeGoalMetricCard({
             {format === 'gbp' && (
               <span className="text-[13px] text-muted-foreground">£</span>
             )}
-            <Input
-              value={targetInputValue}
-              onChange={(e) => onTargetInputChange(e.target.value)}
-              className={cn(
-                'h-9 text-[13px] font-semibold',
-                format === 'gbp' ? 'max-w-[140px]' : 'w-[80px]',
-              )}
-              placeholder={
-                format === 'pct' || format === 'pctCeiling' ? '70' : '420'
-              }
-            />
+            {readOnlyTarget ? (
+              <div
+                className={cn(
+                  'flex h-9 items-center rounded-md border border-border bg-muted/30 px-3 text-[13px] font-semibold tabular-nums text-foreground',
+                  format === 'gbp' ? 'max-w-[140px]' : 'w-[80px]',
+                )}
+              >
+                {targetInputValue || '—'}
+              </div>
+            ) : (
+              <Input
+                value={targetInputValue}
+                onChange={(e) => onTargetInputChange?.(e.target.value)}
+                className={cn(
+                  'h-9 text-[13px] font-semibold',
+                  format === 'gbp' ? 'max-w-[140px]' : 'w-[80px]',
+                )}
+                placeholder={format === 'pct' || format === 'pctCeiling' ? '70' : '420'}
+              />
+            )}
             {targetSuffix && (
               <span className="text-[13px] text-muted-foreground">{targetSuffix}</span>
             )}

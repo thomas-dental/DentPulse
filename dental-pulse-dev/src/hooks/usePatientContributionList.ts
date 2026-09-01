@@ -30,6 +30,8 @@ export type PatientContributionRow = {
   patientName: string;
   patientUuid: string | null;
   practiceName: string;
+  locationId: string | null;
+  locationName: string | null;
   isActive: boolean;
   hasPaymentPlan: boolean;
   contribution12mo: number;
@@ -110,6 +112,8 @@ export function mapPatientContributionRow(raw: Record<string, unknown>): Patient
     patientName: String(raw.patientName ?? 'Unknown patient'),
     patientUuid: raw.patientUuid != null ? String(raw.patientUuid) : null,
     practiceName: String(raw.practiceName ?? 'This practice'),
+    locationId: raw.locationId != null ? String(raw.locationId) : null,
+    locationName: raw.locationName != null ? String(raw.locationName) : null,
     isActive: raw.isActive === true,
     hasPaymentPlan: raw.hasPaymentPlan === true,
     contribution12mo: num(raw.contribution12mo),
@@ -164,9 +168,35 @@ export function mapPatientContributionRow(raw: Record<string, unknown>): Patient
   };
 }
 
-async function fetchAllPatientRows(practiceId: string): Promise<PatientContributionRow[]> {
-  const { patients } = await fetchPatientContributionList(practiceId);
-  return patients.map((row) => mapPatientContributionRow(row));
+async function fetchAllPatientRows(
+  practiceId: string,
+): Promise<{
+  rows: PatientContributionRow[];
+  rollupMode: 'location' | 'practice';
+  locations: PeLocationScope[];
+}> {
+  const data = await fetchPatientContributionList(practiceId);
+  return {
+    rows: data.patients.map((row) => mapPatientContributionRow(row)),
+    rollupMode: data.rollupMode === 'location' ? 'location' : 'practice',
+    locations: (data.locations ?? []).map((loc) => ({
+      id: String(loc.id),
+      name: String(loc.name || 'Site'),
+    })),
+  };
+}
+
+export type PeRollupMode = 'location' | 'practice';
+
+/** Label for Practice / Location column in patient list tables. */
+export function patientScopeLabel(
+  row: PatientContributionRow,
+  rollupMode: PeRollupMode = 'practice',
+): string {
+  if (rollupMode === 'location') {
+    return row.locationName?.trim() || 'Unassigned';
+  }
+  return row.practiceName;
 }
 
 export function dataQualityLabel(status: PatientProvenanceStatus): string {
@@ -218,6 +248,40 @@ export function filterPatientRowsByChips(
   return out;
 }
 
+const UNASSIGNED_LOCATION_ID = '__unassigned__';
+
+export function patientLocationId(row: PatientContributionRow): string {
+  return row.locationId ?? UNASSIGNED_LOCATION_ID;
+}
+
+export type PeLocationScope = { id: string; name: string };
+
+/** All org locations plus any unassigned bucket seen on patient rows. */
+export function buildLocationOptions(
+  scopes: PeLocationScope[],
+  rows: PatientContributionRow[],
+): Array<[string, string]> {
+  const map = new Map<string, string>();
+  for (const loc of scopes) {
+    if (loc.id) map.set(loc.id, loc.name);
+  }
+  for (const row of rows) {
+    const id = patientLocationId(row);
+    if (!map.has(id)) {
+      map.set(id, row.locationName?.trim() || 'Unassigned');
+    }
+  }
+  return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+}
+
+export function filterPatientRowsByLocation(
+  rows: PatientContributionRow[],
+  locationFilter: string,
+): PatientContributionRow[] {
+  if (locationFilter === 'all') return rows;
+  return rows.filter((row) => patientLocationId(row) === locationFilter);
+}
+
 export function computePatientListSummary(rows: PatientContributionRow[]): PatientListSummary {
   const totalPatients = rows.length;
   if (totalPatients === 0) {
@@ -227,6 +291,7 @@ export function computePatientListSummary(rows: PatientContributionRow[]): Patie
       retentionActiveCount: 0,
       retentionDriftingCount: 0,
       retentionLapsedCount: 0,
+      retentionEffectivelyLostCount: 0,
       privatePlanPatients: 0,
       memberPatients: 0,
       privateTypePatients: 0,
@@ -405,10 +470,14 @@ function csvEscape(value: string | number): string {
 }
 
 /** Export rows exactly as shown in the table (same objects + provenance label). */
-export function exportPatientListCsv(rows: PatientContributionRow[]): void {
+export function exportPatientListCsv(
+  rows: PatientContributionRow[],
+  rollupMode: PeRollupMode = 'practice',
+): void {
+  const scopeHeader = rollupMode === 'location' ? 'Location' : 'Practice';
   const headers = [
     'Patient',
-    'Practice',
+    scopeHeader,
     'Type',
     'Status',
     'Visit freq /yr',
@@ -426,7 +495,7 @@ export function exportPatientListCsv(rows: PatientContributionRow[]): void {
 
     return [
       row.patientName,
-      row.practiceName,
+      patientScopeLabel(row, rollupMode),
       type ?? '',
       retentionListLabel(row.retentionStatus),
       row.visitFreqPerYear ?? '',
@@ -542,11 +611,31 @@ export function usePatientContributionListTable() {
   const [pageSize, setPageSize] = useState(5);
   const [retentionFilter, setRetentionFilter] = useState<PatientListRetentionFilter>('all');
   const [typeFilter, setTypeFilter] = useState<PatientListTypeFilter>('all');
+  const [locationFilter, setLocationFilter] = useState<string>('all');
+
+  const rollupMode = query.data?.rollupMode ?? 'practice';
+
+  const locationOptions = useMemo(
+    () => buildLocationOptions(query.data?.locations ?? [], query.data?.rows ?? []),
+    [query.data?.locations, query.data?.rows],
+  );
 
   const filtered = useMemo(() => {
-    const searched = filterPatientRows(query.data ?? [], search);
-    return filterPatientRowsByChips(searched, retentionFilter, typeFilter);
-  }, [query.data, search, retentionFilter, typeFilter]);
+    const allRows = query.data?.rows ?? [];
+    const searched = filterPatientRows(allRows, search);
+    const byLocation =
+      rollupMode === 'location'
+        ? filterPatientRowsByLocation(searched, locationFilter)
+        : searched;
+    return filterPatientRowsByChips(byLocation, retentionFilter, typeFilter);
+  }, [
+    query.data?.rows,
+    search,
+    retentionFilter,
+    typeFilter,
+    locationFilter,
+    rollupMode,
+  ]);
 
   const sorted = useMemo(
     () => sortPatientRows(filtered, sortKey, sortDir),
@@ -569,8 +658,8 @@ export function usePatientContributionListTable() {
   const summary = useMemo(() => computePatientListSummary(sorted), [sorted]);
 
   const baselineSummary = useMemo(
-    () => computePatientListSummary(query.data ?? []),
-    [query.data],
+    () => computePatientListSummary(query.data?.rows ?? []),
+    [query.data?.rows],
   );
 
   const toggleSort = (key: PatientListSortKey) => {
@@ -603,6 +692,11 @@ export function usePatientContributionListTable() {
     setPage(1);
   };
 
+  const onLocationFilterChange = (value: string) => {
+    setLocationFilter(value);
+    setPage(1);
+  };
+
   return {
     ...query,
     search,
@@ -611,6 +705,10 @@ export function usePatientContributionListTable() {
     onRetentionFilterChange,
     typeFilter,
     onTypeFilterChange,
+    locationFilter,
+    onLocationFilterChange,
+    locationOptions,
+    rollupMode,
     sortKey,
     sortDir,
     toggleSort,
@@ -620,12 +718,12 @@ export function usePatientContributionListTable() {
     onPageSizeChange,
     totalPages,
     totalRows: sorted.length,
-    totalUnfiltered: (query.data ?? []).length,
+    totalUnfiltered: query.data?.rows?.length ?? 0,
     sorted,
     pageRows,
     summary,
     baselineSummary,
-    hasSyncedPatients: (query.data?.length ?? 0) > 0,
-    exportCsv: () => exportPatientListCsv(sorted),
+    hasSyncedPatients: (query.data?.rows?.length ?? 0) > 0,
+    exportCsv: () => exportPatientListCsv(sorted, rollupMode),
   };
 }

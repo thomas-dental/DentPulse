@@ -6,6 +6,8 @@
  */
 
 const { supabaseAdmin } = require('../../config/supabase');
+const { resolvePeRollupUnits } = require('./peRollupUnits');
+const { loadPatientUuidsForLocation } = require('./peLocationScope');
 const {
   parseRetentionStatus,
   retentionStatusLabel,
@@ -106,16 +108,24 @@ async function loadPracticeNames(practiceIds) {
   return map;
 }
 
-async function loadContributionRowsForPractice(practiceId) {
+async function loadContributionRowsForPractice(practiceId, locationId = null) {
   const rows = [];
   let offset = 0;
+  const patientUuids = locationId
+    ? await loadPatientUuidsForLocation(practiceId, locationId)
+    : null;
+
+  if (patientUuids && patientUuids.length === 0) return rows;
 
   for (let i = 0; i < 200; i++) {
-    const { data, error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from('v_patient_contribution')
       .select('retention_status, contribution')
-      .eq('practice_id', practiceId)
-      .range(offset, offset + PAGE_SIZE - 1);
+      .eq('practice_id', practiceId);
+
+    if (patientUuids) query = query.in('patient_id', patientUuids);
+
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
     if (error) throw new Error(`v_patient_contribution: ${error.message}`);
 
@@ -128,8 +138,8 @@ async function loadContributionRowsForPractice(practiceId) {
   return rows;
 }
 
-async function rollupPractice(practiceId) {
-  const rows = await loadContributionRowsForPractice(practiceId);
+async function rollupPractice(practiceId, locationId = null) {
+  const rows = await loadContributionRowsForPractice(practiceId, locationId);
   return rollupFromContributionRows(rows);
 }
 
@@ -182,33 +192,46 @@ function rollupGroupFromPracticeRollups(practiceRollups) {
  * @param {string} practiceId — context practice (must be in user's orgs)
  */
 async function getRetentionContributionAtRisk(userId, practiceId) {
-  const practiceIds = await loadUserPracticeIds(userId);
-  const names = await loadPracticeNames(practiceIds);
+  const { rollupMode, units } = await resolvePeRollupUnits(userId, practiceId);
 
   const practiceRollups = await Promise.all(
-    practiceIds.map(async (pid) => {
+    units.map(async (unit) => {
       try {
-        const rollup = await rollupPractice(pid);
-        return { practiceId: pid, rollup };
-      } catch (err) {
-        console.warn(`[RetentionAtRisk] practice ${pid} rollup failed:`, err.message);
+        const rollup = await rollupPractice(unit.organizationId, unit.locationId);
         return {
-          practiceId: pid,
+          unitId: unit.unitId,
+          unitName: unit.unitName,
+          unitType: unit.unitType,
+          organizationId: unit.organizationId,
+          rollup,
+        };
+      } catch (err) {
+        console.warn(`[RetentionAtRisk] unit ${unit.unitId} rollup failed:`, err.message);
+        return {
+          unitId: unit.unitId,
+          unitName: unit.unitName,
+          unitType: unit.unitType,
+          organizationId: unit.organizationId,
           rollup: rollupFromContributionRows([]),
         };
       }
     }),
   );
 
-  const contextRollup =
-    practiceRollups.find((p) => p.practiceId === practiceId)?.rollup ??
-    rollupFromContributionRows([]);
+  const contextUnit =
+    practiceRollups.find((p) => p.unitId === practiceId) ??
+    practiceRollups.find((p) => p.organizationId === practiceId) ??
+    practiceRollups[0];
+
+  const contextRollup = contextUnit?.rollup ?? rollupFromContributionRows([]);
 
   const groupRollup = rollupGroupFromPracticeRollups(practiceRollups.map((p) => p.rollup));
 
-  const practices = practiceRollups.map(({ practiceId: pid, rollup }) => ({
-    practiceId: pid,
-    practiceName: names.get(pid) || 'Practice',
+  const practices = practiceRollups.map(({ unitId, unitName, unitType, organizationId, rollup }) => ({
+    practiceId: unitId,
+    practiceName: unitName,
+    unitType,
+    organizationId,
     ...rollup,
   }));
 
@@ -218,15 +241,19 @@ async function getRetentionContributionAtRisk(userId, practiceId) {
 
   return {
     practiceId,
-    practiceName: names.get(practiceId) || 'This practice',
+    practiceName: contextUnit?.unitName || 'This practice',
+    rollupMode,
     practice: {
-      practiceId,
-      practiceName: names.get(practiceId) || 'This practice',
+      practiceId: contextUnit?.unitId ?? practiceId,
+      practiceName: contextUnit?.unitName || 'This practice',
+      unitType: contextUnit?.unitType ?? 'practice',
+      organizationId: contextUnit?.organizationId ?? practiceId,
       ...contextRollup,
     },
     group: {
       ...groupRollup,
       practiceCount: practices.length,
+      rollupUnitCount: practices.length,
       practices,
     },
     hasData,

@@ -4,6 +4,11 @@
 
 import type { JourneyStage } from '@/hooks/useTreatmentEconomicJourney';
 import type { CommitmentClinicianRow, CommitmentWindowRow } from '@/hooks/useValueLeakageSummary';
+import {
+  PE_CHART_CAPTION_PX,
+  PE_CHART_LABEL_PX,
+  PE_CHART_VALUE_PX,
+} from '@/lib/peVisualTokens';
 
 export function formatGbpCompact(value: number): string {
   const abs = Math.abs(value);
@@ -33,7 +38,7 @@ const COMMITMENT_BENCHMARK_PCT = 70;
 export function JourneyWaterfallDetailedChart({ stages }: { stages: JourneyStage[] }) {
   const W = 560;
   const H = 230;
-  const pl = 40;
+  const pl = 56;
   const pr = 12;
   const pt = 18;
   const pb = 44;
@@ -52,7 +57,7 @@ export function JourneyWaterfallDetailedChart({ stages }: { stages: JourneyStage
     return (
       <g key={g}>
         <line x1={pl} y1={gy} x2={W - pr} y2={gy} stroke={grid} strokeWidth={1} />
-        <text x={pl - 6} y={gy + 3} textAnchor="end" fontSize={9} fill={muted}>
+        <text x={pl - 6} y={gy + 3} textAnchor="end" fontSize={PE_CHART_CAPTION_PX} fill={muted}>
           {formatGbpCompact(labelVal)}
         </text>
       </g>
@@ -97,9 +102,9 @@ export function JourneyWaterfallDetailedChart({ stages }: { stages: JourneyStage
             />
             <text
               x={bx + w / 2}
-              y={Math.max(top - 5, 11)}
+              y={Math.max(top - 5, 14)}
               textAnchor="middle"
-              fontSize={10.5}
+              fontSize={PE_CHART_VALUE_PX}
               fontWeight={700}
               fill={primary}
             >
@@ -109,7 +114,7 @@ export function JourneyWaterfallDetailedChart({ stages }: { stages: JourneyStage
               x={bx + w / 2}
               y={H - pb + 16}
               textAnchor="middle"
-              fontSize={9.5}
+              fontSize={PE_CHART_LABEL_PX}
               fill={muted}
             >
               {s.label}
@@ -129,14 +134,14 @@ export type OpportunityCategoryRow = {
 
 export function OpportunityGrossVsWeightedChart({ rows }: { rows: OpportunityCategoryRow[] }) {
   const W = 520;
-  const pl = 70;
-  const pr = 54;
-  const rowH = 40;
+  const pl = 78;
+  const pr = 64;
+  const rowH = 48;
   const primary = 'hsl(var(--primary))';
   const muted = 'hsl(var(--muted-foreground))';
   const max = Math.max(...rows.map((r) => r.gross), 1);
   const bw = W - pl - pr;
-  const chartH = rows.length * rowH + 24;
+  const chartH = rows.length * rowH + 28;
 
   return (
     <svg
@@ -152,33 +157,40 @@ export function OpportunityGrossVsWeightedChart({ rows }: { rows: OpportunityCat
         const wtdW = (bw * row.weighted) / max;
         return (
           <g key={row.category}>
-            <text x={pl - 8} y={yy + 20} textAnchor="end" fontSize={11} fill={muted}>
-              {row.category}
-            </text>
-            <rect x={pl} y={yy + 4} width={grossW} height={13} rx={4} fill={primary} opacity={0.25} />
-            <rect x={pl} y={yy + 20} width={wtdW} height={13} rx={4} fill={primary} />
             <text
-              x={pl + (row.gross > 0 ? grossW + 5 : 4)}
-              y={yy + 14}
-              fontSize={9.5}
+              x={pl - 8}
+              y={yy + 24}
+              textAnchor="end"
+              fontSize={PE_CHART_LABEL_PX}
+              fontWeight={600}
               fill={muted}
             >
-              £{Math.round(row.gross)}
+              {row.category}
+            </text>
+            <rect x={pl} y={yy + 4} width={grossW} height={14} rx={4} fill={primary} opacity={0.25} />
+            <rect x={pl} y={yy + 22} width={wtdW} height={14} rx={4} fill={primary} />
+            <text
+              x={pl + (row.gross > 0 ? grossW + 6 : 4)}
+              y={yy + 15}
+              fontSize={PE_CHART_VALUE_PX}
+              fontWeight={700}
+              fill={muted}
+            >
+              £{Math.round(row.gross).toLocaleString('en-GB')}
             </text>
             <text
-              x={pl + (row.weighted > 0 ? wtdW + 5 : 4)}
-              y={yy + 30}
-              fontSize={9.5}
+              x={pl + (row.weighted > 0 ? wtdW + 6 : 4)}
+              y={yy + 33}
+              fontSize={PE_CHART_VALUE_PX}
               fontWeight={700}
               fill={primary}
-              opacity={row.weighted > 0 ? 1 : 0.55}
             >
-              £{Math.round(row.weighted)}
+              £{Math.round(row.weighted).toLocaleString('en-GB')}
             </text>
           </g>
         );
       })}
-      <text x={pl} y={chartH - 2} fontSize={9.5} fill={muted}>
+      <text x={pl} y={chartH - 4} fontSize={PE_CHART_CAPTION_PX} fill={muted}>
         ▨ gross ▮ probability-weighted
       </text>
     </svg>
@@ -248,7 +260,7 @@ export function ClinicianCommitmentChart({ rows }: { rows: CommitmentClinicianRo
             : row.practitionerName;
         return (
           <g key={row.practitionerExtId ?? row.practitionerName}>
-            <text x={8} y={yy + 12} textAnchor="start" fontSize={11} fill={muted}>
+            <text x={8} y={yy + 12} textAnchor="start" fontSize={PE_CHART_LABEL_PX} fontWeight={600} fill={muted}>
               {label}
             </text>
             <rect
@@ -261,7 +273,7 @@ export function ClinicianCommitmentChart({ rows }: { rows: CommitmentClinicianRo
               opacity={0.5}
             />
             <rect x={pl} y={yy + 6} width={w} height={barH} rx={barRx} fill={col} />
-            <text x={pl + w + 6} y={yy + 12} fontSize={10.5} fontWeight={700} fill={col}>
+            <text x={pl + w + 6} y={yy + 12} fontSize={PE_CHART_VALUE_PX} fontWeight={700} fill={col}>
               {pct}%
             </text>
           </g>
@@ -321,8 +333,8 @@ export function WindowCommitmentChart({ rows }: { rows: CommitmentWindowRow[] })
               x={bx + bw / 2}
               y={barTop - 5}
               textAnchor="middle"
-              fontSize={11}
-              fontWeight={800}
+              fontSize={PE_CHART_VALUE_PX}
+              fontWeight={700}
               fill={blue}
             >
               {pct}%
@@ -331,7 +343,7 @@ export function WindowCommitmentChart({ rows }: { rows: CommitmentWindowRow[] })
               x={bx + bw / 2}
               y={H - 8}
               textAnchor="middle"
-              fontSize={10.5}
+              fontSize={PE_CHART_LABEL_PX}
               fill={muted}
             >
               {row.windowDays}d

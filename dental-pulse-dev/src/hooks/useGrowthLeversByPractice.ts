@@ -35,6 +35,7 @@ export type GrowthLeversByPractice = {
   };
   practices: GrowthLeversPracticeRow[];
   hasData: boolean;
+  rollupMode?: 'location' | 'practice';
 };
 
 export function useGrowthLeversByPractice() {
@@ -99,6 +100,7 @@ export function useGrowthLeversByPractice() {
           topLeverToPull: r.topLeverToPull != null ? String(r.topLeverToPull) : null,
         })),
         hasData: Boolean(body.hasData),
+        rollupMode: body.rollupMode === 'location' ? 'location' : 'practice',
       };
     },
   });

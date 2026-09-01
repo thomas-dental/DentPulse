@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import { format, parseISO } from 'date-fns';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -37,6 +36,10 @@ import {
   createPractitionerPrivateShareRate,
   listPractitionerPrivateShareRates,
 } from '@/services/integrations/patientEconomicsService';
+import { PeRateHistoryList } from '@/components/patient-economics/PePractitionerPrivateShareUi';
+import {
+  formatPePrivateShareRatePct,
+} from '@/lib/pePractitionerPrivateShareFormat';
 
 export const PE_PRACTICE_UDA_RATE_QUERY_KEY = 'pe-practice-uda-rate';
 
@@ -45,19 +48,6 @@ const PAGE_SIZE = 10;
 type ClinicianRemunerationProfilesProps = {
   organizationId?: string | null;
 };
-
-function formatDisplayDate(isoDate: string): string {
-  try {
-    return format(parseISO(isoDate), 'd MMM yyyy');
-  } catch {
-    return isoDate;
-  }
-}
-
-function formatRatePct(rate: number): string {
-  const rounded = Math.round(rate * 100) / 100;
-  return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(2)}%`;
-}
 
 function formatUdaGbpRate(rate: number | null): string {
   if (rate == null || !Number.isFinite(rate) || rate <= 0) return '—';
@@ -128,7 +118,7 @@ function practitionerLabel(p: PractitionerWithRates): string {
 
 function formatPrivateShare(p: PractitionerWithRates): string {
   if (p.rateConfigured && p.currentRate != null) {
-    return formatRatePct(p.currentRate);
+    return formatPePrivateShareRatePct(p.currentRate);
   }
   return '—';
 }
@@ -155,37 +145,7 @@ function SortIcon({
 }
 
 function RateHistoryList({ history }: { history: PractitionerWithRates['history'] }) {
-  if (history.length === 0) {
-    return <p className="py-2 text-xs text-muted-foreground">No rate history yet.</p>;
-  }
-
-  return (
-    <ul className="max-h-48 space-y-2 overflow-y-auto py-2">
-      {history.map((entry) => (
-        <li
-          key={entry.id}
-          className={cn(
-            'flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs',
-            entry.isCurrent ? 'border-primary/30 bg-primary/5' : 'border-border bg-muted/30',
-          )}
-        >
-          <div>
-            <span className="font-semibold text-foreground">{formatRatePct(entry.rate)}</span>
-            {entry.isCurrent && (
-              <span className="ml-2 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                Current
-              </span>
-            )}
-          </div>
-          <span className="text-muted-foreground">
-            {formatDisplayDate(entry.effectiveFrom)}
-            {' → '}
-            {entry.effectiveTo ? formatDisplayDate(entry.effectiveTo) : 'ongoing'}
-          </span>
-        </li>
-      ))}
-    </ul>
-  );
+  return <PeRateHistoryList history={history} />;
 }
 
 export function ClinicianRemunerationProfiles({ organizationId }: ClinicianRemunerationProfilesProps) {

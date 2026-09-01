@@ -23,7 +23,11 @@ import {
   type PracticeSortKey,
 } from '@/hooks/usePracticeContributionRollup';
 import { cn } from '@/lib/utils';
-import { PE_CTX_BANNER_CLASS } from '@/lib/peVisualTokens';
+import {
+  PE_CHART_LABEL_PX,
+  PE_CHART_VALUE_PX,
+  PE_CTX_BANNER_CLASS,
+} from '@/lib/peVisualTokens';
 import { PatientEconomicsSettingsTab } from '@/pages/patient-economics/PatientEconomicsSettingsTab';
 import { PatientListDirectory } from '@/pages/patient-economics/PatientListDirectory';
 import { PatientFinancialRecords } from '@/pages/patient-economics/PatientFinancialRecords';
@@ -476,7 +480,7 @@ function PageChrome({ activeTab }: { activeTab: string | null }) {
           </h1>
           <p className="mt-[3px] text-sm text-muted-foreground">
             Every patient as a financial record, contribution, opportunity and value at risk,
-            across all 12 practices.
+            across all locations in your organisation.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -494,9 +498,10 @@ function PageChrome({ activeTab }: { activeTab: string | null }) {
       <div className="mb-[18px] flex items-start gap-2.5 rounded-[10px] border border-primary/20 bg-gradient-to-r from-primary/[0.08] to-primary/[0.02] px-3.5 py-2.5 text-[13px] leading-relaxed text-foreground">
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
         <span>
-          Viewing as <b className="font-semibold text-primary">Multi-Practice Manager</b>
+          Viewing as <b className="font-semibold text-primary">Practice manager</b>
           {' · '}
-          figures aggregate <b className="font-semibold text-primary">all practices</b>.
+          figures aggregate <b className="font-semibold text-primary">all locations</b> when your
+          organisation has multiple sites.
           Contribution figures use the{' '}
           <b className="font-semibold text-primary">Economic Assumptions</b> in Settings where
           live cost feeds aren&apos;t connected, each number carries a data-confidence tag.
@@ -688,7 +693,7 @@ function OpportunityActions({ metrics, isLoading }: { metrics: EconomicPulseMetr
 function JourneyWaterfallChart({ stages }: { stages: JourneyStage[] }) {
   const W = 560;
   const H = 230;
-  const pl = 40;
+  const pl = 56;
   const pr = 12;
   const pt = 18;
   const pb = 44;
@@ -712,7 +717,7 @@ function JourneyWaterfallChart({ stages }: { stages: JourneyStage[] }) {
           x={pl - 6}
           y={gy + 3}
           textAnchor="end"
-          fontSize={9}
+          fontSize={PE_CHART_LABEL_PX}
           fill={muted}
         >
           {formatGbpCompact(labelVal)}
@@ -756,7 +761,7 @@ function JourneyWaterfallChart({ stages }: { stages: JourneyStage[] }) {
               x={bx + w / 2}
               y={Math.max(top - 5, 11)}
               textAnchor="middle"
-              fontSize={10.5}
+              fontSize={PE_CHART_VALUE_PX}
               fontWeight={700}
               fill={primary}
             >
@@ -766,7 +771,7 @@ function JourneyWaterfallChart({ stages }: { stages: JourneyStage[] }) {
               x={bx + w / 2}
               y={H - pb + 16}
               textAnchor="middle"
-              fontSize={9.5}
+              fontSize={PE_CHART_LABEL_PX}
               fill={muted}
             >
               {s.label}
@@ -775,7 +780,7 @@ function JourneyWaterfallChart({ stages }: { stages: JourneyStage[] }) {
               x={bx + w / 2}
               y={H - pb + 28}
               textAnchor="middle"
-              fontSize={9}
+              fontSize={PE_CHART_LABEL_PX}
               fill={muted}
             >
               {s.eventCount.toLocaleString('en-GB')}
@@ -830,13 +835,13 @@ function ContributionVsRevenueChart({
               x={bx + bw / 2}
               y={Math.max(top - 5, 12)}
               textAnchor="middle"
-              fontSize={12}
+              fontSize={PE_CHART_VALUE_PX}
               fontWeight={800}
               fill={b.color}
             >
               {formatGbpCompact(b.value)}
             </text>
-            <text x={bx + bw / 2} y={H - 8} textAnchor="middle" fontSize={10.5} fill={mut}>
+            <text x={bx + bw / 2} y={H - 8} textAnchor="middle" fontSize={PE_CHART_LABEL_PX} fill={mut}>
               {b.label}
             </text>
           </g>
@@ -1031,11 +1036,14 @@ function WhereTheValueSits() {
 }
 
 function PerPracticeEconomicsTable() {
-  const { rows, isLoading, isError, error, refetch, isFetching, sortKey, sortDir, toggleSort } =
+  const { rows, isLoading, isError, error, refetch, isFetching, sortKey, sortDir, toggleSort, rollupMode } =
     useSortedPracticeContributionRollup();
 
+  const unitLabel = rollupMode === 'location' ? 'Location' : 'Practice';
+  const unitLabelPlural = rollupMode === 'location' ? 'locations' : 'practices';
+
   const columns: { key: PracticeSortKey; label: string; align?: 'left' | 'right' }[] = [
-    { key: 'practiceName', label: 'Practice', align: 'left' },
+    { key: 'practiceName', label: unitLabel, align: 'left' },
     { key: 'patientsWithRevenue', label: 'Patients', align: 'right' },
     { key: 'revenuePrivatePlan', label: 'Revenue', align: 'right' },
     { key: 'clinicianCost', label: 'Clinician cost', align: 'right' },
@@ -1047,11 +1055,15 @@ function PerPracticeEconomicsTable() {
 
   return (
     <>
-      <SectionLabel>Practice comparison</SectionLabel>
+      <SectionLabel>
+        {rollupMode === 'location' ? 'Location comparison' : 'Practice comparison'}
+      </SectionLabel>
       <div className="overflow-hidden rounded-[14px] border border-border bg-card shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-[18px] pb-1.5">
           <div>
-            <h3 className="text-[15px] font-bold text-foreground">Per-Practice Economics</h3>
+            <h3 className="text-[15px] font-bold text-foreground">
+              {rollupMode === 'location' ? 'Per-Location Economics' : 'Per-Practice Economics'}
+            </h3>
             <p className="mt-0.5 text-[12.5px] text-muted-foreground">
               Ranked by contribution · data quality from invoice attribution
             </p>
@@ -1059,7 +1071,7 @@ function PerPracticeEconomicsTable() {
           <div className="flex flex-wrap items-center gap-1.5">
             <ProvenanceChip kind="derived" />
             <span className="inline-flex shrink-0 items-center rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
-              Multi-practice view
+              {rollupMode === 'location' ? 'Multi-location view' : 'Multi-practice view'}
             </span>
           </div>
         </div>
@@ -1068,9 +1080,9 @@ function PerPracticeEconomicsTable() {
           <div className="m-5 flex flex-wrap items-start gap-3 rounded-[10px] border border-danger/30 bg-danger-muted px-3 py-2.5 text-sm text-danger-strong">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <div className="flex-1">
-              <div className="font-semibold">Couldn’t load per-practice rollup</div>
+              <div className="font-semibold">Couldn’t load per-{unitLabel.toLowerCase()} rollup</div>
               <div className="mt-0.5 text-danger-strong/80">
-                {(error as Error)?.message || 'v_practice_contribution query failed.'}
+                {(error as Error)?.message || 'Contribution rollup query failed.'}
               </div>
             </div>
             <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
@@ -1123,9 +1135,10 @@ function PerPracticeEconomicsTable() {
                     colSpan={columns.length}
                     className="px-3.5 py-10 text-center text-[13px] text-muted-foreground"
                   >
-                    <div className="font-semibold">No practices in scope</div>
+                    <div className="font-semibold">No {unitLabelPlural} in scope</div>
                     <div className="mt-1 text-[12px]">
-                      Join an organization (user_roles) to see per-practice economics.
+                      Join an organization (user_roles) to see per-{unitLabel.toLowerCase()}{' '}
+                      economics.
                     </div>
                   </td>
                 </tr>

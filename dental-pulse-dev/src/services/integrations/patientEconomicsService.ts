@@ -312,6 +312,27 @@ export async function listPractitionerPrivateShareRates(
   };
 }
 
+/** Load every clinician row (paginates past API pageSize cap of 50). */
+export async function fetchAllPractitionerPrivateShareRates(
+  practiceId: string,
+): Promise<PractitionerWithRates[]> {
+  const practitioners: PractitionerWithRates[] = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages) {
+    const data = await listPractitionerPrivateShareRates(practiceId, {
+      page,
+      pageSize: 50,
+    });
+    practitioners.push(...data.practitioners);
+    totalPages = data.pagination.totalPages;
+    page += 1;
+  }
+
+  return practitioners;
+}
+
 export type JourneyStageKey =
   | 'planned'
   | 'scheduled'
@@ -400,6 +421,8 @@ export async function fetchPatientContributionList(practiceId: string) {
     success: true;
     practiceId: string;
     practiceName: string;
+    rollupMode: 'location' | 'practice';
+    locations: Array<{ id: string; name: string }>;
     patients: Array<Record<string, unknown>>;
   }>('/read/patient-contribution-list', { practiceId });
 }
@@ -410,6 +433,8 @@ export async function fetchPatientFinancialRecordList(practiceId: string) {
     success: true;
     practiceId: string;
     practiceName: string;
+    rollupMode: 'location' | 'practice';
+    locations: Array<{ id: string; name: string }>;
     patients: Array<Record<string, unknown>>;
   }>('/read/patient-financial-records', { practiceId });
 }

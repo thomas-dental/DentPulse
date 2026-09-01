@@ -13,11 +13,19 @@ export function useGoalSettings() {
       const body = await fetchGoalSettingsApi(organizationId!);
       return {
         contextPracticeId: String(body.contextPracticeId),
+        rollupMode: body.rollupMode === 'location' ? 'location' : 'practice',
         commitmentWindowDays: Number(body.commitmentWindowDays) || 30,
         quarterStart: String(body.quarterStart || ''),
         defaults: body.defaults,
         contextMetrics: body.contextMetrics,
-        practices: body.practices ?? [],
+        practices: (body.practices ?? []).map((row: Record<string, unknown>) => ({
+          ...row,
+          practiceId: String(row.practiceId),
+          practiceName: String(row.practiceName || 'Practice'),
+          unitType: row.unitType === 'location' ? 'location' : 'practice',
+          organizationId:
+            row.organizationId != null ? String(row.organizationId) : String(row.practiceId),
+        })),
         hasData: body.hasData === true,
       };
     },

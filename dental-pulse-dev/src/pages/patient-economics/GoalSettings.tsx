@@ -21,6 +21,16 @@ import { saveGoalSettingsApi } from '@/services/integrations/patientEconomicsSer
 import type { PeGoalTargets } from '@/types/peGoalSettings';
 import { cn } from '@/lib/utils';
 import { PE_CTX_BANNER_CLASS } from '@/lib/peVisualTokens';
+import {
+  applyFieldRemainderFill,
+  applyLastRowAutoFill,
+  buildRowOverrideTargets,
+  emptyGoalTargetInputs,
+  resolveEffectiveGoalInputs,
+  shouldSaveOverrideRow,
+  type GoalTargetField,
+  type GoalTargetInputs,
+} from '@/lib/peGoalDistribution';
 import { formatCommitmentPointsGap } from '@/lib/peGoalProgress';
 
 function emptyTargets(): PeGoalTargets {
@@ -33,13 +43,13 @@ function emptyTargets(): PeGoalTargets {
 }
 
 function parseInputNumber(raw: string): number | null {
-  const t = raw.trim().replace(/[£,]/g, '');
+  const t = raw.trim().replace(/[£,%]/g, '');
   if (!t) return null;
   const normalized = t.endsWith('k') ? Number(t.slice(0, -1)) * 1000 : Number(t);
   return Number.isFinite(normalized) ? normalized : null;
 }
 
-function targetsToInputs(t: PeGoalTargets) {
+function targetsToInputs(t: PeGoalTargets): GoalTargetInputs {
   return {
     commitmentRatePct: t.commitmentRatePct != null ? String(t.commitmentRatePct) : '',
     contributionPerActiveGbp:
@@ -50,7 +60,7 @@ function targetsToInputs(t: PeGoalTargets) {
   };
 }
 
-function inputsToTargets(inputs: ReturnType<typeof targetsToInputs>): PeGoalTargets {
+function inputsToTargets(inputs: GoalTargetInputs): PeGoalTargets {
   return {
     commitmentRatePct: parseInputNumber(inputs.commitmentRatePct),
     contributionPerActiveGbp: parseInputNumber(inputs.contributionPerActiveGbp),
@@ -82,50 +92,92 @@ function attritionBreachingHint(
   return `${shortName} breaching at ${worst.pct}%`;
 }
 
+type GoalSettingsSavePayload = {
+  defaultInputs: GoalTargetInputs;
+  overrideInputs: Record<string, GoalTargetInputs>;
+  overrideSnapshot: Record<string, GoalTargetInputs>;
+  rows: Array<{ practiceId: string }>;
+};
+
 export function GoalSettings() {
   const { organizationId } = useOrganization();
   const queryClient = useQueryClient();
   const settingsQuery = useGoalSettings();
   const data = settingsQuery.data;
 
-  const [defaultInputs, setDefaultInputs] = useState(targetsToInputs(emptyTargets()));
-  const [overrideInputs, setOverrideInputs] = useState<
-    Record<string, ReturnType<typeof targetsToInputs>>
-  >({});
+  const [defaultInputs, setDefaultInputs] = useState<GoalTargetInputs>(emptyGoalTargetInputs());
+  const [overrideInputs, setOverrideInputs] = useState<Record<string, GoalTargetInputs>>({});
+  const [overrideSnapshot, setOverrideSnapshot] = useState<Record<string, GoalTargetInputs>>({});
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!data) return;
     setDefaultInputs(targetsToInputs(data.defaults));
-    const map: Record<string, ReturnType<typeof targetsToInputs>> = {};
+    const map: Record<string, GoalTargetInputs> = {};
     for (const row of data.practices) {
       map[row.practiceId] = targetsToInputs(row.override ?? emptyTargets());
     }
     setOverrideInputs(map);
+    setOverrideSnapshot(
+      Object.fromEntries(
+        Object.entries(map).map(([id, inputs]) => [id, { ...inputs }]),
+      ),
+    );
   }, [data]);
 
+  useEffect(() => {
+    if (!saveSuccessMessage) return;
+    const timer = window.setTimeout(() => setSaveSuccessMessage(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [saveSuccessMessage]);
+
   const saveMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (payload: GoalSettingsSavePayload) => {
       if (!organizationId) throw new Error('No practice selected');
-      const practiceOverrides = Object.entries(overrideInputs).map(([practiceId, inputs]) => ({
-        practiceId,
-        ...inputsToTargets(inputs),
-      }));
+
+      const practiceOverrides = payload.rows
+        .map((row) => {
+          const inputs = payload.overrideInputs[row.practiceId] ?? emptyGoalTargetInputs();
+          const snapshot = payload.overrideSnapshot[row.practiceId] ?? emptyGoalTargetInputs();
+          if (!shouldSaveOverrideRow(inputs, snapshot)) return null;
+          return { practiceId: row.practiceId, ...buildRowOverrideTargets(inputs) };
+        })
+        .filter((row): row is NonNullable<typeof row> => row != null);
+
       return saveGoalSettingsApi(organizationId, {
-        defaults: inputsToTargets(defaultInputs),
+        defaults: inputsToTargets(payload.defaultInputs),
         practiceOverrides,
       });
     },
-    onSuccess: () => {
-      toast.success('Goal targets saved');
+    onSuccess: (_data, variables) => {
+      setSaveSuccessMessage('Goal targets saved successfully.');
+      setOverrideSnapshot(
+        Object.fromEntries(
+          Object.entries(variables.overrideInputs).map(([id, inputs]) => [id, { ...inputs }]),
+        ),
+      );
+      toast.success('Goal targets saved', {
+        description: 'Group and per-location targets have been updated.',
+        duration: 5000,
+      });
       queryClient.invalidateQueries({ queryKey: ['pe-goal-settings', organizationId] });
     },
     onError: (err: Error) => {
-      toast.error(err.message || 'Failed to save goal targets');
+      setSaveSuccessMessage(null);
+      toast.error(err.message || 'Failed to save goal targets', { duration: 6000 });
     },
   });
 
   const contextMetrics = data?.contextMetrics;
   const practiceRows = useMemo(() => data?.practices ?? [], [data?.practices]);
+  const practiceIds = useMemo(() => practiceRows.map((row) => row.practiceId), [practiceRows]);
+  const rollupUnitLabel = data?.rollupMode === 'location' ? 'location' : 'practice';
+  const rollupUnitLabelPlural = data?.rollupMode === 'location' ? 'locations' : 'practices';
+
+  const effectiveOverrideInputs = useMemo(
+    () => resolveEffectiveGoalInputs(defaultInputs, overrideInputs, practiceIds),
+    [defaultInputs, overrideInputs, practiceIds],
+  );
 
   const attritionFooter = useMemo(
     () => attritionBreachingHint(practiceRows),
@@ -143,16 +195,26 @@ export function GoalSettings() {
   );
 
   const updateOverride = useCallback(
-    (practiceId: string, field: keyof ReturnType<typeof targetsToInputs>, value: string) => {
-      setOverrideInputs((prev) => ({
-        ...prev,
-        [practiceId]: {
-          ...(prev[practiceId] ?? targetsToInputs(emptyTargets())),
-          [field]: value,
-        },
-      }));
+    (practiceId: string, field: GoalTargetField, value: string) => {
+      setOverrideInputs((prev) => {
+        const withEdit = {
+          ...prev,
+          [practiceId]: {
+            ...(prev[practiceId] ?? emptyGoalTargetInputs()),
+            [field]: value,
+          },
+        };
+
+        const withFieldFill = applyFieldRemainderFill(
+          defaultInputs,
+          withEdit,
+          practiceIds,
+          field,
+        );
+        return applyLastRowAutoFill(defaultInputs, withFieldFill, practiceIds);
+      });
     },
-    [],
+    [defaultInputs, practiceIds],
   );
 
   return (
@@ -161,7 +223,7 @@ export function GoalSettings() {
         <Target className="h-4 w-4 shrink-0 text-primary" />
         <span>
           Targets are economic now, contribution, commitment rate and opportunity conversion, with{' '}
-          <strong className="text-primary">actual vs target</strong> progress. Blank per-practice
+          <strong className="text-primary">actual vs target</strong> progress. Blank per-{rollupUnitLabel}{' '}
           fields inherit the group target.
         </span>
       </div>
@@ -260,13 +322,13 @@ export function GoalSettings() {
             </p>
           )}
 
-          <PeSectionLabel>Per-practice goal overrides</PeSectionLabel>
+          <PeSectionLabel>Per-{rollupUnitLabel} goal overrides</PeSectionLabel>
 
           <div className="rounded-[14px] border border-border bg-card shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
               <div>
                 <h3 className="text-[15px] font-bold tracking-tight text-foreground">
-                  Targets by practice
+                  Targets by {rollupUnitLabel}
                 </h3>
                 <p className="mt-0.5 text-[12.5px] text-muted-foreground">
                   Blank inherits the group target
@@ -277,7 +339,14 @@ export function GoalSettings() {
                 size="sm"
                 className="h-8 gap-1.5"
                 disabled={saveMutation.isPending || !organizationId}
-                onClick={() => saveMutation.mutate()}
+                onClick={() =>
+                  saveMutation.mutate({
+                    defaultInputs,
+                    overrideInputs,
+                    overrideSnapshot,
+                    rows: practiceRows,
+                  })
+                }
               >
                 {saveMutation.isPending ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -288,9 +357,19 @@ export function GoalSettings() {
               </Button>
             </div>
 
+            {saveSuccessMessage && (
+              <div
+                className="mx-5 mt-4 flex items-start gap-2 rounded-[10px] border border-success/30 bg-success-muted px-3 py-2.5 text-sm text-success-strong"
+                role="status"
+              >
+                <Check className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{saveSuccessMessage}</span>
+              </div>
+            )}
+
             {practiceRows.length === 0 ? (
               <p className="px-5 py-10 text-center text-sm text-muted-foreground">
-                No practices in scope for your account.
+                No {rollupUnitLabelPlural} in scope for your account.
               </p>
             ) : (
               <div className="overflow-x-auto">
@@ -298,7 +377,7 @@ export function GoalSettings() {
                   <thead>
                     <tr className="border-b border-border">
                       <th className="px-5 py-[11px] text-[12px] font-semibold text-muted-foreground">
-                        Practice
+                        {rollupUnitLabel === 'location' ? 'Location' : 'Practice'}
                       </th>
                       <th className="px-3 py-[11px] text-[12px] font-semibold text-muted-foreground">
                         Commit rate %
@@ -319,12 +398,13 @@ export function GoalSettings() {
                   </thead>
                   <tbody>
                     {practiceRows.map((row) => {
-                      const inputs =
-                        overrideInputs[row.practiceId] ?? targetsToInputs(emptyTargets());
+                      const inputs = overrideInputs[row.practiceId] ?? emptyGoalTargetInputs();
+                      const effectiveInputs =
+                        effectiveOverrideInputs[row.practiceId] ?? emptyGoalTargetInputs();
                       const progressPct = computePracticeGoalProgressPct(
                         row,
                         defaultInputs,
-                        inputs,
+                        effectiveInputs,
                       );
                       const barPct =
                         progressPct != null ? Math.min(Math.max(progressPct, 0), 100) : 0;
@@ -344,7 +424,7 @@ export function GoalSettings() {
                               onChange={(e) =>
                                 updateOverride(row.practiceId, 'commitmentRatePct', e.target.value)
                               }
-                              placeholder="—"
+                              placeholder="inherit"
                             />
                           </td>
                           <td className="px-3 py-2">
@@ -358,7 +438,7 @@ export function GoalSettings() {
                                   e.target.value,
                                 )
                               }
-                              placeholder="—"
+                              placeholder="inherit"
                             />
                           </td>
                           <td className="px-3 py-2">
@@ -372,7 +452,7 @@ export function GoalSettings() {
                                   e.target.value,
                                 )
                               }
-                              placeholder="—"
+                              placeholder="inherit"
                             />
                           </td>
                           <td className="px-3 py-2">
@@ -382,7 +462,7 @@ export function GoalSettings() {
                               onChange={(e) =>
                                 updateOverride(row.practiceId, 'attritionCeilingPct', e.target.value)
                               }
-                              placeholder="—"
+                              placeholder="inherit"
                             />
                           </td>
                           <td className="px-5 py-3">
@@ -391,7 +471,7 @@ export function GoalSettings() {
                                 <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted/80">
                                   <div
                                     className={cn(
-                                      'h-full rounded-full',
+                                      'h-full rounded-full transition-all',
                                       goalProgressBarClass(progressPct),
                                     )}
                                     style={{ width: `${barPct}%` }}

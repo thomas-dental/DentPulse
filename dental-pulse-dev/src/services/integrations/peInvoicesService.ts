@@ -79,6 +79,7 @@ export type PeInvoicesSummary = {
   agedBuckets: PeAgedDebtBucket[];
   invoiceListRows: PeInvoiceListRow[];
   collectionByPractice: PeCollectionRatePracticeRow[];
+  rollupMode: 'location' | 'practice';
 };
 
 async function fetchAllPages<T>(
@@ -383,22 +384,98 @@ function mapRawToListRow(
   };
 }
 
+async function loadLocationsForOrg(organizationId: string): Promise<Array<{ id: string; name: string }>> {
+  const { data, error } = await (supabase as any)
+    .from('practice_locations')
+    .select('id, location_name')
+    .eq('organization_id', organizationId)
+    .is('deleted_at', null)
+    .order('location_name');
+
+  if (error) throw error;
+
+  return (data ?? [])
+    .map((row: { id: string; location_name: string | null }) => ({
+      id: String(row.id),
+      name: String(row.location_name || 'Site').trim() || 'Site',
+    }))
+    .filter((row) => row.id.length > 0);
+}
+
+type PeRollupUnit = {
+  unitId: string;
+  unitName: string;
+  unitType: 'location' | 'practice';
+  organizationId: string;
+  locationId: string | null;
+};
+
+async function resolvePeRollupUnits(
+  userId: string,
+  contextPracticeId: string,
+): Promise<{ rollupMode: 'location' | 'practice'; units: PeRollupUnit[] }> {
+  const practiceIds = await loadUserPracticeIds(userId);
+  const organizationIds =
+    practiceIds.length > 0
+      ? practiceIds.includes(contextPracticeId)
+        ? practiceIds
+        : [...practiceIds, contextPracticeId]
+      : [contextPracticeId];
+
+  const practiceNames = await loadPracticeNames(organizationIds);
+  const units: PeRollupUnit[] = [];
+
+  for (const orgId of organizationIds) {
+    const orgName = practiceNames.get(orgId) ?? 'Practice';
+    const locations = await loadLocationsForOrg(orgId);
+
+    if (locations.length > 1) {
+      for (const loc of locations) {
+        units.push({
+          unitId: loc.id,
+          unitName: loc.name,
+          unitType: 'location',
+          organizationId: orgId,
+          locationId: loc.id,
+        });
+      }
+    } else {
+      units.push({
+        unitId: orgId,
+        unitName: orgName,
+        unitType: 'practice',
+        organizationId: orgId,
+        locationId: locations[0]?.id ?? null,
+      });
+    }
+  }
+
+  units.sort((a, b) => a.unitName.localeCompare(b.unitName));
+  const rollupMode = units.some((u) => u.unitType === 'location') ? 'location' : 'practice';
+
+  return { rollupMode, units };
+}
+
 async function sumInvoicedInPeriod(
   organizationId: string,
   since: string,
   today: string,
+  locationId: string | null = null,
 ): Promise<number> {
-  const rows = await fetchAllPages<{ subtotal: number | string | null }>((from, to) =>
-    (supabase as any)
+  const rows = await fetchAllPages<{ subtotal: number | string | null }>((from, to) => {
+    let query = (supabase as any)
       .from('platform_integration_invoices')
       .select('subtotal')
       .eq('organization_id', organizationId)
       .eq('platform_type', 'dentally')
       .gte('invoice_date', since)
       .lte('invoice_date', today)
-      .is('deleted_at', null)
-      .range(from, to),
-  );
+      .is('deleted_at', null);
+
+    if (locationId) query = query.eq('location_id', locationId);
+
+    return query.range(from, to);
+  });
   return rows.reduce((s, r) => s + num(r.subtotal), 0);
 }
 
@@ -406,17 +483,21 @@ async function sumCollectedInPeriod(
   organizationId: string,
   since: string,
   today: string,
+  locationId: string | null = null,
 ): Promise<number> {
-  const rows = await fetchAllPages<{ dp_amount: number | string | null }>((from, to) =>
-    (supabase as any)
+  const rows = await fetchAllPages<{ dp_amount: number | string | null }>((from, to) => {
+    let query = (supabase as any)
       .from('dentally_payments')
       .select('dp_amount')
       .eq('organization_id', organizationId)
       .gte('dp_dated_on', since)
       .lte('dp_dated_on', today)
-      .is('deleted_at', null)
-      .range(from, to),
-  );
+      .is('deleted_at', null);
+
+    if (locationId) query = query.eq('location_id', locationId);
+
+    return query.range(from, to);
+  });
   return rows.reduce((s, r) => s + num(r.dp_amount), 0);
 }
 
@@ -429,14 +510,8 @@ export async function fetchPeInvoicesSummary(
   const trailingSince = trailingSinceIsoDate(trailingMonths);
   const today = todayUtcYmd();
 
-  const practiceIds = await loadUserPracticeIds(userId);
-  const scopedIds =
-    practiceIds.length > 0
-      ? practiceIds.includes(contextPracticeId)
-        ? practiceIds
-        : [...practiceIds, contextPracticeId]
-      : [contextPracticeId];
-
+  const { rollupMode, units } = await resolvePeRollupUnits(userId, contextPracticeId);
+  const scopedIds = [...new Set(units.map((u) => u.organizationId))];
   const practiceNames = await loadPracticeNames(scopedIds);
 
   const rawAll = await loadInvoicesForPractices(scopedIds);
@@ -505,14 +580,24 @@ export async function fetchPeInvoicesSummary(
   }
 
   const collectionByPractice: PeCollectionRatePracticeRow[] = await Promise.all(
-    scopedIds.map(async (practiceId) => {
-      const invoicedGbp = await sumInvoicedInPeriod(practiceId, trailingSince, today);
-      const collectedGbp = await sumCollectedInPeriod(practiceId, trailingSince, today);
+    units.map(async (unit) => {
+      const invoicedGbp = await sumInvoicedInPeriod(
+        unit.organizationId,
+        trailingSince,
+        today,
+        unit.locationId,
+      );
+      const collectedGbp = await sumCollectedInPeriod(
+        unit.organizationId,
+        trailingSince,
+        today,
+        unit.locationId,
+      );
       const collectionRate =
         invoicedGbp > 0 ? Math.round((collectedGbp / invoicedGbp) * 1000) / 1000 : null;
       return {
-        practiceId,
-        practiceName: practiceNames.get(practiceId) ?? 'Practice',
+        practiceId: unit.unitId,
+        practiceName: unit.unitName,
         invoicedGbp: Math.round(invoicedGbp * 100) / 100,
         collectedGbp: Math.round(collectedGbp * 100) / 100,
         collectionRate,
@@ -524,12 +609,14 @@ export async function fetchPeInvoicesSummary(
 
   const contextRow =
     collectionByPractice.find((r) => r.practiceId === contextPracticeId) ??
+    collectionByPractice.find((r) => scopedIds.includes(r.practiceId)) ??
     collectionByPractice[0];
 
   return {
     trailingMonths,
     trailingSince,
     cashLeakageWindowDays,
+    rollupMode,
     cashLeakageCount: cashLeakageRows.length,
     cashLeakageGbp: Math.round(cashLeakageGbp * 100) / 100,
     totalOutstandingGbp: Math.round(totalOutstandingGbp * 100) / 100,

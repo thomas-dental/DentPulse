@@ -115,6 +115,29 @@ async function verifyPracticeAccess(userId, practiceId) {
   return { ok: true };
 }
 
+/** Goal override rows may use practice_locations.id in multi-site rollup mode. */
+async function verifyGoalOverrideAccess(userId, overrideId) {
+  const direct = await verifyPracticeAccess(userId, overrideId);
+  if (direct.ok) return direct;
+
+  const { data: location, error } = await supabaseAdmin
+    .from('practice_locations')
+    .select('organization_id')
+    .eq('id', overrideId)
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[EconomicsEngine] location override check failed:', error.message);
+    return { ok: false, status: 500, error: 'Failed to verify location access' };
+  }
+  if (!location?.organization_id) {
+    return { ok: false, status: 403, error: 'Not authorized for this practice' };
+  }
+
+  return verifyPracticeAccess(userId, location.organization_id);
+}
+
 function serializeCredential(row) {
   if (!row || !row.encrypted_pat) return null;
   return {
@@ -1343,7 +1366,7 @@ router.post('/assumptions/goal-settings', syncAuthMiddleware, async (req, res) =
       if (!pid || !isUuid(pid)) {
         return res.status(400).json({ success: false, error: 'Each override needs practiceId (UUID)' });
       }
-      const overrideAccess = await verifyPracticeAccess(req.user.id, pid);
+      const overrideAccess = await verifyGoalOverrideAccess(req.user.id, pid);
       if (!overrideAccess.ok) {
         return res.status(overrideAccess.status).json({
           success: false,

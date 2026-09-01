@@ -175,7 +175,11 @@ export function Invoices() {
             <HeroCard
               question={`Invoiced · ${data.trailingMonths}mo`}
               value={formatGbpCompact(heroes.invoicedAll)}
-              subtitle="Across all practices"
+              subtitle={
+                data.rollupMode === 'location'
+                  ? 'Across all locations'
+                  : 'Across all practices'
+              }
             />
             <HeroCard
               tone="success"
@@ -229,7 +233,9 @@ export function Invoices() {
             </div>
 
             <div className="rounded-[14px] border border-border bg-card px-5 py-[18px] shadow-sm">
-              <h3 className="text-[15px] font-bold text-foreground">Collection rate by practice</h3>
+              <h3 className="text-[15px] font-bold text-foreground">
+                Collection rate by {data.rollupMode === 'location' ? 'location' : 'practice'}
+              </h3>
               <p className="mt-0.5 text-[12.5px] text-muted-foreground">
                 Collected in PMS · recorded in Dentally, not bank settlement
               </p>
@@ -255,6 +261,11 @@ export function Invoices() {
             trailingMonths={data.trailingMonths}
             cashLeakageCount={data.cashLeakageCount}
             cashLeakageGbp={data.cashLeakageGbp}
+            rollupMode={data.rollupMode}
+            knownScopes={data.collectionByPractice.map((r) => ({
+              id: r.practiceId,
+              name: r.practiceName,
+            }))}
           />
 
           <p className="text-[11.5px] text-muted-foreground">

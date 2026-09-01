@@ -3,6 +3,8 @@
  */
 
 const { supabaseAdmin } = require('../../config/supabase');
+const { resolvePeRollupUnits } = require('./peRollupUnits');
+const { loadPatientUuidsForLocation } = require('./peLocationScope');
 const {
   aggregatePlansFromLedger,
   computePracticeCommitmentRate,
@@ -144,20 +146,30 @@ async function loadPracticeOverrides(practiceIds) {
   return map;
 }
 
-async function computeCommitmentRate30d(practiceId) {
-  const assumptions = await loadPeEconomicAssumptions(practiceId);
-  const windowDays = assumptions.commitmentRateWindowDays;
-  const ledgerRows = await loadLedgerPlanEvents(practiceId);
-  const plans = aggregatePlansFromLedger(ledgerRows);
-  const planIds = [...plans.keys()];
-  const items = await loadEligiblePlanItems(practiceId, planIds);
-  const result = computePracticeCommitmentRate(plans, items, windowDays);
-  return { rate: roundPct(result.commitmentRate), windowDays };
+async function loadLocationOverrides(locationIds) {
+  const map = new Map();
+  if (locationIds.length === 0) return map;
+
+  const { data, error } = await supabaseAdmin
+    .from('pe_goal_location_overrides')
+    .select(
+      'location_id, target_commitment_rate_pct, target_contribution_per_active_gbp, target_opportunity_progression_gbp, target_attrition_ceiling_pct',
+    )
+    .in('location_id', locationIds);
+
+  if (error) {
+    if (error.code === '42P01') return map;
+    throw new Error(`pe_goal_location_overrides: ${error.message}`);
+  }
+
+  for (const row of data ?? []) {
+    map.set(String(row.location_id), row);
+  }
+  return map;
 }
 
-async function computeContributionPerActiveGbp(practiceId) {
-  const since = twelveMonthsAgoIsoDate();
-  const patients = [];
+async function loadPatientRetentionRows(practiceId) {
+  const rows = [];
   let offset = 0;
 
   for (let i = 0; i < 100; i++) {
@@ -169,12 +181,35 @@ async function computeContributionPerActiveGbp(practiceId) {
 
     if (error) throw new Error(`v_patient_contribution: ${error.message}`);
     const batch = data ?? [];
-    patients.push(...batch);
+    rows.push(...batch);
     if (batch.length < PAGE_SIZE) break;
     offset += PAGE_SIZE;
   }
 
-  const activeIds = patients
+  return rows;
+}
+
+function scopeRetentionRows(rows, patientUuids) {
+  if (!patientUuids) return rows;
+  const set = new Set(patientUuids);
+  return rows.filter((r) => set.has(String(r.patient_id)));
+}
+
+async function computeCommitmentRate30d(practiceId) {
+  const assumptions = await loadPeEconomicAssumptions(practiceId);
+  const windowDays = assumptions.commitmentRateWindowDays;
+  const ledgerRows = await loadLedgerPlanEvents(practiceId);
+  const plans = aggregatePlansFromLedger(ledgerRows);
+  const planIds = [...plans.keys()];
+  const items = await loadEligiblePlanItems(practiceId, planIds);
+  const result = computePracticeCommitmentRate(plans, items, windowDays);
+  return { rate: roundPct(result.commitmentRate), windowDays };
+}
+
+async function computeContributionPerActiveGbp(practiceId, retentionRows) {
+  const since = twelveMonthsAgoIsoDate();
+
+  const activeIds = retentionRows
     .filter((r) => String(r.retention_status || '').toLowerCase() === 'active')
     .map((r) => String(r.patient_id));
 
@@ -236,42 +271,29 @@ async function computeOpportunityProgressionGbp(practiceId) {
   return round2(total);
 }
 
-async function computeAttritionPct(practiceId) {
-  let offset = 0;
+async function computeAttritionPct(retentionRows) {
   let total = 0;
   let atRisk = 0;
 
-  for (let i = 0; i < 100; i++) {
-    const { data, error } = await supabaseAdmin
-      .from('v_patient_contribution')
-      .select('retention_status')
-      .eq('practice_id', practiceId)
-      .range(offset, offset + PAGE_SIZE - 1);
-
-    if (error) throw new Error(`v_patient_contribution: ${error.message}`);
-    const batch = data ?? [];
-    for (const row of batch) {
-      total += 1;
-      const status = String(row.retention_status || '').toLowerCase();
-      if (status === 'lapsed' || status === 'effectively_lost') {
-        atRisk += 1;
-      }
+  for (const row of retentionRows) {
+    total += 1;
+    const status = String(row.retention_status || '').toLowerCase();
+    if (status === 'lapsed' || status === 'effectively_lost') {
+      atRisk += 1;
     }
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
   }
 
   if (total === 0) return null;
   return roundPct(atRisk / total);
 }
 
-async function computePracticeActuals(practiceId) {
+async function computePracticeActuals(practiceId, retentionRows) {
   const [commitment, contributionPerActiveGbp, opportunityProgressionGbp, attritionPct] =
     await Promise.all([
       computeCommitmentRate30d(practiceId),
-      computeContributionPerActiveGbp(practiceId),
+      computeContributionPerActiveGbp(practiceId, retentionRows),
       computeOpportunityProgressionGbp(practiceId),
-      computeAttritionPct(practiceId),
+      computeAttritionPct(retentionRows),
     ]);
 
   return {
@@ -336,7 +358,15 @@ function buildMetricRollup(actual, target, higherIsBetter = true) {
   };
 }
 
-function buildPracticeRow(practiceId, practiceName, defaults, overrideRow, actuals) {
+function buildPracticeRow(
+  practiceId,
+  practiceName,
+  defaults,
+  overrideRow,
+  actuals,
+  unitType = 'practice',
+  organizationId = practiceId,
+) {
   const override = mapOverrideRow(overrideRow);
   const targets = {
     commitmentRatePct: effectiveTarget(defaults, override, 'commitmentRatePct'),
@@ -352,6 +382,8 @@ function buildPracticeRow(practiceId, practiceName, defaults, overrideRow, actua
   return {
     practiceId,
     practiceName,
+    unitType,
+    organizationId,
     override,
     targets,
     actuals,
@@ -381,31 +413,58 @@ function buildPracticeRow(practiceId, practiceName, defaults, overrideRow, actua
  * @param {string} contextPracticeId
  */
 async function getGoalSettingsSummary(userId, contextPracticeId) {
-  const practiceIds = await loadUserPracticeIds(userId);
-  const scopedIds =
-    practiceIds.length > 0
-      ? practiceIds.includes(contextPracticeId)
-        ? practiceIds
-        : [...practiceIds, contextPracticeId]
-      : [contextPracticeId];
+  const { rollupMode, organizationIds, units } = await resolvePeRollupUnits(
+    userId,
+    contextPracticeId,
+  );
 
-  const [names, defaultsRow, overrides] = await Promise.all([
-    loadPracticeNames(scopedIds),
+  const [defaultsRow, overrides] = await Promise.all([
     loadGoalDefaults(contextPracticeId),
-    loadPracticeOverrides(scopedIds),
+    loadPracticeOverrides(organizationIds),
   ]);
+
+  const locationIds = units
+    .filter((unit) => unit.unitType === 'location')
+    .map((unit) => unit.unitId);
+  const locationOverrides = await loadLocationOverrides(locationIds);
 
   const defaults = mapDefaultsRow(defaultsRow);
 
+  const retentionRowsByOrg = new Map();
+  for (const orgId of organizationIds) {
+    if (!retentionRowsByOrg.has(orgId)) {
+      retentionRowsByOrg.set(orgId, await loadPatientRetentionRows(orgId));
+    }
+  }
+
   const practices = await Promise.all(
-    scopedIds.map(async (pid) => {
-      const actuals = await computePracticeActuals(pid);
+    units.map(async (unit) => {
+      const orgRows = retentionRowsByOrg.get(unit.organizationId) ?? [];
+      let scopedRows = orgRows;
+      if (unit.locationId) {
+        const patientUuids = await loadPatientUuidsForLocation(
+          unit.organizationId,
+          unit.locationId,
+        );
+        if (patientUuids.length === 0) {
+          scopedRows = [];
+        } else {
+          scopedRows = scopeRetentionRows(orgRows, patientUuids);
+        }
+      }
+      const actuals = await computePracticeActuals(unit.organizationId, scopedRows);
+      const overrideRow =
+        unit.unitType === 'location'
+          ? locationOverrides.get(unit.unitId)
+          : overrides.get(unit.organizationId);
       return buildPracticeRow(
-        pid,
-        names.get(pid) || 'Practice',
+        unit.unitId,
+        unit.unitName,
         defaults,
-        overrides.get(pid),
+        overrideRow,
         actuals,
+        unit.unitType,
+        unit.organizationId,
       );
     }),
   );
@@ -413,12 +472,16 @@ async function getGoalSettingsSummary(userId, contextPracticeId) {
   practices.sort((a, b) => a.practiceName.localeCompare(b.practiceName));
 
   const contextRow =
-    practices.find((p) => p.practiceId === contextPracticeId) ?? practices[0] ?? null;
+    practices.find((p) => p.practiceId === contextPracticeId) ??
+    practices.find((p) => p.organizationId === contextPracticeId) ??
+    practices[0] ??
+    null;
 
   const contextAssumptions = await loadPeEconomicAssumptions(contextPracticeId);
 
   return {
     contextPracticeId,
+    rollupMode,
     commitmentWindowDays: contextAssumptions.commitmentRateWindowDays,
     quarterStart: currentQuarterStartYmd(),
     defaults,
@@ -452,12 +515,59 @@ async function upsertGoalDefaults(organizationId, targets, userId) {
   if (error) throw new Error(`pe_goal_defaults upsert: ${error.message}`);
 }
 
+function normalizeOverrideTargets(incoming, existing) {
+  const keys = [
+    'commitmentRatePct',
+    'contributionPerActiveGbp',
+    'opportunityProgressionGbp',
+    'attritionCeilingPct',
+  ];
+  const allKeysPresent = keys.every((key) => Object.prototype.hasOwnProperty.call(incoming, key));
+
+  if (allKeysPresent) {
+    return {
+      commitmentRatePct: parseOptionalPct(incoming.commitmentRatePct),
+      contributionPerActiveGbp: parseOptionalGbp(incoming.contributionPerActiveGbp),
+      opportunityProgressionGbp: parseOptionalGbp(incoming.opportunityProgressionGbp),
+      attritionCeilingPct: parseOptionalPct(incoming.attritionCeilingPct),
+    };
+  }
+
+  return mergeOverrideTargets(existing, incoming);
+}
+
+function mergeOverrideTargets(existing, incoming) {
+  const fields = [
+    { key: 'commitmentRatePct', parse: parseOptionalPct },
+    { key: 'contributionPerActiveGbp', parse: parseOptionalGbp },
+    { key: 'opportunityProgressionGbp', parse: parseOptionalGbp },
+    { key: 'attritionCeilingPct', parse: parseOptionalPct },
+  ];
+
+  const merged = {};
+  for (const { key, parse } of fields) {
+    if (Object.prototype.hasOwnProperty.call(incoming, key)) {
+      merged[key] = parse(incoming[key]);
+    } else if (existing?.[key] != null && Number.isFinite(Number(existing[key]))) {
+      merged[key] = Number(existing[key]);
+    } else {
+      merged[key] = null;
+    }
+  }
+  return merged;
+}
+
 async function upsertPracticeOverride(practiceId, targets, userId) {
+  const { practiceId: _ignored, ...targetFields } = targets;
+  const existingMap = await loadPracticeOverrides([practiceId]);
+  const existing = mapOverrideRow(existingMap.get(practiceId));
+  const merged = normalizeOverrideTargets(targetFields, existing);
+
   const allNull =
-    targets.commitmentRatePct == null &&
-    targets.contributionPerActiveGbp == null &&
-    targets.opportunityProgressionGbp == null &&
-    targets.attritionCeilingPct == null;
+    merged.commitmentRatePct == null &&
+    merged.contributionPerActiveGbp == null &&
+    merged.opportunityProgressionGbp == null &&
+    merged.attritionCeilingPct == null;
 
   if (allNull) {
     const { error } = await supabaseAdmin
@@ -470,10 +580,10 @@ async function upsertPracticeOverride(practiceId, targets, userId) {
 
   const row = {
     practice_id: practiceId,
-    target_commitment_rate_pct: parseOptionalPct(targets.commitmentRatePct),
-    target_contribution_per_active_gbp: parseOptionalGbp(targets.contributionPerActiveGbp),
-    target_opportunity_progression_gbp: parseOptionalGbp(targets.opportunityProgressionGbp),
-    target_attrition_ceiling_pct: parseOptionalPct(targets.attritionCeilingPct),
+    target_commitment_rate_pct: parseOptionalPct(merged.commitmentRatePct),
+    target_contribution_per_active_gbp: parseOptionalGbp(merged.contributionPerActiveGbp),
+    target_opportunity_progression_gbp: parseOptionalGbp(merged.opportunityProgressionGbp),
+    target_attrition_ceiling_pct: parseOptionalPct(merged.attritionCeilingPct),
     updated_at: new Date().toISOString(),
     updated_by: userId,
   };
@@ -483,6 +593,49 @@ async function upsertPracticeOverride(practiceId, targets, userId) {
   });
 
   if (error) throw new Error(`pe_goal_practice_overrides upsert: ${error.message}`);
+}
+
+async function upsertLocationOverride(locationId, targets, userId) {
+  const { practiceId: _ignored, ...targetFields } = targets;
+  const existingMap = await loadLocationOverrides([locationId]);
+  const existing = mapOverrideRow(existingMap.get(locationId));
+  const merged = normalizeOverrideTargets(targetFields, existing);
+
+  const allNull =
+    merged.commitmentRatePct == null &&
+    merged.contributionPerActiveGbp == null &&
+    merged.opportunityProgressionGbp == null &&
+    merged.attritionCeilingPct == null;
+
+  if (allNull) {
+    const { error } = await supabaseAdmin
+      .from('pe_goal_location_overrides')
+      .delete()
+      .eq('location_id', locationId);
+    if (error && error.code !== '42P01') {
+      throw new Error(`pe_goal_location_overrides delete: ${error.message}`);
+    }
+    return;
+  }
+
+  const row = {
+    location_id: locationId,
+    target_commitment_rate_pct: parseOptionalPct(merged.commitmentRatePct),
+    target_contribution_per_active_gbp: parseOptionalGbp(merged.contributionPerActiveGbp),
+    target_opportunity_progression_gbp: parseOptionalGbp(merged.opportunityProgressionGbp),
+    target_attrition_ceiling_pct: parseOptionalPct(merged.attritionCeilingPct),
+    updated_at: new Date().toISOString(),
+    updated_by: userId,
+  };
+
+  const { error } = await supabaseAdmin.from('pe_goal_location_overrides').upsert(row, {
+    onConflict: 'location_id',
+  });
+
+  if (error) {
+    if (error.code === '42P01') return;
+    throw new Error(`pe_goal_location_overrides upsert: ${error.message}`);
+  }
 }
 
 /**
@@ -496,10 +649,19 @@ async function saveGoalSettings(userId, contextPracticeId, payload) {
 
   await upsertGoalDefaults(contextPracticeId, defaults, userId);
 
+  const { units } = await resolvePeRollupUnits(userId, contextPracticeId);
+  const locationIds = new Set(
+    units.filter((unit) => unit.unitType === 'location').map((unit) => unit.unitId),
+  );
+
   for (const row of overrides) {
     const practiceId = row?.practiceId;
     if (!practiceId || typeof practiceId !== 'string') continue;
-    await upsertPracticeOverride(practiceId, row, userId);
+    if (locationIds.has(practiceId)) {
+      await upsertLocationOverride(practiceId, row, userId);
+    } else {
+      await upsertPracticeOverride(practiceId, row, userId);
+    }
   }
 
   return getGoalSettingsSummary(userId, contextPracticeId);

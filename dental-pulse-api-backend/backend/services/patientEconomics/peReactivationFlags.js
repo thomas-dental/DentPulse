@@ -14,6 +14,8 @@
  */
 
 const { supabaseAdmin } = require('../../config/supabase');
+const { resolvePeRollupUnits } = require('./peRollupUnits');
+const { loadPatientUuidsForLocation } = require('./peLocationScope');
 const { loadPeEconomicAssumptions } = require('./peEconomicAssumptions');
 const { parseRetentionStatus } = require('./peRetentionSegmentation');
 const {
@@ -526,14 +528,28 @@ function mapFlagRow(flag, patientName, currentRetentionStatus) {
   };
 }
 
-async function buildPracticeRecoveryPayload(practiceId, practiceName) {
-  await syncReactivationFlagsForPractice(practiceId);
-  const flags = await loadAllFlags(practiceId);
+async function buildScopedRecoveryPayload(
+  organizationId,
+  unitId,
+  unitName,
+  unitType,
+  locationId = null,
+) {
+  await syncReactivationFlagsForPractice(organizationId);
+  const allFlags = await loadAllFlags(organizationId);
+
+  let flags = allFlags;
+  if (locationId) {
+    const patientUuids = await loadPatientUuidsForLocation(organizationId, locationId);
+    const patientSet = new Set(patientUuids);
+    flags = allFlags.filter((f) => patientSet.has(String(f.patient_id)));
+  }
+
   const metrics = buildRecoveryMetrics(flags);
 
   const patientIds = [...new Set(flags.map((f) => String(f.patient_id)))];
   const { names, retentionStatuses, worklistMeta } = await loadPatientWorklistMeta(
-    practiceId,
+    organizationId,
     patientIds,
   );
 
@@ -551,11 +567,13 @@ async function buildPracticeRecoveryPayload(practiceId, practiceName) {
   const openWorklist = buildOpenWorklist(flagRows, worklistMeta);
   const funnel = buildRecoveryFunnel(flagRows, openWorklist);
 
-  const assumptions = await loadPeEconomicAssumptions(practiceId);
+  const assumptions = await loadPeEconomicAssumptions(organizationId);
 
   return {
-    practiceId,
-    practiceName,
+    practiceId: unitId,
+    practiceName: unitName,
+    unitType,
+    organizationId,
     reactivationValueGbp: openValueGbp,
     openFlagCount,
     recoveryWindowDays: assumptions.reactivationRecoveryContributionWindowDays,
@@ -572,17 +590,21 @@ async function buildPracticeRecoveryPayload(practiceId, practiceName) {
   };
 }
 
+async function buildPracticeRecoveryPayload(practiceId, practiceName) {
+  return buildScopedRecoveryPayload(practiceId, practiceId, practiceName, 'practice', null);
+}
+
 /**
  * @param {string} userId
  * @param {string} contextPracticeId
  */
 async function getRetentionRecoveryLoop(userId, contextPracticeId) {
-  const practiceIds = await loadUserPracticeIds(userId);
-  const names = await loadPracticeNames(practiceIds);
+  const { rollupMode, units } = await resolvePeRollupUnits(userId, contextPracticeId);
 
-  if (practiceIds.length === 0) {
+  if (units.length === 0) {
     return {
       contextPracticeId,
+      rollupMode: 'practice',
       practice: null,
       group: null,
       hasData: false,
@@ -590,13 +612,20 @@ async function getRetentionRecoveryLoop(userId, contextPracticeId) {
   }
 
   const practicePayloads = await Promise.all(
-    practiceIds.map((pid) =>
-      buildPracticeRecoveryPayload(pid, names.get(pid) || 'Practice'),
+    units.map((unit) =>
+      buildScopedRecoveryPayload(
+        unit.organizationId,
+        unit.unitId,
+        unit.unitName,
+        unit.unitType,
+        unit.locationId,
+      ),
     ),
   );
 
   const context =
     practicePayloads.find((p) => p.practiceId === contextPracticeId) ??
+    practicePayloads.find((p) => p.organizationId === contextPracticeId) ??
     practicePayloads[0];
 
   const groupFlags = practicePayloads.flatMap((p) =>
@@ -643,10 +672,12 @@ async function getRetentionRecoveryLoop(userId, contextPracticeId) {
 
   return {
     contextPracticeId,
-    practiceName: names.get(contextPracticeId) || context.practiceName,
+    rollupMode,
+    practiceName: context.practiceName,
     practice: context,
     group: {
       practiceCount: practicePayloads.length,
+      rollupUnitCount: practicePayloads.length,
       reactivationValueGbp: groupReactivationValueGbp,
       practices: reactivationByPractice,
       ...groupMetrics,

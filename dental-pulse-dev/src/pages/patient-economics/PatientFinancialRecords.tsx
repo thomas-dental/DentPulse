@@ -1,19 +1,31 @@
 import { Fragment, useEffect, useState } from 'react';
-import { AlertCircle, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Search } from 'lucide-react';
+import { AlertCircle, ChevronDown, ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   patientOpportunityMetrics,
+  patientScopeLabel,
+  patientTypeLabel,
+  type PatientListRetentionFilter,
   type PatientListSortKey,
+  type PatientListTypeFilter,
   type PatientProvenanceStatus,
 } from '@/hooks/usePatientContributionList';
-import { useOrganization } from '@/hooks/useOrganization';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import type { PeRetentionStatus } from '@/lib/peRetentionConstants';
+import { retentionListLabel } from '@/lib/peRetentionSegmentation';
 import {
   usePatientFinancialRecord,
   usePatientFinancialRecordListTable,
-  usePatientTreatmentLines,
+  usePatientInvoices,
   PE_OPPORTUNITY_WEIGHTED_TIER_NOTE,
   type PatientFinancialRecordRow,
   type RetentionStatus,
@@ -23,10 +35,47 @@ import {
   ProvenanceChip,
   tierToChip,
 } from '@/components/patient-economics/ProvenanceChip';
-import { PE_CTX_BANNER_CLASS } from '@/lib/peVisualTokens';
-import {
-  recommendedActionDetail,
-} from '@/lib/peRecommendedAction';
+
+const PAGE_SIZE_OPTIONS = [5, 10, 25, 50, 100];
+
+const RETENTION_FILTERS: { key: PatientListRetentionFilter; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'active', label: 'Active' },
+  { key: 'drifting', label: 'Drifting' },
+  { key: 'lapsed', label: 'Lapsed' },
+  { key: 'effectively_lost', label: 'Effectively lost' },
+];
+
+const TYPE_FILTERS: { key: PatientListTypeFilter; label: string }[] = [
+  { key: 'private', label: 'Private' },
+  { key: 'nhs', label: 'NHS' },
+  { key: 'member', label: 'Member' },
+];
+
+function FilterChip({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors',
+        active
+          ? 'border-primary/30 bg-primary/12 text-primary'
+          : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground',
+      )}
+    >
+      {label}
+    </button>
+  );
+}
 
 function formatGbp(value: number): string {
   const abs = Math.abs(value);
@@ -167,13 +216,8 @@ function RetentionStatusBadge({
   );
 }
 
-function PatientTypeStatusBadge({ row }: { row: PatientFinancialRecordRow }) {
-  const label = row.hasPaymentPlan
-    ? 'Member'
-    : row.revenuePrivatePlan > 0
-      ? 'Private'
-      : null;
-
+function PatientTypeBadge({ row }: { row: PatientFinancialRecordRow }) {
+  const label = patientTypeLabel(row);
   if (!label) {
     return <span className="text-muted-foreground">—</span>;
   }
@@ -181,7 +225,9 @@ function PatientTypeStatusBadge({ row }: { row: PatientFinancialRecordRow }) {
   const cls =
     label === 'Member'
       ? 'border-primary/25 bg-primary/12 text-primary'
-      : 'border-border bg-muted text-muted-foreground';
+      : label === 'Private'
+        ? 'border-success/30 bg-success-muted text-success'
+        : 'border-border bg-muted text-muted-foreground';
 
   return (
     <span
@@ -195,17 +241,33 @@ function PatientTypeStatusBadge({ row }: { row: PatientFinancialRecordRow }) {
   );
 }
 
-function QualityScoreCell({ score }: { score: number }) {
+function RetentionListBadge({ status }: { status: PeRetentionStatus }) {
+  const label = retentionListLabel(status);
+  const cls =
+    status === 'active'
+      ? 'border-success/30 bg-success-muted text-success'
+      : status === 'drifting'
+        ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+        : status === 'lapsed'
+          ? 'border-danger/30 bg-danger-muted text-danger-strong'
+          : 'border-muted-foreground/40 bg-muted text-muted-foreground';
+
+  return (
+    <span
+      className={cn(
+        'inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold',
+        cls,
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function QualityScoreBadge({ score }: { score: number }) {
   const n = Math.round(Number(score));
   if (!Number.isFinite(n) || n <= 0) {
-    return (
-      <span
-        className="text-[11px] text-muted-foreground"
-        title="Quality score comes from the Day 3 modelled job — run PE sync after contribution data is loaded"
-      >
-        —
-      </span>
-    );
+    return <span className="text-[11px] text-muted-foreground">—</span>;
   }
 
   const cls =
@@ -222,48 +284,7 @@ function QualityScoreCell({ score }: { score: number }) {
         cls,
       )}
     >
-      {n}/100
-    </span>
-  );
-}
-
-function RosterMoneyCell({
-  value,
-  tone = 'default',
-  bold = false,
-}: {
-  value: number;
-  tone?: 'default' | 'danger' | 'success' | 'primary';
-  bold?: boolean;
-}) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
-    return <span className="text-muted-foreground">—</span>;
-  }
-
-  if (n === 0) {
-    return (
-      <span
-        className="tabular-nums text-muted-foreground"
-        title="No weighted opportunity on file (requires unscheduled plans in the event ledger)"
-      >
-        £0
-      </span>
-    );
-  }
-
-  const toneCls =
-    tone === 'danger'
-      ? 'text-danger'
-      : tone === 'success'
-        ? 'text-success'
-        : tone === 'primary'
-          ? 'text-primary'
-          : 'text-foreground';
-
-  return (
-    <span className={cn('tabular-nums', toneCls, bold && 'font-bold')}>
-      {formatGbpCompact(n)}
+      {n}
     </span>
   );
 }
@@ -284,128 +305,103 @@ function ExpandedInvoiceBreakdown({
   patientName: string;
   row: PatientFinancialRecordRow;
 }) {
-  const { data: treatmentLines, isLoading, isError } = usePatientTreatmentLines(
-    patientId,
-    row.ptId,
-  );
+  const { data: invoices, isLoading, isError } = usePatientInvoices(patientId);
 
   return (
     <tr>
       <td />
-      <td colSpan={9} className="bg-muted/40 px-5 py-3">
+      <td colSpan={10} className="bg-muted/40 px-5 py-3">
         <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-          Completed treatments · {patientName}
+          Invoice detail · {patientName}
           <ProvenanceChip kind="dentally" />
           <ProvenanceChip kind="derived" />
         </div>
         {isLoading && <Skeleton className="h-24 w-full rounded-lg" />}
         {isError && (
-          <p className="text-[13px] text-danger-strong">Could not load treatment lines.</p>
+          <p className="text-[13px] text-danger-strong">Could not load invoices.</p>
         )}
-        {!isLoading && !isError && treatmentLines && treatmentLines.length === 0 && (
-          <p className="text-[13px] text-muted-foreground">No private treatment lines on file.</p>
+        {!isLoading && !isError && invoices && invoices.length === 0 && (
+          <p className="text-[13px] text-muted-foreground">No invoices on file.</p>
         )}
-        {!isLoading && !isError && treatmentLines && treatmentLines.length > 0 && (
-          <div className="overflow-x-auto rounded-lg border border-border bg-card">
-            <table className="w-full min-w-[720px] text-[12px]">
-              <thead>
-                <tr className="border-b border-border bg-muted/30 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  <th className="px-3 py-2">Treatment</th>
-                  <th className="px-3 py-2">Date</th>
-                  <th className="px-3 py-2">Clinician</th>
-                  <th className="px-3 py-2 text-right">Revenue</th>
-                  <th className="px-3 py-2 text-right">Cost</th>
-                  <th className="px-3 py-2 text-right">Contribution</th>
+        {!isLoading && !isError && invoices && invoices.length > 0 && (
+          <table className="w-full min-w-[960px] border-collapse text-[13px]">
+            <thead>
+              <tr className="border-b border-border text-left text-[12px] font-semibold text-muted-foreground">
+                <th className="whitespace-nowrap px-3 py-2.5">Date</th>
+                <th className="whitespace-nowrap px-3 py-2.5 text-right">Revenue</th>
+                <th className="whitespace-nowrap px-3 py-2.5 text-right">NHS</th>
+                <th className="whitespace-nowrap px-3 py-2.5 text-right">Clinician</th>
+                <th className="whitespace-nowrap px-3 py-2.5 text-right">Lab</th>
+                <th className="whitespace-nowrap px-3 py-2.5 text-right">Materials</th>
+                <th className="whitespace-nowrap px-3 py-2.5 text-right">Direct cost</th>
+                <th className="whitespace-nowrap px-3 py-2.5 text-right">Contribution</th>
+                <th className="whitespace-nowrap px-3 py-2.5 text-right">Share %</th>
+                <th className="whitespace-nowrap px-3 py-2.5">Data quality</th>
+              </tr>
+            </thead>
+            <tbody>
+              {invoices.map((inv) => (
+                <tr
+                  key={inv.invoiceId}
+                  className="border-b border-border/60 last:border-b-0 hover:bg-primary/[0.04]"
+                >
+                  <td className="px-3 py-3 text-muted-foreground">
+                    {formatDate(inv.invoiceDate)}
+                  </td>
+                  <td className="px-3 py-3 text-right tabular-nums">
+                    {formatGbpCompact(inv.revenuePrivatePlan)}
+                  </td>
+                  <td className="px-3 py-3 text-right tabular-nums">
+                    {formatGbpCompact(inv.revenueNhs)}
+                  </td>
+                  <td className="px-3 py-3 text-right tabular-nums text-danger">
+                    {formatGbpCompact(inv.clinicianCost)}
+                  </td>
+                  <td className="px-3 py-3 text-right tabular-nums">
+                    {formatGbpCompact(inv.labCost)}
+                  </td>
+                  <td className="px-3 py-3 text-right tabular-nums">
+                    {formatGbpCompact(inv.materialsCost)}
+                  </td>
+                  <td className="px-3 py-3 text-right tabular-nums text-danger">
+                    {formatGbpCompact(inv.directCost)}
+                  </td>
+                  <td className="px-3 py-3 text-right tabular-nums text-success">
+                    {formatGbpCompact(inv.contribution)}
+                  </td>
+                  <td className="px-3 py-3 text-right tabular-nums">
+                    {inv.privateShareRate != null ? `${inv.privateShareRate}%` : '—'}
+                  </td>
+                  <td className="px-3 py-3">
+                    <DataQualityChip status={inv.contributionProvenanceStatus} />
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {treatmentLines.map((line) => (
-                  <tr key={line.lineId} className="border-b border-border/60 last:border-b-0">
-                    <td className="px-3 py-2 font-medium">{line.treatmentLabel}</td>
-                    <td className="px-3 py-2 text-muted-foreground">
-                      {line.date ? formatDate(line.date) : '—'}
-                    </td>
-                    <td className="px-3 py-2 text-primary">
-                      {line.clinicianName ?? '—'}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {formatGbp(line.revenue)}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-danger">
-                      {formatGbp(line.cost)}
-                    </td>
-                    <td
-                      className={cn(
-                        'px-3 py-2 text-right font-semibold tabular-nums',
-                        line.contribution >= 0 ? 'text-success' : 'text-danger',
-                      )}
-                    >
-                      {formatGbp(line.contribution)}
-                    </td>
-                  </tr>
-                ))}
-                <tr className="border-t-2 border-border">
-                  <td className="px-3 py-2 font-bold">Total</td>
-                  <td />
-                  <td />
-                  <td className="px-3 py-2 text-right font-bold tabular-nums">
-                    {formatGbp(row.revenuePrivatePlan)}
-                  </td>
-                  <td className="px-3 py-2 text-right font-bold tabular-nums text-danger">
-                    {formatGbp(row.directCost)}
-                  </td>
-                  <td className="px-3 py-2 text-right font-extrabold tabular-nums text-success">
-                    {formatGbp(row.contribution)}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+              ))}
+              <tr className="border-t border-border">
+                <td className="px-3 py-3 font-bold text-foreground">Total</td>
+                <td className="px-3 py-3 text-right font-bold tabular-nums">
+                  {formatGbpCompact(row.revenuePrivatePlan)}
+                </td>
+                <td className="px-3 py-3" />
+                <td className="px-3 py-3 text-right font-bold tabular-nums text-danger">
+                  {formatGbpCompact(row.clinicianCost)}
+                </td>
+                <td className="px-3 py-3" />
+                <td className="px-3 py-3" />
+                <td className="px-3 py-3 text-right font-bold tabular-nums text-danger">
+                  {formatGbpCompact(row.directCost)}
+                </td>
+                <td className="px-3 py-3 text-right font-bold tabular-nums text-success">
+                  {formatGbpCompact(row.contribution)}
+                </td>
+                <td className="px-3 py-3" />
+                <td className="px-3 py-3" />
+              </tr>
+            </tbody>
+          </table>
         )}
       </td>
     </tr>
-  );
-}
-
-function SortableHeader({
-  label,
-  keyName,
-  sortKey,
-  sortDir,
-  onSort,
-  align = 'left',
-  className,
-}: {
-  label: string;
-  keyName: PatientListSortKey;
-  sortKey: PatientListSortKey;
-  sortDir: 'asc' | 'desc';
-  onSort: (key: PatientListSortKey) => void;
-  align?: 'left' | 'right';
-  className?: string;
-}) {
-  return (
-    <th
-      className={cn(
-        'px-3 py-3',
-        align === 'right' && 'text-right',
-        className,
-      )}
-    >
-      <button
-        type="button"
-        className={cn(
-          'inline-flex items-center gap-1 hover:text-foreground',
-          align === 'right' && 'justify-end',
-        )}
-        onClick={() => onSort(keyName)}
-      >
-        {label}
-        {sortKey === keyName && (
-          <span className="text-[10px]">{sortDir === 'asc' ? '↑' : '↓'}</span>
-        )}
-      </button>
-    </th>
   );
 }
 
@@ -422,9 +418,6 @@ function RecordsRoster({
   onToggleExpand: (patientId: string) => void;
   onClearExpand: () => void;
 }) {
-  const { organization } = useOrganization();
-  const practiceName = organization?.name ?? 'Practice';
-
   const {
     isLoading,
     isError,
@@ -432,16 +425,27 @@ function RecordsRoster({
     refetch,
     search,
     onSearchChange,
+    retentionFilter,
+    onRetentionFilterChange,
+    typeFilter,
+    onTypeFilterChange,
+    locationFilter,
+    onLocationFilterChange,
+    locationOptions,
     pageRows,
     totalRows,
+    totalUnfiltered,
     hasSyncedPatients,
     page,
     setPage,
     pageSize,
+    onPageSizeChange,
     totalPages,
     sortKey,
     sortDir,
     toggleSort,
+    rollupMode,
+    isFetching,
   } = usePatientFinancialRecordListTable();
 
   useEffect(() => {
@@ -453,90 +457,183 @@ function RecordsRoster({
     }
   }, [page, pageRows, expandedPatientId, onClearExpand]);
 
+  const onTypeChipClick = (key: PatientListTypeFilter) => {
+    onTypeFilterChange(typeFilter === key ? 'all' : key);
+  };
+
   return (
-    <div className="rounded-[14px] border border-border bg-card shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
-        <div>
-          <h2 className="text-lg font-bold text-foreground">Patient Financial Records</h2>
-          <p className="mt-1 text-[13px] text-muted-foreground">
-            Revenue (Dentally) − cost (attributed) = contribution (Derived). Click any row for
-            the breakdown below.
+    <div className="overflow-hidden rounded-[14px] border border-border bg-card shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-border px-5 py-3">
+        <div className="min-w-0 flex-1 basis-[240px]">
+          <h3 className="text-[15px] font-bold text-foreground">Patient Financial Records</h3>
+          <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+            Revenue (Dentally) − cost (attributed) = contribution (Derived). Click a row for the
+            patient detail · expand icon for invoice breakdown.
           </p>
         </div>
-        <div className="relative w-full max-w-xs">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Search patient…"
-            className="pl-9"
-          />
+        <div className="flex flex-wrap items-center gap-2">
+          {rollupMode === 'location' && locationOptions.length > 1 && (
+            <Select value={locationFilter} onValueChange={onLocationFilterChange} disabled={isLoading}>
+              <SelectTrigger className="h-9 w-[200px] max-w-full">
+                <SelectValue placeholder="All locations" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All locations</SelectItem>
+                {locationOptions.map(([id, name]) => (
+                  <SelectItem key={id} value={id}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <div className="relative w-[220px] max-w-full">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder="Search patient…"
+              className="pl-9"
+              disabled={isLoading}
+            />
+          </div>
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-5 py-2.5">
+        {RETENTION_FILTERS.map((f) => (
+          <FilterChip
+            key={f.key}
+            label={f.label}
+            active={retentionFilter === f.key}
+            onClick={() => onRetentionFilterChange(f.key)}
+          />
+        ))}
+        <span className="mx-1 h-4 w-px bg-border" />
+        {TYPE_FILTERS.map((f) => (
+          <FilterChip
+            key={f.key}
+            label={f.label}
+            active={typeFilter === f.key}
+            onClick={() => onTypeChipClick(f.key)}
+          />
+        ))}
+      </div>
+
       {isError && (
-        <div className="flex items-start gap-2 border-b border-border px-5 py-4 text-sm text-danger-strong">
+        <div className="m-5 flex flex-wrap items-start gap-3 rounded-[10px] border border-danger/30 bg-danger-muted px-3 py-2.5 text-sm text-danger-strong">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>
+          <div className="flex-1">
             <div className="font-semibold">Could not load patient records</div>
-            <div className="text-danger">{error?.message}</div>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>
-              Retry
-            </Button>
+            <div className="mt-0.5 text-danger-strong/80">{error?.message}</div>
           </div>
+          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+            Retry
+          </Button>
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[960px] text-[13px]">
+      <div className="overflow-x-auto px-5 pb-5">
+        <table className="w-full min-w-[1180px] border-collapse text-[13px]">
           <thead>
-            <tr className="border-b border-border bg-muted/40 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              <th className="w-8 px-3 py-3" />
-              <th className="px-3 py-3">Patient</th>
-              <th className="px-3 py-3">Practice</th>
-              <th className="px-3 py-3">Status</th>
-              <th className="px-3 py-3 text-right">Revenue</th>
-              <th className="px-3 py-3 text-right">Cost</th>
-              <SortableHeader
-                label="Contribution"
-                keyName="contribution"
-                sortKey={sortKey}
-                sortDir={sortDir}
-                onSort={toggleSort}
-                align="right"
-              />
-              <SortableHeader
-                label="Opportunity (wtd)"
-                keyName="opportunityWeighted"
-                sortKey={sortKey}
-                sortDir={sortDir}
-                onSort={toggleSort}
-                align="right"
-              />
-              <SortableHeader
-                label="Econ. value"
-                keyName="patientEconomicValue"
-                sortKey={sortKey}
-                sortDir={sortDir}
-                onSort={toggleSort}
-                align="right"
-              />
-              <SortableHeader
-                label="Quality"
-                keyName="qualityScore"
-                sortKey={sortKey}
-                sortDir={sortDir}
-                onSort={toggleSort}
-                align="right"
-                className="px-5"
-              />
+            <tr className="border-b border-border text-left text-[12px] font-semibold text-muted-foreground">
+              <th className="w-8 px-3 py-2.5" />
+              <th className="px-3 py-2.5">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                  onClick={() => toggleSort('patientName')}
+                >
+                  Patient
+                  {sortKey === 'patientName' && (
+                    <span className="text-[10px]">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </button>
+              </th>
+              <th className="px-3 py-2.5">
+                {rollupMode === 'location' ? 'Location' : 'Practice'}
+              </th>
+              <th className="px-3 py-2.5">Type</th>
+              <th className="px-3 py-2.5">Status</th>
+              <th className="px-3 py-2.5 text-right">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                  onClick={() => toggleSort('revenuePrivatePlan')}
+                >
+                  Revenue
+                  {sortKey === 'revenuePrivatePlan' && (
+                    <span className="text-[10px]">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </button>
+              </th>
+              <th className="px-3 py-2.5 text-right">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                  onClick={() => toggleSort('directCost')}
+                >
+                  Cost
+                  {sortKey === 'directCost' && (
+                    <span className="text-[10px]">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </button>
+              </th>
+              <th className="px-3 py-2.5 text-right">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                  onClick={() => toggleSort('contribution')}
+                >
+                  Contribution
+                  {sortKey === 'contribution' && (
+                    <span className="text-[10px]">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </button>
+              </th>
+              <th className="px-3 py-2.5 text-right">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                  onClick={() => toggleSort('opportunityWeighted')}
+                >
+                  Opportunity (wtd)
+                  {sortKey === 'opportunityWeighted' && (
+                    <span className="text-[10px]">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </button>
+              </th>
+              <th className="px-3 py-2.5 text-right">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                  onClick={() => toggleSort('patientEconomicValue')}
+                >
+                  Projected LTV
+                  {sortKey === 'patientEconomicValue' && (
+                    <span className="text-[10px]">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </button>
+              </th>
+              <th className="px-3 py-2.5 text-right">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                  onClick={() => toggleSort('qualityScore')}
+                >
+                  Quality
+                  {sortKey === 'qualityScore' && (
+                    <span className="text-[10px]">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </button>
+              </th>
             </tr>
           </thead>
           <tbody>
             {isLoading &&
               Array.from({ length: pageSize }).map((_, i) => (
                 <tr key={i} className="border-b border-border/60">
-                  {Array.from({ length: 10 }).map((_, j) => (
+                  {Array.from({ length: 11 }).map((_, j) => (
                     <td key={j} className="px-3 py-3">
                       <Skeleton className="h-4 w-full" />
                     </td>
@@ -546,8 +643,20 @@ function RecordsRoster({
 
             {!isLoading && !isError && !hasSyncedPatients && (
               <tr>
-                <td colSpan={10} className="px-5 py-12 text-center text-muted-foreground">
-                  No patient economics data yet. Run PE sync after connecting Dentally.
+                <td colSpan={11} className="px-3 py-12 text-center text-[13px] text-muted-foreground">
+                  <div className="font-semibold text-foreground">No patients synced yet</div>
+                  <div className="mt-1 text-[12px]">
+                    Connect Dentally and run Patient Economics sync so invoices can populate this
+                    directory.
+                  </div>
+                </td>
+              </tr>
+            )}
+
+            {!isLoading && !isError && hasSyncedPatients && totalRows === 0 && (
+              <tr>
+                <td colSpan={11} className="px-3 py-10 text-center text-[13px] text-muted-foreground">
+                  No patients match your search.
                 </td>
               </tr>
             )}
@@ -557,12 +666,14 @@ function RecordsRoster({
               pageRows.map((row) => {
                 const selected = selectedPatientId === row.patientId;
                 const expanded = expandedPatientId === row.patientId;
+                const opportunityWeighted = patientOpportunityMetrics(row).probabilityWeighted;
+
                 return (
                   <Fragment key={row.patientId}>
                     <tr
                       className={cn(
-                        'border-b border-border/60 cursor-pointer transition-colors',
-                        selected ? 'bg-primary/6 hover:bg-primary/8' : 'hover:bg-muted/30',
+                        'border-b border-border/60 cursor-pointer transition-colors last:border-b-0',
+                        selected ? 'bg-primary/[0.06] hover:bg-primary/[0.08]' : 'hover:bg-primary/[0.04]',
                       )}
                       onClick={() => onSelectPatient(row.patientId)}
                     >
@@ -583,102 +694,107 @@ function RecordsRoster({
                           )}
                         </button>
                       </td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-foreground">{row.patientName}</span>
-                        {row.patientUuid && (
-                          <a
-                            href={`https://app.dentally.co/patients/${row.patientUuid}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-muted-foreground hover:text-primary"
-                            title="Open in Dentally"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </a>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-3 py-3 text-muted-foreground">{practiceName}</td>
-                    <td className="px-3 py-3 text-left">
-                      <PatientTypeStatusBadge row={row} />
-                    </td>
-                    <td className="px-3 py-3 text-right">
-                      <RosterMoneyCell value={row.revenuePrivatePlan} />
-                    </td>
-                    <td className="px-3 py-3 text-right">
-                      <RosterMoneyCell value={row.directCost} tone="danger" />
-                    </td>
-                    <td className="px-3 py-3 text-right">
-                      <RosterMoneyCell
-                        value={row.contribution}
-                        tone={row.contribution < 0 ? 'danger' : 'success'}
-                        bold
+                      <td className="px-3 py-3">
+                        <span className="font-semibold text-primary">{row.patientName}</span>
+                      </td>
+                      <td className="px-3 py-3 text-foreground">
+                        {patientScopeLabel(row, rollupMode)}
+                      </td>
+                      <td className="px-3 py-3">
+                        <PatientTypeBadge row={row} />
+                      </td>
+                      <td className="px-3 py-3">
+                        <RetentionListBadge status={row.retentionStatus} />
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums">
+                        {formatGbpCompact(row.revenuePrivatePlan)}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums text-danger">
+                        {formatGbpCompact(row.directCost)}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums text-success">
+                        {formatGbpCompact(row.contribution)}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums text-primary">
+                        {formatGbpCompact(opportunityWeighted)}
+                      </td>
+                      <td className="px-3 py-3 text-right font-bold tabular-nums">
+                        {formatGbpCompact(row.patientEconomicValue)}
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        <QualityScoreBadge score={row.qualityScore} />
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <ExpandedInvoiceBreakdown
+                        patientId={row.patientId}
+                        patientName={row.patientName}
+                        row={row}
                       />
-                    </td>
-                    <td className="px-3 py-3 text-right">
-                      <RosterMoneyCell
-                        value={patientOpportunityMetrics(row).probabilityWeighted}
-                        tone="primary"
-                      />
-                    </td>
-                    <td className="px-3 py-3 text-right">
-                      <RosterMoneyCell value={row.patientEconomicValue} bold />
-                    </td>
-                    <td className="px-5 py-3">
-                      <div className="flex justify-end">
-                        <QualityScoreCell score={row.qualityScore} />
-                      </div>
-                    </td>
-                  </tr>
-                  {expanded && (
-                    <ExpandedInvoiceBreakdown
-                      patientId={row.patientId}
-                      patientName={row.patientName}
-                      row={row}
-                    />
-                  )}
-                </Fragment>
+                    )}
+                  </Fragment>
                 );
               })}
           </tbody>
         </table>
       </div>
 
-      {!isLoading && !isError && hasSyncedPatients && (
+      {!isLoading && !isError && hasSyncedPatients && totalRows > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3 text-[12px] text-muted-foreground">
           <span>
-            {totalRows > 0
-              ? `Showing ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, totalRows)} of ${totalRows.toLocaleString('en-GB')} patients with invoice contribution data`
-              : 'No patients match your search'}
-            {search.trim() ? ' (filtered)' : ''}
+            Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalRows)} of{' '}
+            {totalRows.toLocaleString('en-GB')} patients
+            {totalRows !== totalUnfiltered
+              ? ` (filtered from ${totalUnfiltered.toLocaleString('en-GB')})`
+              : ''}
           </span>
-          {totalPages > 1 && (
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page <= 1}
-              >
-                <ChevronLeft className="h-4 w-4" />
-                Previous
-              </Button>
-              <span className="tabular-nums">
-                Page {page} of {totalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={page >= totalPages}
-              >
-                Next
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-            </div>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {totalPages > 1 && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 px-0"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                  aria-label="Previous page"
+                  title="Previous"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <span className="tabular-nums">
+                  Page {page} of {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 px-0"
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page >= totalPages}
+                  aria-label="Next page"
+                  title="Next"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </>
+            )}
+            <Select
+              value={String(pageSize)}
+              onValueChange={(v) => onPageSizeChange(Number(v))}
+              disabled={isLoading}
+            >
+              <SelectTrigger className="h-8 w-[64px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PAGE_SIZE_OPTIONS.map((n) => (
+                  <SelectItem key={n} value={String(n)}>
+                    {n}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       )}
     </div>
@@ -874,19 +990,6 @@ function PatientFinancialRecordInlineDetail({ patientId }: { patientId: string }
             confidence={c.opportunityWeightConfidence}
           />
 
-          <div className={cn(PE_CTX_BANNER_CLASS, 'mt-4')}>
-            <div className="text-[11px] font-bold uppercase tracking-wide text-primary">
-              Recommended action
-            </div>
-            <p className="mt-2 text-[13px] leading-relaxed text-foreground">
-              {recommendedActionDetail(
-                c.recommendedAction,
-                grossContributionOpportunity,
-                probabilityWeighted,
-              )}
-            </p>
-          </div>
-
           <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">{pevFootnote}</p>
         </div>
       </div>
@@ -902,11 +1005,7 @@ export function PatientFinancialRecords() {
   const onSelectPatient = (id: string) => {
     const next = new URLSearchParams(searchParams);
     next.set('tab', 'patient-records');
-    if (patientId === id) {
-      next.delete('patientId');
-    } else {
-      next.set('patientId', id);
-    }
+    next.set('patientId', id);
     setSearchParams(next);
   };
 

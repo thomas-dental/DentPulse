@@ -15,3 +15,15 @@ export const PE_TABLE_BODY_CELL_CLASS = 'px-3.5 py-[11px] whitespace-nowrap';
 
 export const PE_TABLE_ROW_CLASS =
   'border-b border-border/60 last:border-b-0 hover:bg-primary/[0.04]';
+
+/**
+ * Chart typography — keep labels, values, and captions the same size within charts.
+ * Use PE_CHART_*_PX in SVG `fontSize`; use *_CLASS in HTML.
+ */
+export const PE_CHART_LABEL_PX = 12;
+export const PE_CHART_VALUE_PX = 12;
+export const PE_CHART_CAPTION_PX = 12;
+
+export const PE_CHART_LABEL_CLASS = 'text-[12px] font-semibold text-muted-foreground';
+export const PE_CHART_VALUE_CLASS = 'text-[12px] font-bold tabular-nums';
+export const PE_CHART_CAPTION_CLASS = 'text-[12px] text-muted-foreground';

@@ -26,6 +26,8 @@ export type PeGoalPracticeActuals = {
 export type PeGoalPracticeRow = {
   practiceId: string;
   practiceName: string;
+  unitType?: 'location' | 'practice';
+  organizationId?: string;
   override: PeGoalTargets | null;
   targets: PeGoalTargets;
   actuals: PeGoalPracticeActuals;
@@ -39,6 +41,7 @@ export type PeGoalPracticeRow = {
 
 export type PeGoalSettingsSummary = {
   contextPracticeId: string;
+  rollupMode?: 'location' | 'practice';
   commitmentWindowDays: number;
   quarterStart: string;
   defaults: PeGoalTargets;

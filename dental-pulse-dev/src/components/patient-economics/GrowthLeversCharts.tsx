@@ -5,6 +5,10 @@
 import type { GrowthLeversMonthlyRow } from '@/hooks/useGrowthLeversSummary';
 import type { GrowthLeversPracticeRow } from '@/hooks/useGrowthLeversByPractice';
 import type { CltvAcquisitionSourceRow } from '@/hooks/useCltvByAcquisitionSource';
+import {
+  PE_CHART_LABEL_PX,
+  PE_CHART_VALUE_PX,
+} from '@/lib/peVisualTokens';
 
 export function formatGbp(value: number): string {
   return new Intl.NumberFormat('en-GB', {
@@ -58,7 +62,7 @@ export function MonthlyCompletedVisitsChart({ rows }: { rows: GrowthLeversMonthl
         return (
           <g key={g}>
             <line x1={pl} y1={gy} x2={W - pr} y2={gy} stroke={grid} strokeWidth={1} />
-            <text x={pl - 4} y={gy + 3} textAnchor="end" fontSize={9} fill={muted}>
+            <text x={pl - 4} y={gy + 3} textAnchor="end" fontSize={PE_CHART_LABEL_PX} fill={muted}>
               {labelVal}
             </text>
           </g>
@@ -76,7 +80,7 @@ export function MonthlyCompletedVisitsChart({ rows }: { rows: GrowthLeversMonthl
               x={bx + w / 2}
               y={Math.max(top - 4, 10)}
               textAnchor="middle"
-              fontSize={9}
+              fontSize={PE_CHART_VALUE_PX}
               fontWeight={700}
               fill={primary}
             >
@@ -86,7 +90,7 @@ export function MonthlyCompletedVisitsChart({ rows }: { rows: GrowthLeversMonthl
               x={bx + w / 2}
               y={H - 8}
               textAnchor="middle"
-              fontSize={9}
+              fontSize={PE_CHART_LABEL_PX}
               fill={muted}
             >
               {formatMonthLabel(row.month)}
@@ -136,7 +140,7 @@ export function MonthlyValuePerVisitChart({ rows }: { rows: GrowthLeversMonthlyR
         return (
           <g key={g}>
             <line x1={pl} y1={gy} x2={W - pr} y2={gy} stroke={grid} strokeWidth={1} />
-            <text x={pl - 4} y={gy + 3} textAnchor="end" fontSize={9} fill={muted}>
+            <text x={pl - 4} y={gy + 3} textAnchor="end" fontSize={PE_CHART_LABEL_PX} fill={muted}>
               £{Math.round(labelVal)}
             </text>
           </g>
@@ -155,7 +159,7 @@ export function MonthlyValuePerVisitChart({ rows }: { rows: GrowthLeversMonthlyR
               x={bx + w / 2}
               y={Math.max(top - 4, 10)}
               textAnchor="middle"
-              fontSize={9}
+              fontSize={PE_CHART_VALUE_PX}
               fontWeight={700}
               fill={accent}
             >
@@ -165,7 +169,7 @@ export function MonthlyValuePerVisitChart({ rows }: { rows: GrowthLeversMonthlyR
               x={bx + w / 2}
               y={H - 8}
               textAnchor="middle"
-              fontSize={9}
+              fontSize={PE_CHART_LABEL_PX}
               fill={muted}
             >
               {formatMonthLabel(row.month)}
@@ -178,19 +182,12 @@ export function MonthlyValuePerVisitChart({ rows }: { rows: GrowthLeversMonthlyR
 }
 
 export function LeverHeadroomByPracticeChart({ rows }: { rows: GrowthLeversPracticeRow[] }) {
-  const withMetrics = rows.filter(
-    (r) =>
-      r.visitFrequency != null ||
-      r.valuePerVisit != null ||
-      r.tenureYears != null ||
-      r.projectedLifetimeYears != null,
-  );
-
-  const data = [...withMetrics].sort(
+  /** Show every location/practice — including 0% headroom (at/above benchmark). */
+  const chartRows = [...rows].sort(
     (a, b) => (b.combinedHeadroomPct ?? -1) - (a.combinedHeadroomPct ?? -1),
   );
 
-  if (data.length === 0) {
+  if (chartRows.length === 0) {
     return (
       <p className="py-8 text-center text-sm text-muted-foreground">
         No practice lever data in the trailing window yet. Sync appointments and revenue first.
@@ -198,29 +195,10 @@ export function LeverHeadroomByPracticeChart({ rows }: { rows: GrowthLeversPract
     );
   }
 
-  const hasPositiveHeadroom = data.some(
-    (r) => r.combinedHeadroomPct != null && r.combinedHeadroomPct > 0,
-  );
-
-  if (!hasPositiveHeadroom) {
-    return (
-      <div className="py-8 text-center text-sm text-muted-foreground">
-        <p>Practices are at or above benchmark on all levers.</p>
-        <p className="mt-1 text-[12px]">
-          Set higher targets in Settings → Economic Assumptions to model additional headroom.
-        </p>
-      </div>
-    );
-  }
-
-  const chartRows = data.filter(
-    (r) => r.combinedHeadroomPct != null && r.combinedHeadroomPct > 0,
-  );
-
   const W = 560;
   const rowH = 30;
-  const pl = 100;
-  const pr = 52;
+  const pl = 120;
+  const pr = 72;
   const H = chartRows.length * rowH + 16;
   const bw = W - pl - pr;
   const max = 100;
@@ -228,6 +206,7 @@ export function LeverHeadroomByPracticeChart({ rows }: { rows: GrowthLeversPract
   const danger = 'hsl(var(--danger))';
   const muted = 'hsl(var(--muted-foreground))';
   const grid = 'hsl(var(--border))';
+  const success = 'hsl(var(--success))';
 
   return (
     <svg
@@ -238,20 +217,38 @@ export function LeverHeadroomByPracticeChart({ rows }: { rows: GrowthLeversPract
       aria-label="Lever headroom by practice"
     >
       {chartRows.map((row, i) => {
-        const pct = row.combinedHeadroomPct ?? 0;
+        const pct = Math.max(0, Math.min(row.combinedHeadroomPct ?? 0, max));
         const yy = 8 + i * rowH;
-        const w = bw * (Math.min(pct, max) / max);
-        const col = pct >= 55 ? danger : pct >= 30 ? warn : 'hsl(var(--success))';
+        const w = bw * (pct / max);
+        const col =
+          pct <= 0 ? muted : pct >= 55 ? danger : pct >= 30 ? warn : success;
+        const label =
+          row.practiceName.length > 16
+            ? `${row.practiceName.slice(0, 15)}…`
+            : row.practiceName;
         return (
           <g key={row.practiceId}>
-            <text x={pl - 8} y={yy + 15} textAnchor="end" fontSize={11} fill={muted}>
-              {row.practiceName.length > 14
-                ? `${row.practiceName.slice(0, 13)}…`
-                : row.practiceName}
+            <title>{`${row.practiceName}: ${Math.round(pct)}% room`}</title>
+            <text
+              x={pl - 8}
+              y={yy + 15}
+              textAnchor="end"
+              fontSize={PE_CHART_LABEL_PX}
+              fill={muted}
+            >
+              {label}
             </text>
             <rect x={pl} y={yy + 4} width={bw} height={15} rx={4} fill={grid} opacity={0.5} />
-            <rect x={pl} y={yy + 4} width={w} height={15} rx={4} fill={col} />
-            <text x={pl + w + 6} y={yy + 16} fontSize={10.5} fontWeight={700} fill={col}>
+            {w > 0 && (
+              <rect x={pl} y={yy + 4} width={w} height={15} rx={4} fill={col} />
+            )}
+            <text
+              x={pl + bw + 6}
+              y={yy + 16}
+              fontSize={PE_CHART_VALUE_PX}
+              fontWeight={700}
+              fill={col}
+            >
               {Math.round(pct)}% room
             </text>
           </g>
@@ -303,7 +300,7 @@ export function CltvByAcquisitionSourceChart({ rows }: { rows: CltvAcquisitionSo
             : row.acquisitionSourceName;
         return (
           <g key={`${row.acquisitionSourceName}-${i}`}>
-            <text x={pl - 8} y={yy + 15} textAnchor="end" fontSize={11} fill={muted}>
+            <text x={pl - 8} y={yy + 15} textAnchor="end" fontSize={PE_CHART_LABEL_PX} fill={muted}>
               {label}
             </text>
             <rect x={pl} y={yy + 4} width={bw} height={15} rx={4} fill={grid} opacity={0.5} />
@@ -316,7 +313,7 @@ export function CltvByAcquisitionSourceChart({ rows }: { rows: CltvAcquisitionSo
               fill={primary}
               opacity={opacity}
             />
-            <text x={pl + w + 6} y={yy + 16} fontSize={10.5} fontWeight={700} fill={primary}>
+            <text x={pl + w + 6} y={yy + 16} fontSize={PE_CHART_VALUE_PX} fontWeight={700} fill={primary}>
               £{Math.round(row.avgCltv).toLocaleString()}
             </text>
           </g>

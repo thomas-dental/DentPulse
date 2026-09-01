@@ -4,6 +4,7 @@
 
 const { supabaseAdmin } = require('../../config/supabase');
 const { getGrowthLeversSummary } = require('./growthLeversSummary');
+const { resolvePeRollupUnits } = require('./peRollupUnits');
 const {
   BENCHMARK_METHOD_GROUP_TOP,
   DEFAULT_BENCHMARK_METHOD,
@@ -113,10 +114,11 @@ async function loadPerPracticeTargets(practiceIds) {
  * @param {string} contextPracticeId — org whose pe_economic_assumptions sets group benchmark method
  */
 async function getGrowthLeversByPractice(userId, contextPracticeId) {
-  const practiceIds = await loadUserPracticeIds(userId);
-  if (practiceIds.length === 0) {
+  const { rollupMode, units } = await resolvePeRollupUnits(userId, contextPracticeId);
+  if (units.length === 0) {
     return {
       contextPracticeId,
+      rollupMode: 'practice',
       benchmarkMethod: DEFAULT_BENCHMARK_METHOD,
       benchmarkMethodNote: benchmarkMethodNote(DEFAULT_BENCHMARK_METHOD),
       practices: [],
@@ -124,21 +126,25 @@ async function getGrowthLeversByPractice(userId, contextPracticeId) {
     };
   }
 
-  const [names, contextConfig, perPracticeTargets] = await Promise.all([
-    loadPracticeNames(practiceIds),
+  const organizationIds = [...new Set(units.map((u) => u.organizationId))];
+  const [contextConfig, perPracticeTargets] = await Promise.all([
     loadBenchmarkConfig(contextPracticeId),
-    loadPerPracticeTargets(practiceIds),
+    loadPerPracticeTargets(organizationIds),
   ]);
 
   const benchmarkMethod = contextConfig.benchmarkMethod || DEFAULT_BENCHMARK_METHOD;
 
   const summaries = await Promise.all(
-    practiceIds.map(async (pid) => {
+    units.map(async (unit) => {
       try {
-        const s = await getGrowthLeversSummary(pid);
+        const s = await getGrowthLeversSummary(unit.organizationId, {
+          locationId: unit.locationId,
+        });
         return {
-          practiceId: pid,
-          practiceName: names.get(pid) || 'Practice',
+          practiceId: unit.unitId,
+          practiceName: unit.unitName,
+          unitType: unit.unitType,
+          organizationId: unit.organizationId,
           visitFrequency: s.visitFrequency,
           valuePerVisit: s.valuePerVisit,
           tenureYears: s.tenureYears,
@@ -146,10 +152,12 @@ async function getGrowthLeversByPractice(userId, contextPracticeId) {
           trailingMonths: s.trailingMonths,
         };
       } catch (err) {
-        console.warn(`[GrowthLevers] practice ${pid} summary failed:`, err.message);
+        console.warn(`[GrowthLevers] unit ${unit.unitId} summary failed:`, err.message);
         return {
-          practiceId: pid,
-          practiceName: names.get(pid) || 'Practice',
+          practiceId: unit.unitId,
+          practiceName: unit.unitName,
+          unitType: unit.unitType,
+          organizationId: unit.organizationId,
           visitFrequency: null,
           valuePerVisit: null,
           tenureYears: null,
@@ -168,7 +176,7 @@ async function getGrowthLeversByPractice(userId, contextPracticeId) {
   };
 
   const practices = summaries.map((row) => {
-    const practiceTargetRow = perPracticeTargets.get(row.practiceId) || {};
+    const practiceTargetRow = perPracticeTargets.get(row.organizationId) || {};
     const targets = { benchmarkMethod, ...contextConfig, ...practiceTargetRow };
 
     const benchmarks = resolveBenchmarksForPractice(targets, groupTop, row);
@@ -220,6 +228,7 @@ async function getGrowthLeversByPractice(userId, contextPracticeId) {
 
   return {
     contextPracticeId,
+    rollupMode,
     benchmarkMethod,
     benchmarkMethodNote: benchmarkMethodNote(benchmarkMethod),
     groupBenchmarks: groupTop,

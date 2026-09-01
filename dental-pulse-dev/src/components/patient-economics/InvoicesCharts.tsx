@@ -8,6 +8,11 @@ import {
   PE_COLLECTION_RATE_TARGET_DEFAULT,
   type PeAgingBucketId,
 } from '@/lib/peInvoicesConstants';
+import {
+  PE_CHART_CAPTION_PX,
+  PE_CHART_LABEL_PX,
+  PE_CHART_VALUE_PX,
+} from '@/lib/peVisualTokens';
 
 export function formatGbp(value: number): string {
   return new Intl.NumberFormat('en-GB', {
@@ -61,37 +66,42 @@ export function AgedDebtChart({ buckets }: { buckets: PeAgedDebtBucket[] }) {
     >
       {buckets.map((row, i) => {
         const cx = padX + colW * i + colW / 2;
-        const h =
-          row.outstandingGbp > 0 ? Math.max(4, (row.outstandingGbp / max) * chartH) : 0;
+        const isZero = row.outstandingGbp <= 0;
+        // Always draw a bar (stub height when £0) so empty buckets stay visible.
+        const h = isZero ? 4 : Math.max(4, (row.outstandingGbp / max) * chartH);
         const color = BUCKET_COLORS[row.bucket] ?? BUCKET_COLORS['0-30'];
         const label = PE_AGING_BUCKET_CHART_LABELS[row.bucket] ?? row.label;
 
         return (
           <g key={row.bucket}>
-            {h > 0 && (
-              <text
-                x={cx}
-                y={baseY - h - 6}
-                textAnchor="middle"
-                fontSize="12"
-                fill={color}
-                fontWeight="700"
-              >
-                {formatGbpCompact(row.outstandingGbp)}
-              </text>
-            )}
-            {h > 0 && (
-              <rect
-                x={cx - barW / 2}
-                y={baseY - h}
-                width={barW}
-                height={h}
-                rx={4}
-                fill={color}
-                opacity={0.92}
-              />
-            )}
-            <text x={cx} y={baseY + 14} textAnchor="middle" fontSize="12" fill={muted} fontWeight="600">
+            <text
+              x={cx}
+              y={baseY - h - 6}
+              textAnchor="middle"
+              fontSize={PE_CHART_VALUE_PX}
+              fill={color}
+              fontWeight="700"
+              opacity={isZero ? 0.55 : 1}
+            >
+              {isZero ? '£0' : formatGbpCompact(row.outstandingGbp)}
+            </text>
+            <rect
+              x={cx - barW / 2}
+              y={baseY - h}
+              width={barW}
+              height={h}
+              rx={4}
+              fill={color}
+              opacity={isZero ? 0.35 : 0.92}
+            />
+            <text
+              x={cx}
+              y={baseY + 14}
+              textAnchor="middle"
+              fontSize={PE_CHART_LABEL_PX}
+              fill={muted}
+              fontWeight="600"
+            >
               {label}
             </text>
           </g>
@@ -118,16 +128,27 @@ export function CollectionRateByPracticeChart({
     );
   }
 
-  const W = 520;
-  const rowH = 44;
-  const pl = 118;
-  const pr = 54;
-  const H = rows.length * rowH + 28;
-  const bw = W - pl - pr;
+  // Scale bars to the highest rate so 147% is longer than 103% (not both capped at full track).
+  const rateValues = rows
+    .map((r) => r.collectionRate)
+    .filter((r): r is number => r != null && Number.isFinite(r) && r > 0);
+  const maxScale = Math.max(1, targetRate, ...rateValues);
+
+  // Match ClinicianCommitmentChart: full labels, thin track/fill, value beside bar.
+  const maxLabelLen = Math.max(...rows.map((r) => r.practiceName.length), 8);
+  const pl = Math.min(220, Math.max(110, maxLabelLen * 6.4 + 14));
+  const pr = 52;
+  const rowH = 30;
+  const barH = 14;
+  const barRx = 4;
+  const bw = 280;
+  const headerH = 40;
+  const W = pl + bw + pr;
+  const H = headerH + rows.length * rowH + 8;
+  const grid = 'hsl(var(--border))';
   const muted = 'hsl(var(--muted-foreground))';
-  const label = 'hsl(var(--foreground))';
   const primary = 'hsl(var(--primary))';
-  const targetX = pl + bw * targetRate;
+  const targetX = pl + (bw * targetRate) / maxScale;
 
   return (
     <svg
@@ -136,66 +157,82 @@ export function CollectionRateByPracticeChart({
       className="max-w-full"
       role="img"
       aria-label="Collection rate by practice"
+      preserveAspectRatio="xMinYMin meet"
     >
-      <text x={pl} y={12} fontSize="10.5" fill={muted}>
+      <text x={pl} y={14} fontSize={PE_CHART_CAPTION_PX} fill={muted}>
         Last {trailingMonths} months · collected ÷ invoiced
       </text>
-      <line
-        x1={targetX}
-        y1={16}
-        x2={targetX}
-        y2={H - 4}
-        stroke={primary}
-        strokeWidth={1.5}
-        strokeDasharray="5 4"
-        opacity={0.65}
-      />
-      <text x={targetX + 4} y={24} fontSize="10" fill={primary} fontWeight="600">
+      <text x={targetX + 6} y={32} fontSize={PE_CHART_CAPTION_PX} fill={primary} fontWeight={600}>
         {formatPct(targetRate)} target
       </text>
       {rows.map((row, i) => {
-        const yy = 20 + i * rowH;
-        const rate = row.collectionRate ?? 0;
-        const w = rate > 0 ? bw * rate : 0;
-        const color =
-          rate >= targetRate
-            ? 'hsl(var(--success))'
-            : rate >= targetRate - 0.03
-              ? 'hsl(var(--warning))'
-              : 'hsl(var(--destructive) / 0.85)';
+        const yy = headerH + i * rowH;
+        const rate = row.collectionRate;
+        const pct = rate != null ? Math.round(rate * 100) : null;
+        const w = rate != null && rate > 0 ? bw * (rate / maxScale) : 0;
+        const col =
+          rate == null
+            ? muted
+            : rate >= targetRate
+              ? 'hsl(var(--success))'
+              : rate >= targetRate - 0.03
+                ? 'hsl(var(--warning))'
+                : 'hsl(var(--destructive) / 0.85)';
+        const label =
+          row.practiceName.length > 32
+            ? `${row.practiceName.slice(0, 31)}…`
+            : row.practiceName;
 
         return (
           <g key={row.practiceId}>
+            <title>
+              {row.practiceName}
+              {pct != null ? `: ${pct}%` : ''}
+            </title>
             <text
-              x={pl - 8}
+              x={8}
               y={yy + 16}
-              textAnchor="end"
-              fontSize="12"
-              fill={label}
-              fontWeight="600"
+              textAnchor="start"
+              fontSize={PE_CHART_LABEL_PX}
+              fontWeight={600}
+              fill={muted}
             >
-              {row.practiceName.length > 16
-                ? `${row.practiceName.slice(0, 15)}…`
-                : row.practiceName}
+              {label}
             </text>
             <rect
               x={pl}
-              y={yy + 10}
+              y={yy + 6}
               width={bw}
-              height={22}
-              rx={4}
-              fill="hsl(var(--muted))"
-              opacity={0.35}
+              height={barH}
+              rx={barRx}
+              fill={grid}
+              opacity={0.5}
             />
             {w > 0 && (
-              <rect x={pl} y={yy + 10} width={w} height={22} rx={4} fill={color} opacity={0.92} />
+              <rect x={pl} y={yy + 6} width={w} height={barH} rx={barRx} fill={col} />
             )}
-            <text x={pl + bw + 6} y={yy + 26} fontSize="12" fill={label} fontWeight="700">
-              {row.collectionRate != null ? formatPct(row.collectionRate) : '—'}
+            <text
+              x={pl + (w > 0 ? w : 0) + 6}
+              y={yy + 16}
+              fontSize={PE_CHART_VALUE_PX}
+              fontWeight={700}
+              fill={col}
+            >
+              {pct != null ? `${pct}%` : '—'}
             </text>
           </g>
         );
       })}
+      {/* Draw target baseline after bars so it sits on top of the real-data fills. */}
+      <line
+        x1={targetX}
+        y1={headerH - 2}
+        x2={targetX}
+        y2={H - 4}
+        stroke={primary}
+        strokeWidth={2.5}
+        strokeDasharray="5 4"
+      />
     </svg>
   );
 }

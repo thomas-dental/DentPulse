@@ -100,6 +100,28 @@ async function getPracticeName(practiceId) {
   return data?.name?.trim() || 'This practice';
 }
 
+async function loadLocationsForOrg(practiceId) {
+  const { data, error } = await supabaseAdmin
+    .from('practice_locations')
+    .select('id, location_name')
+    .eq('organization_id', practiceId)
+    .is('deleted_at', null)
+    .order('location_name');
+
+  if (error) throw error;
+
+  return (data ?? [])
+    .map((row) => ({
+      id: String(row.id),
+      name: String(row.location_name || 'Site').trim() || 'Site',
+    }))
+    .filter((row) => row.id.length > 0);
+}
+
+function resolveRollupModeFromLocations(locations) {
+  return locations.length > 1 ? 'location' : 'practice';
+}
+
 function membershipPlanIdsFromAccounts(raw) {
   const ids = new Set();
   const push = (v) => {
@@ -323,6 +345,8 @@ function mapContributionRowFromView(row, practiceName) {
         ? String(row.patient_uuid)
         : null,
     practiceName,
+    locationId: null,
+    locationName: null,
     isActive: false,
     hasPaymentPlan: false,
     contribution12mo: 0,
@@ -504,7 +528,7 @@ function attachTwelveMonthMetrics(rows, contribution12mo, visitsByPtId) {
   });
 }
 
-async function enrichPatientMetadata(practiceId, rows) {
+async function enrichPatientMetadata(practiceId, rows, locationNamesById, rollupMode) {
   if (rows.length === 0) return rows;
 
   const meta = new Map();
@@ -514,7 +538,7 @@ async function enrichPatientMetadata(practiceId, rows) {
     const chunk = ids.slice(i, i + PATIENT_META_CHUNK);
     const { data, error } = await supabaseAdmin
       .from('patients')
-      .select('id, is_active, pt_payment_plan_id')
+      .select('id, is_active, pt_payment_plan_id, location_id')
       .eq('organization_id', practiceId)
       .in('id', chunk);
 
@@ -524,21 +548,36 @@ async function enrichPatientMetadata(practiceId, rows) {
       meta.set(String(row.id), {
         isActive: row.is_active === true,
         hasPaymentPlan: row.pt_payment_plan_id != null,
+        locationId: row.location_id != null ? String(row.location_id) : null,
       });
     }
   }
 
   return rows.map((row) => {
     const m = meta.get(row.patientId);
+    const locationId = m?.locationId ?? null;
+    const locationName =
+      locationId != null
+        ? locationNamesById.get(locationId) ?? 'Unassigned'
+        : rollupMode === 'location'
+          ? 'Unassigned'
+          : null;
+
     return {
       ...row,
       isActive: m?.isActive ?? false,
       hasPaymentPlan: m?.hasPaymentPlan ?? false,
+      locationId,
+      locationName,
     };
   });
 }
 
 async function fetchAllPatientContributionRows(practiceId, practiceName) {
+  const locations = await loadLocationsForOrg(practiceId);
+  const rollupMode = resolveRollupModeFromLocations(locations);
+  const locationNamesById = new Map(locations.map((loc) => [loc.id, loc.name]));
+
   const all = [];
   let offset = 0;
 
@@ -561,16 +600,26 @@ async function fetchAllPatientContributionRows(practiceId, practiceName) {
     offset += PAGE_SIZE;
   }
 
-  const withMeta = await enrichPatientMetadata(practiceId, all);
+  const withMeta = await enrichPatientMetadata(
+    practiceId,
+    all,
+    locationNamesById,
+    rollupMode,
+  );
   const [contribution12mo, visitsByPtId] = await Promise.all([
     fetchContribution12moByPatient(practiceId),
     fetchCompletedVisits12moByPtId(practiceId),
   ]);
   const withMetrics = attachTwelveMonthMetrics(withMeta, contribution12mo, visitsByPtId);
-  return applyCommitmentOpportunityWeighting(practiceId, withMetrics);
+  const patients = await applyCommitmentOpportunityWeighting(practiceId, withMetrics);
+  return { patients, rollupMode, locations };
 }
 
 async function fetchAllFinancialRecordRows(practiceId, practiceName) {
+  const locations = await loadLocationsForOrg(practiceId);
+  const rollupMode = resolveRollupModeFromLocations(locations);
+  const locationNamesById = new Map(locations.map((loc) => [loc.id, loc.name]));
+
   const all = [];
   let offset = 0;
 
@@ -583,7 +632,7 @@ async function fetchAllFinancialRecordRows(practiceId, practiceName) {
       .range(offset, offset + PAGE_SIZE - 1);
 
     if (error) {
-      if (error.code === '42P01') return [];
+      if (error.code === '42P01') return { patients: [], rollupMode, locations };
       throw error;
     }
 
@@ -596,8 +645,14 @@ async function fetchAllFinancialRecordRows(practiceId, practiceName) {
     offset += PAGE_SIZE;
   }
 
-  const withMeta = await enrichPatientMetadata(practiceId, all);
-  return applyCommitmentOpportunityWeighting(practiceId, withMeta);
+  const withMeta = await enrichPatientMetadata(
+    practiceId,
+    all,
+    locationNamesById,
+    rollupMode,
+  );
+  const patients = await applyCommitmentOpportunityWeighting(practiceId, withMeta);
+  return { patients, rollupMode, locations };
 }
 
 async function fetchPatientInvoices(practiceId, patientId) {
@@ -858,14 +913,20 @@ async function fetchInvoiceContributionSummary(practiceId) {
 
 async function getPatientContributionList(practiceId) {
   const practiceName = await getPracticeName(practiceId);
-  const patients = await fetchAllPatientContributionRows(practiceId, practiceName);
-  return { practiceId, practiceName, patients };
+  const { patients, rollupMode, locations } = await fetchAllPatientContributionRows(
+    practiceId,
+    practiceName,
+  );
+  return { practiceId, practiceName, rollupMode, locations, patients };
 }
 
 async function getPatientFinancialRecordList(practiceId) {
   const practiceName = await getPracticeName(practiceId);
-  const patients = await fetchAllFinancialRecordRows(practiceId, practiceName);
-  return { practiceId, practiceName, patients };
+  const { patients, rollupMode, locations } = await fetchAllFinancialRecordRows(
+    practiceId,
+    practiceName,
+  );
+  return { practiceId, practiceName, rollupMode, locations, patients };
 }
 
 async function getPatientFinancialRecord(practiceId, patientId) {

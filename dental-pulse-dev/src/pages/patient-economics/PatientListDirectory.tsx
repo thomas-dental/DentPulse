@@ -1,4 +1,4 @@
-import { AlertCircle, ChevronLeft, ChevronRight, Download, ExternalLink, Search } from 'lucide-react';
+import { AlertCircle, ChevronLeft, ChevronRight, Download, Search } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +16,7 @@ import {
   patientTypeLabel,
   usePatientContributionListTable,
   type PatientContributionRow,
+  patientScopeLabel,
   type PatientListRetentionFilter,
   type PatientListSortKey,
   type PatientListTypeFilter,
@@ -24,7 +25,7 @@ import type { PeRetentionStatus } from '@/lib/peRetentionConstants';
 import { retentionListLabel } from '@/lib/peRetentionSegmentation';
 import { cn } from '@/lib/utils';
 
-const PAGE_SIZE_OPTIONS = [5, 25, 50, 100];
+const PAGE_SIZE_OPTIONS = [5, 10, 25, 50, 100];
 
 const RETENTION_FILTERS: { key: PatientListRetentionFilter; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -244,6 +245,10 @@ export function PatientListDirectory() {
     pageRows,
     summary,
     baselineSummary,
+    locationFilter,
+    onLocationFilterChange,
+    locationOptions,
+    rollupMode,
     hasSyncedPatients,
     exportCsv,
   } = usePatientContributionListTable();
@@ -267,7 +272,7 @@ export function PatientListDirectory() {
     sortable?: boolean;
   }[] = [
     { key: 'patientName', label: 'Patient', align: 'left', sortable: true },
-    { key: 'practice', label: 'Practice', align: 'left', sortable: false },
+    { key: 'practice', label: rollupMode === 'location' ? 'Location' : 'Practice', align: 'left', sortable: false },
     { key: 'type', label: 'Type', align: 'left', sortable: false },
     { key: 'status', label: 'Status', align: 'left', sortable: false },
     { key: 'visitFreqPerYear', label: 'Visit freq /yr', align: 'right', sortable: true },
@@ -291,7 +296,10 @@ export function PatientListDirectory() {
           label="Total patients"
           value={summary.totalPatients.toLocaleString('en-GB')}
           subtitle={
-            search.trim() || retentionFilter !== 'all' || typeFilter !== 'all'
+            search.trim() ||
+            locationFilter !== 'all' ||
+            retentionFilter !== 'all' ||
+            typeFilter !== 'all'
               ? `${totalRows.toLocaleString('en-GB')} in current filter`
               : 'Synced invoice economics · this practice'
           }
@@ -320,53 +328,56 @@ export function PatientListDirectory() {
       </div>
 
       <div className="overflow-hidden rounded-[14px] border border-border bg-card shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-[18px] pb-1.5">
-          <div>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-border px-5 py-3">
+          <div className="min-w-0 flex-1 basis-[240px]">
             <h3 className="text-[15px] font-bold text-foreground">Patient List</h3>
             <p className="mt-0.5 text-[12.5px] text-muted-foreground">
               Every patient as an economic record · Filter, sort, then open one to drill in · Revenue
               − Cost = attributed contribution
             </p>
           </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-3">
-          <div className="relative min-w-[220px] flex-1 max-w-md">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Search patient…"
-              className="pl-9"
-              disabled={isLoading}
-            />
+          <div className="flex flex-wrap items-center gap-3">
+            {rollupMode === 'location' && locationOptions.length > 1 && (
+              <Select
+                value={locationFilter}
+                onValueChange={onLocationFilterChange}
+                disabled={isLoading}
+              >
+                <SelectTrigger className="h-9 w-[200px] max-w-full">
+                  <SelectValue placeholder="All locations" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All locations</SelectItem>
+                  {locationOptions.map(([id, name]) => (
+                    <SelectItem key={id} value={id}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            <div className="relative w-[220px] max-w-full">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => onSearchChange(e.target.value)}
+                placeholder="Search patient…"
+                className="pl-9"
+                disabled={isLoading}
+              />
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 w-9 shrink-0 px-0"
+              onClick={exportCsv}
+              disabled={isLoading || isError || totalRows === 0}
+              aria-label="Export CSV"
+              title="Export CSV"
+            >
+              <Download className="h-4 w-4" />
+            </Button>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-2"
-            onClick={exportCsv}
-            disabled={isLoading || isError || totalRows === 0}
-          >
-            <Download className="h-4 w-4" />
-            Export CSV
-          </Button>
-          <Select
-            value={String(pageSize)}
-            onValueChange={(v) => onPageSizeChange(Number(v))}
-            disabled={isLoading}
-          >
-            <SelectTrigger className="w-[88px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PAGE_SIZE_OPTIONS.map((n) => (
-                <SelectItem key={n} value={String(n)}>
-                  {n} / page
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-5 py-2.5">
@@ -479,25 +490,12 @@ export function PatientListDirectory() {
                     row.patientId,
                   )}`;
                   const nameCell = (
-                    <div className="flex items-center gap-2">
-                      <Link
-                        to={recordUrl}
-                        className="font-semibold text-primary hover:underline"
-                      >
-                        {row.patientName}
-                      </Link>
-                      {row.patientUuid && (
-                        <a
-                          href={`https://app.dentally.co/patients/${row.patientUuid}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-muted-foreground hover:text-primary"
-                          title="Open in Dentally"
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                        </a>
-                      )}
-                    </div>
+                    <Link
+                      to={recordUrl}
+                      className="font-semibold text-primary hover:underline"
+                    >
+                      {row.patientName}
+                    </Link>
                   );
 
                   return (
@@ -506,7 +504,9 @@ export function PatientListDirectory() {
                       className="border-b border-border/60 last:border-b-0 hover:bg-primary/[0.04]"
                     >
                       <td className="px-3 py-3">{nameCell}</td>
-                      <td className="px-3 py-3 text-foreground">{row.practiceName}</td>
+                      <td className="px-3 py-3 text-foreground">
+                        {patientScopeLabel(row, rollupMode)}
+                      </td>
                       <td className="px-3 py-3">
                         <PatientTypeBadge row={row} />
                       </td>
@@ -553,18 +553,19 @@ export function PatientListDirectory() {
                 ? ` (filtered from ${totalUnfiltered.toLocaleString('en-GB')})`
                 : ''}
             </span>
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="text-[11px]">Rows open the full Patient Financial Record</span>
+            <div className="flex flex-wrap items-center gap-2">
               {totalPages > 1 && (
-                <div className="flex items-center gap-2">
+                <>
                   <Button
                     variant="outline"
                     size="sm"
+                    className="h-8 w-8 px-0"
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
                     disabled={page <= 1}
+                    aria-label="Previous page"
+                    title="Previous"
                   >
                     <ChevronLeft className="h-4 w-4" />
-                    Previous
                   </Button>
                   <span className="tabular-nums">
                     Page {page} of {totalPages}
@@ -572,14 +573,32 @@ export function PatientListDirectory() {
                   <Button
                     variant="outline"
                     size="sm"
+                    className="h-8 w-8 px-0"
                     onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                     disabled={page >= totalPages}
+                    aria-label="Next page"
+                    title="Next"
                   >
-                    Next
                     <ChevronRight className="h-4 w-4" />
                   </Button>
-                </div>
+                </>
               )}
+              <Select
+                value={String(pageSize)}
+                onValueChange={(v) => onPageSizeChange(Number(v))}
+                disabled={isLoading}
+              >
+                <SelectTrigger className="h-8 w-[64px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAGE_SIZE_OPTIONS.map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      {n}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
         )}

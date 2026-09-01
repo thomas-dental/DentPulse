@@ -2,12 +2,18 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useOrganization } from '@/hooks/useOrganization';
 import {
+  buildLocationOptions,
   filterPatientRows,
+  filterPatientRowsByChips,
+  filterPatientRowsByLocation,
   mapPatientContributionRow,
   sortPatientRows,
   type PatientContributionRow,
+  type PatientListRetentionFilter,
   type PatientListSortKey,
+  type PatientListTypeFilter,
   type PatientProvenanceStatus,
+  type PeLocationScope,
 } from '@/hooks/usePatientContributionList';
 import {
   fetchPatientFinancialRecordApi,
@@ -173,9 +179,22 @@ function mapRetention(raw: Record<string, unknown>): RetentionStatus {
 
 export { PE_OPPORTUNITY_WEIGHTED_TIER_NOTE };
 
-async function fetchAllFinancialRecordRows(practiceId: string): Promise<PatientFinancialRecordRow[]> {
-  const { patients } = await fetchPatientFinancialRecordList(practiceId);
-  return patients.map((row) => mapFinancialRecordRow(row));
+async function fetchAllFinancialRecordRows(
+  practiceId: string,
+): Promise<{
+  rows: PatientFinancialRecordRow[];
+  rollupMode: 'location' | 'practice';
+  locations: PeLocationScope[];
+}> {
+  const data = await fetchPatientFinancialRecordList(practiceId);
+  return {
+    rows: data.patients.map((row) => mapFinancialRecordRow(row)),
+    rollupMode: data.rollupMode === 'location' ? 'location' : 'practice',
+    locations: (data.locations ?? []).map((loc) => ({
+      id: String(loc.id),
+      name: String(loc.name || 'Site'),
+    })),
+  };
 }
 
 async function fetchPatientFinancialRecord(
@@ -217,11 +236,33 @@ export function usePatientFinancialRecordListTable() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(5);
+  const [retentionFilter, setRetentionFilter] = useState<PatientListRetentionFilter>('all');
+  const [typeFilter, setTypeFilter] = useState<PatientListTypeFilter>('all');
+  const [locationFilter, setLocationFilter] = useState<string>('all');
 
-  const filtered = useMemo(
-    () => filterPatientRows(query.data ?? [], search),
-    [query.data, search],
+  const rollupMode = query.data?.rollupMode ?? 'practice';
+
+  const locationOptions = useMemo(
+    () => buildLocationOptions(query.data?.locations ?? [], query.data?.rows ?? []),
+    [query.data?.locations, query.data?.rows],
   );
+
+  const filtered = useMemo(() => {
+    const allRows = query.data?.rows ?? [];
+    const searched = filterPatientRows(allRows, search);
+    const byLocation =
+      rollupMode === 'location'
+        ? filterPatientRowsByLocation(searched, locationFilter)
+        : searched;
+    return filterPatientRowsByChips(byLocation, retentionFilter, typeFilter);
+  }, [
+    query.data?.rows,
+    search,
+    retentionFilter,
+    typeFilter,
+    locationFilter,
+    rollupMode,
+  ]);
 
   const sorted = useMemo(
     () => sortPatientRows(filtered, sortKey, sortDir),
@@ -255,20 +296,50 @@ export function usePatientFinancialRecordListTable() {
     setPage(1);
   };
 
+  const onPageSizeChange = (size: number) => {
+    setPageSize(size);
+    setPage(1);
+  };
+
+  const onRetentionFilterChange = (value: PatientListRetentionFilter) => {
+    setRetentionFilter(value);
+    setPage(1);
+  };
+
+  const onTypeFilterChange = (value: PatientListTypeFilter) => {
+    setTypeFilter(value);
+    setPage(1);
+  };
+
+  const onLocationFilterChange = (value: string) => {
+    setLocationFilter(value);
+    setPage(1);
+  };
+
   return {
     ...query,
     search,
     onSearchChange,
+    retentionFilter,
+    onRetentionFilterChange,
+    typeFilter,
+    onTypeFilterChange,
+    locationFilter,
+    onLocationFilterChange,
+    locationOptions,
     sortKey,
     sortDir,
     toggleSort,
     page: effectivePage,
     setPage,
     pageSize,
+    onPageSizeChange,
     totalPages,
     totalRows: sorted.length,
+    totalUnfiltered: query.data?.rows?.length ?? 0,
     pageRows,
-    hasSyncedPatients: (query.data?.length ?? 0) > 0,
+    rollupMode,
+    hasSyncedPatients: (query.data?.rows?.length ?? 0) > 0,
   };
 }
 

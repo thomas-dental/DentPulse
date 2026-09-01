@@ -197,6 +197,8 @@ export function GrowthLevers() {
 
   const assumptions = assumptionsQuery.data;
   const groupBenchmarks = byPracticeQuery.data?.groupBenchmarks;
+  const rollupUnitLabel =
+    byPracticeQuery.data?.rollupMode === 'location' ? 'location' : 'practice';
 
   const targetVisitFrequency =
     assumptions?.growthLeversTargetVisitFrequency ?? groupBenchmarks?.visitFrequency ?? null;
@@ -382,7 +384,7 @@ export function GrowthLevers() {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <ChartCard
-          title="Lever headroom by practice"
+          title={`Lever headroom by ${rollupUnitLabel}`}
           subtitle="Gap to target on each lever · darker = more room to grow"
         >
           {byPracticeQuery.isLoading ? (
@@ -446,7 +448,7 @@ export function GrowthLevers() {
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-4">
           <div>
             <h2 className="text-[15px] font-bold tracking-tight text-foreground">
-              Growth levers by practice
+              Growth levers by {rollupUnitLabel}
             </h2>
             <p className="mt-1 text-[12.5px] text-muted-foreground">
               Visit Frequency, Value per Visit and Economic Value side by side, ranked by combined
@@ -491,7 +493,7 @@ export function GrowthLevers() {
                 <tr className="border-b border-border">
                   <th className="px-4 py-3 text-left">
                     <SortHeader
-                      label="Practice"
+                      label={rollupUnitLabel === 'location' ? 'Location' : 'Practice'}
                       active={sortKey === 'practiceName'}
                       dir={sortDir}
                       onClick={() => toggleSort('practiceName')}
