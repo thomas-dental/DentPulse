@@ -981,6 +981,7 @@ async function fetchInvoiceContributionSummary(practiceId, scope = {}) {
   const invoiceCount = num(rpcPayload.invoice_count);
   const invoicesWithRevenue = num(rpcPayload.invoices_with_revenue);
   const totalContribution = num(rpcPayload.total_contribution);
+  const totalPaidValue = num(rpcPayload.total_paid_value);
   const totalRevenue = num(rpcPayload.total_revenue);
   const revenueNhs = num(rpcPayload.revenue_nhs);
   const invoicesMissingPractitioner = num(rpcPayload.invoices_missing_practitioner);
@@ -1058,6 +1059,7 @@ async function fetchInvoiceContributionSummary(practiceId, scope = {}) {
     patientCount: num(rpcPayload.patient_count),
     patientsWithRevenue: num(rpcPayload.patients_with_revenue),
     totalContribution,
+    totalPaidValue,
     totalRevenue,
     totalNhsExcluded: revenueNhs,
     revenuePrivate,

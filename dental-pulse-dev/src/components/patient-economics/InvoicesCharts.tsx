@@ -22,6 +22,19 @@ export function formatGbp(value: number): string {
   }).format(value);
 }
 
+/** Full £ with pence — no k/m compaction (hero KPIs). */
+export function formatGbpExact(value: number): string {
+  const negative = value < 0;
+  const abs = Math.abs(value);
+  const formatted = new Intl.NumberFormat('en-GB', {
+    style: 'currency',
+    currency: 'GBP',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(abs);
+  return negative ? `−${formatted}` : formatted;
+}
+
 export function formatGbpCompact(value: number): string {
   const abs = Math.abs(value);
   if (abs >= 1_000_000) {

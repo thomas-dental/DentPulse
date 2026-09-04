@@ -10,6 +10,8 @@ export type InvoiceContributionSummary = {
   patientCount: number;
   patientsWithRevenue: number;
   totalContribution: number;
+  /** Sum of paid invoice £ from platform_integration_invoices (private + plan, NHS excluded). */
+  totalPaidValue: number;
   /** Private + plan (contribution engine scope). */
   totalRevenue: number;
   /** @deprecated Prefer revenueNhs */
@@ -59,6 +61,7 @@ export function mapInvoiceContributionSummary(raw: Record<string, unknown>): Inv
     patientCount: num(raw.patientCount),
     patientsWithRevenue: num(raw.patientsWithRevenue),
     totalContribution: num(raw.totalContribution),
+    totalPaidValue: num(raw.totalPaidValue),
     totalRevenue: num(raw.totalRevenue),
     totalNhsExcluded: num(raw.totalNhsExcluded),
     revenuePrivate: num(raw.revenuePrivate),

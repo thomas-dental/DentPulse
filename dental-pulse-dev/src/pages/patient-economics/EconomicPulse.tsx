@@ -113,6 +113,18 @@ function formatGbp(value: number): string {
   return value < 0 ? `−${formatted}` : formatted;
 }
 
+/** Always show pence — for invoice totals that must not be compact-rounded. */
+function formatGbpExact(value: number): string {
+  const abs = Math.abs(value);
+  const formatted = new Intl.NumberFormat('en-GB', {
+    style: 'currency',
+    currency: 'GBP',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(abs);
+  return value < 0 ? `−${formatted}` : formatted;
+}
+
 function formatPct(rate: number): string {
   return `${Math.round(rate * 100)}%`;
 }
@@ -1094,7 +1106,9 @@ function WhereTheValueSits({
 
   const hasSyncedFinancials =
     !!invoiceSummary &&
-    (invoiceSummary.totalRevenue > 0 || invoiceSummary.revenueNhs > 0);
+    (invoiceSummary.totalRevenue > 0 ||
+      invoiceSummary.revenueNhs > 0 ||
+      invoiceSummary.totalPaidValue !== 0);
 
   return (
     <>
@@ -1492,7 +1506,8 @@ function EconomicPulseHeroes() {
     growthQuery.isFetching;
 
   const hasSyncedFinancials =
-    !!data && (data.totalRevenue > 0 || data.revenueNhs > 0);
+    !!data &&
+    (data.totalRevenue > 0 || data.revenueNhs > 0 || data.totalPaidValue !== 0);
   const isEmpty =
     !!data && data.totalRevenue <= 0 && data.revenueNhs <= 0 && !isLoading;
 
@@ -1585,7 +1600,7 @@ function EconomicPulseHeroes() {
             question="1 · Existing patient value"
             subtitle={
               <>
-                Paid contribution to date (private + plan)
+                Paid contribution &amp; invoice value (private + plan)
                 <br />
                 NHS/UDA excluded &nbsp;
                 <ProvenanceChip
@@ -1603,10 +1618,27 @@ function EconomicPulseHeroes() {
           >
             {isError ? (
               <PendingValue />
-            ) : (
-              <div className="text-[28px] font-extrabold tracking-tight text-foreground">
-                {hasSyncedFinancials ? formatGbp(data!.totalContribution) : '£0'}
+            ) : hasSyncedFinancials ? (
+              <div className="space-y-2">
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Contribution
+                  </div>
+                  <div className="text-[28px] font-extrabold leading-tight tracking-tight text-foreground">
+                    {formatGbp(data!.totalContribution)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Total paid
+                  </div>
+                  <div className="text-[20px] font-bold leading-tight tracking-tight text-primary">
+                    {formatGbpExact(data!.totalPaidValue)}
+                  </div>
+                </div>
               </div>
+            ) : (
+              <div className="text-[28px] font-extrabold tracking-tight text-foreground">£0</div>
             )}
           </HeroCard>
 

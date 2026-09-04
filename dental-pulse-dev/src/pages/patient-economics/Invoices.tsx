@@ -10,7 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import {
   AgedDebtChart,
   CollectionRateByPracticeChart,
-  formatGbpCompact,
+  formatGbpExact,
 } from '@/components/patient-economics/InvoicesCharts';
 import { InvoicesListTable } from '@/components/patient-economics/InvoicesListTable';
 import { ProvenanceChip } from '@/components/patient-economics/ProvenanceChip';
@@ -160,15 +160,15 @@ export function Invoices() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <HeroCard
           pending={heroPending}
-          question={`Invoiced · ${hero?.trailingMonths ?? 12}mo`}
-          value={hero ? formatGbpCompact(hero.invoicedTrailingGbp) : '—'}
+          question="Invoiced"
+          value={hero ? formatGbpExact(hero.invoicedTrailingGbp) : '—'}
           subtitle={rollupMode === 'location' ? 'Across all locations' : 'Across all practices'}
         />
         <HeroCard
           pending={heroPending}
           tone="success"
           question="Collected"
-          value={hero ? formatGbpCompact(hero.collectedTrailingGbp) : '—'}
+          value={hero ? formatGbpExact(hero.collectedTrailingGbp) : '—'}
           subtitle={
             <>
               {formatPct(hero?.collectionRate ?? null)} collection rate{' '}
@@ -180,20 +180,20 @@ export function Invoices() {
           pending={heroPending}
           tone="risk"
           question="Outstanding"
-          value={hero ? formatGbpCompact(hero.totalOutstandingGbp) : '—'}
-          subtitle="Unpaid, all ages"
+          value={hero ? formatGbpExact(hero.totalOutstandingGbp) : '—'}
+          subtitle="Unpaid · raised in period"
         />
         <HeroCard
           pending={heroPending}
           tone="warn"
           question="Overdue > 60d"
-          value={hero ? formatGbpCompact(hero.overdue60PlusGbp) : '—'}
+          value={hero ? formatGbpExact(hero.overdue60PlusGbp) : '—'}
           subtitle="Past terms, needs chasing"
         />
         <HeroCard
           pending={heroPending}
           question="On payment plan"
-          value={hero ? formatGbpCompact(hero.onPaymentPlanOutstandingGbp) : '—'}
+          value={hero ? formatGbpExact(hero.onPaymentPlanOutstandingGbp) : '—'}
           subtitle={
             hero && hero.onPaymentPlanArrangementCount > 0
               ? `${hero.onPaymentPlanArrangementCount} active arrangements`
@@ -206,7 +206,7 @@ export function Invoices() {
         <div className="rounded-[14px] border border-border bg-card px-5 py-[18px] shadow-sm">
           <h3 className="text-[15px] font-bold text-foreground">Aged debt</h3>
           <p className="mt-0.5 text-[12.5px] text-muted-foreground">
-            Outstanding balance by age bucket
+            Unpaid balance on invoices raised in the selected period
           </p>
           <div className="mt-4">
             {agedPending ? (
@@ -256,7 +256,6 @@ export function Invoices() {
         isFetching={listPending}
         contextPracticeId={organizationId}
         cashLeakageWindowDays={listData?.cashLeakageWindowDays ?? 30}
-        trailingMonths={listData?.trailingMonths ?? hero?.trailingMonths ?? 12}
         cashLeakageCount={listData?.cashLeakageCount ?? 0}
         cashLeakageGbp={listData?.cashLeakageGbp ?? 0}
         rollupMode={rollupMode}

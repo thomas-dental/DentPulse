@@ -109,7 +109,6 @@ type InvoicesListTableProps = {
   isFetching?: boolean;
   contextPracticeId: string | null | undefined;
   cashLeakageWindowDays: number;
-  trailingMonths: number;
   cashLeakageCount: number;
   cashLeakageGbp: number;
   rollupMode?: 'location' | 'practice';
@@ -135,7 +134,6 @@ export function InvoicesListTable({
   isFetching = false,
   contextPracticeId,
   cashLeakageWindowDays,
-  trailingMonths,
   cashLeakageCount,
   cashLeakageGbp,
   rollupMode = 'practice',
@@ -214,8 +212,7 @@ export function InvoicesListTable({
       <div className="rounded-[14px] border border-dashed border-border px-5 py-10 text-center">
         <p className="text-sm font-medium text-foreground">No invoices in scope</p>
         <p className="mt-1 text-[12.5px] text-muted-foreground">
-          Sync Dentally invoices for the last {trailingMonths} months, or any invoice still
-          outstanding.
+          No invoices with a raised date in the selected period.
         </p>
       </div>
     );
@@ -227,7 +224,7 @@ export function InvoicesListTable({
         <div className="min-w-0 flex-1 basis-[240px]">
           <h3 className="text-[15px] font-bold text-foreground">Invoices</h3>
           <p className="mt-0.5 text-[12.5px] text-muted-foreground">
-            Outstanding first, oldest at the top. Chase by value, not by date raised.
+            Raised in the selected period · sorted by outstanding, oldest overdue first
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -281,7 +278,7 @@ export function InvoicesListTable({
               ? 'No cash-leakage invoices in the current filter.'
               : statusFilter !== 'all'
                 ? `No invoices with status “${PE_INVOICE_DISPLAY_STATUS_LABELS[statusFilter]}”.`
-                : 'No invoices match the current filters.'}
+                : 'No invoices raised in the selected period.'}
         </p>
       ) : (
         <>

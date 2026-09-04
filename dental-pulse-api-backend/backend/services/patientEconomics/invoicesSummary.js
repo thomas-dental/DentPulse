@@ -37,9 +37,15 @@ function filterUnitsByLocation(units, scope = {}) {
   );
 }
 
-/** Snapshot KPIs (aged debt, payment plan) ignore TopBar dates — location only. */
+/** Location scope; preserves TopBar period dates when set. */
 function scopeLocationOnly(scope = {}) {
-  return scope.locationId ? { locationId: scope.locationId } : {};
+  const out = {};
+  if (scope.locationId) out.locationId = scope.locationId;
+  if (scope.startDate && scope.endDate) {
+    out.startDate = scope.startDate;
+    out.endDate = scope.endDate;
+  }
+  return out;
 }
 
 function resolveContextOutstanding(allListRows, practiceId, units, scope = {}) {
@@ -128,6 +134,8 @@ async function loadOutstandingKpisViaRpc(practiceId, organizationIds, locationId
     p_practice_id: practiceId,
     p_org_ids: organizationIds,
     p_location_id: locationId || null,
+    p_period_start: meta.periodStart || null,
+    p_period_end: meta.periodEnd || null,
     p_today: meta.today,
     p_aging_b0: boundaries[0] ?? 30,
     p_aging_b1: boundaries[1] ?? 60,
@@ -389,6 +397,7 @@ async function buildMappedInvoiceContext(practiceId, userId, scope = {}) {
       agingBucketBoundaryDays: meta.agingBucketBoundaryDays,
     },
   );
+  // pe_invoices_mapped_rows filters worklist rows by invoice_date (raised) within period.
 
   const allListRows = rpcRows.map((row) => mapRpcRowToListRow(row));
 
@@ -525,13 +534,12 @@ async function getInvoicesHero(practiceId, userId, scope = {}) {
 }
 
 async function getInvoicesAgedDebt(practiceId, userId, scope = {}) {
-  const locationScope = scopeLocationOnly(scope);
-  const meta = await loadPeriodAndUnits(practiceId, userId, locationScope);
+  const meta = await loadPeriodAndUnits(practiceId, userId, scope);
   const orgIds = [...new Set(meta.units.map((u) => u.organizationId))];
   const kpis = await loadOutstandingKpisCached(
     practiceId,
     userId,
-    locationScope,
+    scope,
     meta,
     orgIds,
   );
