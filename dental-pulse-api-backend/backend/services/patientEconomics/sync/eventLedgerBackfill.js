@@ -21,31 +21,36 @@ const BACKFILL_SPECS = [
     table: 'treatment_plans',
     idField: 'tp_id',
     order: 'tp_id',
+    cursorField: 'tp_id',
   },
   {
     alias: 'treatment_appointments',
     table: 'treatment_appointments',
     idField: 'ta_id',
     order: 'ta_id',
+    cursorField: 'ta_id',
   },
   {
     alias: 'treatment_plan_items',
     table: 'treatment_plan_items',
     idField: 'tpi_id',
     order: 'tpi_id',
+    cursorField: 'tpi_id',
   },
   {
     alias: 'invoices',
     table: 'platform_integration_invoices',
     idField: 'platform_invoice_id',
-    order: 'invoice_date',
+    order: 'platform_invoice_id',
+    cursorField: 'platform_invoice_id',
     applyFilters: (query) => query.eq('platform_type', 'dentally'),
   },
   {
     alias: 'payments',
     table: 'dentally_payments',
     idField: 'dp_id',
-    order: 'dp_dated_on',
+    order: 'dp_id',
+    cursorField: 'dp_id',
     applyFilters: (query) => query.is('deleted_at', null),
     attachExplanations: true,
   },
@@ -54,8 +59,9 @@ const BACKFILL_SPECS = [
     table: 'patients',
     idField: 'pt_id',
     order: 'pt_id',
+    cursorField: 'pt_id',
     applyFilters: (query) => query.is('deleted_at', null),
-    pageSize: 100,
+    pageSize: 200,
   },
 ];
 
@@ -103,28 +109,38 @@ async function attachPaymentExplanations(practiceId, rows) {
   }));
 }
 
-async function fetchEntityPage(practiceId, spec, page, pageSize) {
-  const from = page * pageSize;
-  const to = from + pageSize - 1;
+function cursorValueForField(entityAlias, idField, row) {
+  const raw = row[idField];
+  if (entityAlias === 'invoices') return String(raw);
+  return raw;
+}
+
+async function fetchEntityPage(practiceId, spec, cursorAfter, pageSize) {
+  const cursorField = spec.cursorField || spec.order;
 
   let query = supabaseAdmin
     .from(spec.table)
-    .select('*', { count: 'exact' })
+    .select('*')
     .eq('organization_id', practiceId)
-    .order(spec.order, { ascending: true, nullsFirst: false });
+    .order(spec.order, { ascending: true, nullsFirst: false })
+    .limit(pageSize);
 
   if (spec.applyFilters) {
     query = spec.applyFilters(query);
   }
 
-  query = query.range(from, to);
-
-  const { data, error, count } = await query;
-  if (error) {
-    throw new Error(`[PE ledger backfill] ${spec.alias} page ${page} failed: ${error.message}`);
+  if (cursorAfter != null) {
+    query = query.gt(cursorField, cursorAfter);
   }
 
-  return { rows: data || [], total: count ?? null };
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(
+      `[PE ledger backfill] ${spec.alias} cursor ${cursorAfter ?? 'start'} failed: ${error.message}`,
+    );
+  }
+
+  return { rows: data || [] };
 }
 
 /**
@@ -139,13 +155,14 @@ async function backfillLedgerEntity(practiceId, entityAlias, options = {}) {
 
   const pageSize = options.pageSize || spec.pageSize || DEFAULT_PAGE_SIZE;
   let page = 0;
+  let cursorAfter = null;
   let rowsScanned = 0;
   let written = 0;
   let skippedNoPatient = 0;
   let orphanedNoPatient = 0;
 
   for (;;) {
-    const { rows, total } = await fetchEntityPage(practiceId, spec, page, pageSize);
+    const { rows } = await fetchEntityPage(practiceId, spec, cursorAfter, pageSize);
     if (rows.length === 0) break;
 
     rowsScanned += rows.length;
@@ -174,10 +191,14 @@ async function backfillLedgerEntity(practiceId, entityAlias, options = {}) {
     skippedNoPatient += result.skippedNoPatient || 0;
     orphanedNoPatient += result.orphanedNoPatient || 0;
 
+    const lastRow = rows[rows.length - 1];
+    cursorAfter = cursorValueForField(entityAlias, spec.cursorField || spec.idField, lastRow);
+
     if (options.onProgress) {
       options.onProgress({
         entityAlias,
         page,
+        cursorAfter,
         rows: rows.length,
         written: result.written || 0,
         skippedNoPatient: result.skippedNoPatient || 0,
@@ -187,7 +208,6 @@ async function backfillLedgerEntity(practiceId, entityAlias, options = {}) {
 
     page += 1;
     if (rows.length < pageSize) break;
-    if (total != null && page * pageSize >= total) break;
   }
 
   return {

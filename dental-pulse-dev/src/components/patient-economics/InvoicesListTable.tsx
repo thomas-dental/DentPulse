@@ -28,20 +28,31 @@ import {
   deriveInvoiceDisplayStatus,
   PE_INVOICE_DISPLAY_STATUS_LABELS,
   type PeInvoiceDisplayStatus,
+  type PeInvoicePaymentFilter,
 } from '@/lib/peInvoicesConstants';
 import { cn } from '@/lib/utils';
 
 const PAGE_SIZE_OPTIONS = [5, 10, 25, 50, 100];
 
-type InvoiceStatusFilter = 'all' | PeInvoiceDisplayStatus;
+type InvoiceStatusFilter = PeInvoicePaymentFilter;
 
 const STATUS_FILTERS: { key: InvoiceStatusFilter; label: string }[] = [
-  { key: 'all', label: 'All' },
+  { key: 'all', label: PE_INVOICE_DISPLAY_STATUS_LABELS.all },
   { key: 'paid', label: PE_INVOICE_DISPLAY_STATUS_LABELS.paid },
+  { key: 'unpaid', label: PE_INVOICE_DISPLAY_STATUS_LABELS.unpaid },
   { key: 'current', label: PE_INVOICE_DISPLAY_STATUS_LABELS.current },
   { key: 'part-paid', label: PE_INVOICE_DISPLAY_STATUS_LABELS['part-paid'] },
   { key: 'overdue', label: PE_INVOICE_DISPLAY_STATUS_LABELS.overdue },
 ];
+
+function footerInvoiceLabel(statusFilter: InvoiceStatusFilter): string {
+  if (statusFilter === 'paid') return 'paid invoices';
+  if (statusFilter === 'unpaid') return 'unpaid invoices';
+  if (statusFilter !== 'all') {
+    return `${PE_INVOICE_DISPLAY_STATUS_LABELS[statusFilter].toLowerCase()} invoices`;
+  }
+  return 'invoices';
+}
 
 function FilterChip({
   active,
@@ -277,7 +288,7 @@ export function InvoicesListTable({
             : leakageOnly
               ? 'No cash-leakage invoices in the current filter.'
               : statusFilter !== 'all'
-                ? `No invoices with status “${PE_INVOICE_DISPLAY_STATUS_LABELS[statusFilter]}”.`
+                ? `No ${footerInvoiceLabel(statusFilter)} in the selected period.`
                 : 'No invoices raised in the selected period.'}
         </p>
       ) : (
@@ -482,7 +493,8 @@ export function InvoicesListTable({
               ) : (
                 <>
                   Showing {total === 0 ? 0 : (safePage - 1) * pageSize + 1}–
-                  {Math.min(safePage * pageSize, total)} of {total.toLocaleString('en-GB')} invoices
+                  {Math.min(safePage * pageSize, total)} of {total.toLocaleString('en-GB')}{' '}
+                  {footerInvoiceLabel(statusFilter)}
                 </>
               )}
             </span>

@@ -401,10 +401,21 @@ async function writeLedgerEventsFromUpsert({
     return { written: 0, skippedNoPatient, orphanedNoPatient };
   }
 
-  const { error } = await supabaseAdmin.from('event_ledger').upsert(inserts, {
+  const upsertOptions = {
     onConflict: 'practice_id,idempotency_key',
     ignoreDuplicates: true,
-  });
+  };
+
+  let { error } = await supabaseAdmin.from('event_ledger').upsert(inserts, upsertOptions);
+
+  // PostgREST schema cache can lag after ADD COLUMN; location is backfilled via RPC.
+  if (
+    error?.message?.includes('location_id')
+    && error.message.includes('schema cache')
+  ) {
+    const withoutLocation = inserts.map(({ location_id: _loc, ...row }) => row);
+    ({ error } = await supabaseAdmin.from('event_ledger').upsert(withoutLocation, upsertOptions));
+  }
 
   if (error) {
     throw new Error(`[PE ledger] Insert failed: ${error.message}`);

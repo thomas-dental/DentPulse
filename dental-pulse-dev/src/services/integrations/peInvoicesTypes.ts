@@ -25,6 +25,7 @@ export type PeInvoiceListRow = {
   agingBucket: PeAgingBucketId;
   status: string;
   isPaid: boolean;
+  isPaidInPms: boolean;
   isOutstanding: boolean;
   isCashLeakage: boolean;
   patientId: number | null;

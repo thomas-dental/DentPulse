@@ -1,7 +1,13 @@
--- Outstanding KPIs: filter by raised date (invoice_date) when period set; align total with Dentally unpaid sum.
+-- Outstanding KPIs: filter by raised date; Dentally-aligned unpaid sum.
 
 DROP FUNCTION IF EXISTS public.pe_invoices_outstanding_kpis(
   UUID, UUID[], UUID, DATE, INT, INT, INT
+);
+DROP FUNCTION IF EXISTS public.pe_invoices_outstanding_kpis(
+  UUID, UUID[], UUID, DATE, INT, INT, INT, DATE, DATE
+);
+DROP FUNCTION IF EXISTS public.pe_invoices_outstanding_kpis(
+  UUID, UUID[], UUID, DATE, DATE, DATE, INT, INT, INT
 );
 
 CREATE OR REPLACE FUNCTION public.pe_invoices_outstanding_kpis(

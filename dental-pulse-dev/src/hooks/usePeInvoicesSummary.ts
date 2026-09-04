@@ -50,6 +50,10 @@ function mapInvoiceListRows(
     agingBucket: String(raw.agingBucket ?? '0-30') as PeInvoicesList['invoiceListRows'][0]['agingBucket'],
     status: String(raw.status ?? ''),
     isPaid: raw.isPaid === true,
+    isPaidInPms:
+      raw.isPaidInPms === true ||
+      (raw.isPaidInPms !== false &&
+        String(raw.status ?? '').toLowerCase().trim() === 'paid'),
     isOutstanding: raw.isOutstanding === true,
     isCashLeakage: raw.isCashLeakage === true,
     patientId: raw.patientId == null ? null : num(raw.patientId),

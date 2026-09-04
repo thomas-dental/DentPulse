@@ -29,22 +29,42 @@ export const PE_COLLECTION_RATE_TARGET_DEFAULT = 0.93;
 
 export type PeInvoiceDisplayStatus = 'paid' | 'current' | 'part-paid' | 'overdue';
 
+export type PeInvoicePaymentFilter = 'all' | 'paid' | 'unpaid' | PeInvoiceDisplayStatus;
+
+/** Dentally PMS paid — status paid or is_paid, not zero-balance draft. */
+export function isInvoicePaidInPms(row: {
+  status?: string | null;
+  isPaidInPms?: boolean;
+}): boolean {
+  if (row.isPaidInPms === true) return true;
+  if (row.isPaidInPms === false) return false;
+  return String(row.status || '').toLowerCase().trim() === 'paid';
+}
+
 export function deriveInvoiceDisplayStatus(row: {
-  isPaid: boolean;
+  status?: string | null;
+  isPaidInPms?: boolean;
   isOutstanding: boolean;
   outstandingGbp: number;
   amountGbp: number;
   daysPastDue: number;
   agingBucket: PeAgingBucketId;
 }): PeInvoiceDisplayStatus {
-  if (row.isPaid || !row.isOutstanding || row.outstandingGbp <= 0) return 'paid';
-  if (row.agingBucket !== '0-30' || row.daysPastDue > 30) return 'overdue';
-  if (row.amountGbp > 0 && row.outstandingGbp < row.amountGbp) return 'part-paid';
+  if (isInvoicePaidInPms(row)) return 'paid';
+  if (row.isOutstanding && row.outstandingGbp > 0) {
+    if (row.agingBucket !== '0-30' || row.daysPastDue > 30) return 'overdue';
+    if (row.amountGbp > 0 && row.outstandingGbp < row.amountGbp) return 'part-paid';
+  }
   return 'current';
 }
 
-export const PE_INVOICE_DISPLAY_STATUS_LABELS: Record<PeInvoiceDisplayStatus, string> = {
+export const PE_INVOICE_DISPLAY_STATUS_LABELS: Record<
+  PeInvoiceDisplayStatus | 'unpaid' | 'all',
+  string
+> = {
+  all: 'All',
   paid: 'Paid',
+  unpaid: 'Unpaid',
   current: 'Current',
   'part-paid': 'Part-paid',
   overdue: 'Overdue',

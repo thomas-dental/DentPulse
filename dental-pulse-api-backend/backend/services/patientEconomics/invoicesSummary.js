@@ -193,6 +193,9 @@ function mapRpcRowToListRow(row) {
     agingBucket,
     status: String(row.status || (row.is_paid ? 'paid' : 'outstanding')),
     isPaid: row.is_paid_display === true,
+    isPaidInPms:
+      row.is_paid === true ||
+      String(row.status || '').toLowerCase().trim() === 'paid',
     isOutstanding: row.is_outstanding === true,
     isCashLeakage: row.is_cash_leakage === true,
     patientId: ptId,
@@ -212,10 +215,18 @@ function mapRpcRowToListRow(row) {
   };
 }
 
+function isInvoicePaidInPms(row) {
+  if (row.isPaidInPms === true) return true;
+  if (row.isPaidInPms === false) return false;
+  return String(row.status || '').toLowerCase().trim() === 'paid';
+}
+
 function deriveInvoiceDisplayStatus(row) {
-  if (row.isPaid || !row.isOutstanding || row.outstandingGbp <= 0) return 'paid';
-  if (row.agingBucket !== '0-30' || row.daysPastDue > 30) return 'overdue';
-  if (row.amountGbp > 0 && row.outstandingGbp < row.amountGbp) return 'part-paid';
+  if (isInvoicePaidInPms(row)) return 'paid';
+  if (row.isOutstanding && row.outstandingGbp > 0) {
+    if (row.agingBucket !== '0-30' || row.daysPastDue > 30) return 'overdue';
+    if (row.amountGbp > 0 && row.outstandingGbp < row.amountGbp) return 'part-paid';
+  }
   return 'current';
 }
 
@@ -289,7 +300,7 @@ function parseListParams(query = {}) {
   ]);
   const sortKey = validSort.has(sort) ? sort : 'outstanding';
 
-  const validStatus = new Set(['all', 'paid', 'current', 'part-paid', 'overdue']);
+  const validStatus = new Set(['all', 'paid', 'unpaid', 'current', 'part-paid', 'overdue']);
   const status = validStatus.has(statusFilter) ? statusFilter : 'all';
 
   return { page, pageSize, sortKey, sortDir, search, statusFilter: status, cashLeakageOnly };
@@ -335,7 +346,11 @@ function sortListRows(rows, sortKey, sortDir) {
 function filterListRows(rows, { search, statusFilter, cashLeakageOnly }) {
   let list = rows;
   if (cashLeakageOnly) list = list.filter((r) => r.isCashLeakage);
-  if (statusFilter !== 'all') {
+  if (statusFilter === 'paid') {
+    list = list.filter((r) => isInvoicePaidInPms(r));
+  } else if (statusFilter === 'unpaid') {
+    list = list.filter((r) => !isInvoicePaidInPms(r));
+  } else if (statusFilter !== 'all') {
     list = list.filter((r) => deriveInvoiceDisplayStatus(r) === statusFilter);
   }
   if (search) {
