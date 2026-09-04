@@ -27,6 +27,11 @@ type PendingDate = {
   endDate: string;
 };
 
+type CoverageRevert = {
+  filters: { dateRangeId: string; from: string | null; to: string | null };
+  scope: PeReadScope;
+};
+
 export function PeFilterGate({ children, skipFilters = false }: PeFilterGateProps) {
   const { organizationId } = useOrganization();
   const {
@@ -57,6 +62,9 @@ export function PeFilterGate({ children, skipFilters = false }: PeFilterGateProp
     to: customDateRange.to?.toISOString() ?? null,
   });
   const prevLocationRef = useRef<string | null>(selectedLocationId);
+  const committedScopeRef = useRef(committedScope);
+  committedScopeRef.current = committedScope;
+  const coverageRevertRef = useRef<CoverageRevert | null>(null);
 
   const buildScopeFromFilters = useCallback((): PeReadScope | null => {
     const startDate = toLocalYMD(dateRange.startDate);
@@ -76,16 +84,6 @@ export function PeFilterGate({ children, skipFilters = false }: PeFilterGateProp
     selectedDateRangeId,
   ]);
 
-  const revertDateSelection = useCallback(() => {
-    setSelectedDateRangeId(prevDateRef.current.dateRangeId);
-    setCustomDateRange({
-      from: prevDateRef.current.from ? new Date(prevDateRef.current.from) : null,
-      to: prevDateRef.current.to ? new Date(prevDateRef.current.to) : null,
-    });
-    setModalOpen(false);
-    setPendingDate(null);
-  }, [setCustomDateRange, setSelectedDateRangeId]);
-
   const commitScope = useCallback((scope: PeReadScope) => {
     setCommittedScope(scope);
     prevDateRef.current = {
@@ -96,43 +94,70 @@ export function PeFilterGate({ children, skipFilters = false }: PeFilterGateProp
     prevLocationRef.current = scope.locationId;
   }, [customDateRange.from, customDateRange.to]);
 
+  const revertDateSelection = useCallback(() => {
+    const revert = coverageRevertRef.current;
+    if (revert) {
+      setSelectedDateRangeId(revert.filters.dateRangeId);
+      setCustomDateRange({
+        from: revert.filters.from ? new Date(revert.filters.from) : null,
+        to: revert.filters.to ? new Date(revert.filters.to) : null,
+      });
+      commitScope(revert.scope);
+      coverageRevertRef.current = null;
+    }
+    setModalOpen(false);
+    setPendingDate(null);
+  }, [setCustomDateRange, setSelectedDateRangeId, commitScope]);
+
+  /** Non-blocking: PE reads start immediately; sync modal only if period lacks data. */
+  const checkPeriodCoverage = useCallback(
+    (scope: PeReadScope, pending: PendingDate, revert?: CoverageRevert) => {
+      if (!organizationId) return () => {};
+
+      let cancelled = false;
+      (async () => {
+        try {
+          const coverage = await fetchPePeriodCoverage(organizationId, {
+            locationId: scope.locationId,
+            startDate: scope.startDate,
+            endDate: scope.endDate,
+          });
+          if (cancelled) return;
+          if (coverage.needsSync) {
+            if (revert) coverageRevertRef.current = revert;
+            setPendingDate(pending);
+            setSyncInProgress(coverage.syncInProgress);
+            setModalOpen(true);
+          } else {
+            coverageRevertRef.current = null;
+          }
+        } catch {
+          // Scope already committed — reads proceed with best-effort data.
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+      };
+    },
+    [organizationId],
+  );
+
   // Initial commit on mount (and when org loads)
   useEffect(() => {
     if (skipFilters || !organizationId) return;
     const scope = buildScopeFromFilters();
     if (!scope) return;
 
-    let cancelled = false;
-    (async () => {
-      try {
-        const coverage = await fetchPePeriodCoverage(organizationId, {
-          locationId: scope.locationId,
-          startDate: scope.startDate,
-          endDate: scope.endDate,
-        });
-        if (cancelled) return;
-        if (coverage.needsSync) {
-          setPendingDate({
-            dateRangeId: scope.dateRangeId,
-            customFrom: customDateRange.from,
-            customTo: customDateRange.to,
-            startDate: scope.startDate,
-            endDate: scope.endDate,
-          });
-          setSyncInProgress(coverage.syncInProgress);
-          setModalOpen(true);
-        } else {
-          commitScope(scope);
-        }
-      } catch {
-        if (!cancelled) commitScope(scope);
-      }
-    })();
+    commitScope(scope);
 
-    return () => {
-      cancelled = true;
-    };
-    // Only on org / skip change — initial gate
+    return checkPeriodCoverage(scope, {
+      dateRangeId: scope.dateRangeId,
+      customFrom: customDateRange.from,
+      customTo: customDateRange.to,
+      startDate: scope.startDate,
+      endDate: scope.endDate,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [organizationId, skipFilters]);
 
@@ -146,7 +171,7 @@ export function PeFilterGate({ children, skipFilters = false }: PeFilterGateProp
     commitScope(scope);
   }, [selectedLocationId, skipFilters, organizationId, buildScopeFromFilters, commitScope, committedScope.isReady]);
 
-  // Date changes — coverage gate
+  // Date changes — apply scope immediately; coverage check runs in parallel
   useEffect(() => {
     if (skipFilters || !organizationId) return;
 
@@ -160,38 +185,26 @@ export function PeFilterGate({ children, skipFilters = false }: PeFilterGateProp
     const scope = buildScopeFromFilters();
     if (!scope) return;
 
-    let cancelled = false;
-    setCommittedScope((prev) => ({ ...prev, isReady: false }));
-
-    (async () => {
-      try {
-        const coverage = await fetchPePeriodCoverage(organizationId, {
-          locationId: scope.locationId,
-          startDate: scope.startDate,
-          endDate: scope.endDate,
-        });
-        if (cancelled) return;
-        if (coverage.needsSync) {
-          setPendingDate({
-            dateRangeId: scope.dateRangeId,
-            customFrom: customDateRange.from,
-            customTo: customDateRange.to,
-            startDate: scope.startDate,
-            endDate: scope.endDate,
-          });
-          setSyncInProgress(coverage.syncInProgress);
-          setModalOpen(true);
-        } else {
-          commitScope(scope);
+    const revert: CoverageRevert | undefined = committedScopeRef.current.isReady
+      ? {
+          filters: { ...prevDateRef.current },
+          scope: { ...committedScopeRef.current },
         }
-      } catch {
-        if (!cancelled) commitScope(scope);
-      }
-    })();
+      : undefined;
 
-    return () => {
-      cancelled = true;
-    };
+    commitScope(scope);
+
+    return checkPeriodCoverage(
+      scope,
+      {
+        dateRangeId: scope.dateRangeId,
+        customFrom: customDateRange.from,
+        customTo: customDateRange.to,
+        startDate: scope.startDate,
+        endDate: scope.endDate,
+      },
+      revert,
+    );
   }, [
     selectedDateRangeId,
     customDateRange.from,
@@ -200,6 +213,7 @@ export function PeFilterGate({ children, skipFilters = false }: PeFilterGateProp
     skipFilters,
     buildScopeFromFilters,
     commitScope,
+    checkPeriodCoverage,
   ]);
 
   const handleConfirmSync = async () => {
@@ -211,6 +225,7 @@ export function PeFilterGate({ children, skipFilters = false }: PeFilterGateProp
         endDate: pendingDate.endDate,
       });
       setModalOpen(false);
+      coverageRevertRef.current = null;
       commitScope({
         locationId: selectedLocationId,
         startDate: pendingDate.startDate,

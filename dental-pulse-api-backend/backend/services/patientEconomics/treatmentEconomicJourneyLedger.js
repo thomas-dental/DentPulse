@@ -136,6 +136,24 @@ function buildJourneyResult(
   return { stages, totalEvents, plannedEventCount, isBackfilling };
 }
 
+function mapJourneyRpcResult(raw) {
+  const payload = raw && typeof raw === 'object' ? raw : {};
+  const stages = Array.isArray(payload.stages) ? payload.stages : [];
+
+  return {
+    stages: stages.map((stage) => ({
+      key: String(stage.key ?? ''),
+      label: String(stage.label ?? ''),
+      eventType: String(stage.eventType ?? ''),
+      eventCount: num(stage.eventCount),
+      valueGbp: num(stage.valueGbp),
+    })),
+    totalEvents: num(payload.totalEvents),
+    plannedEventCount: num(payload.plannedEventCount),
+    isBackfilling: Boolean(payload.isBackfilling),
+  };
+}
+
 module.exports = {
   JOURNEY_STAGES,
   FUNNEL_EVENT_TYPES,
@@ -145,4 +163,5 @@ module.exports = {
   rowMatchesLocationScope,
   aggregateFunnelRows,
   buildJourneyResult,
+  mapJourneyRpcResult,
 };

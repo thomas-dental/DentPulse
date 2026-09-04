@@ -58,6 +58,7 @@ const {
   loadPeEconomicAssumptions,
   discountFactorFromAssumptions,
 } = require('./peEconomicAssumptions');
+const { withStableOrder } = require('./peStablePagination');
 
 const HORIZON_YEARS = 5;
 const DISCOUNT_RATE = 0.10;
@@ -198,13 +199,16 @@ async function loadVisitCountsByPtId(practiceId, sinceIso) {
   const counts = new Map();
   let offset = 0;
   for (let page = 0; page < 200; page++) {
-    const { data, error } = await supabaseAdmin
-      .from('appointments')
-      .select('apmt_patient_id, apmt_completed_at, apmt_state')
-      .eq('organization_id', practiceId)
-      .is('deleted_at', null)
-      .gte('apmt_start_time', sinceIso)
-      .range(offset, offset + PAGE_SIZE - 1);
+    const query = withStableOrder(
+      supabaseAdmin
+        .from('appointments')
+        .select('apmt_patient_id, apmt_completed_at, apmt_state')
+        .eq('organization_id', practiceId)
+        .is('deleted_at', null)
+        .gte('apmt_start_time', sinceIso),
+      'appointments',
+    );
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
     if (error) throw new Error(`appointments visit counts: ${error.message}`);
     const rows = data || [];
     for (const row of rows) {
@@ -226,11 +230,10 @@ async function loadPatientContributionPage(practiceId, offset) {
   const select =
     'practice_id, patient_id, pt_id, contribution, invoice_count, confidence_score';
 
-  const { data: factsData, error: factsError } = await supabaseAdmin
-    .from('pe_patient_contribution_facts')
-    .select(select)
-    .eq('practice_id', practiceId)
-    .range(offset, offset + PAGE_SIZE - 1);
+  const { data: factsData, error: factsError } = await withStableOrder(
+    supabaseAdmin.from('pe_patient_contribution_facts').select(select).eq('practice_id', practiceId),
+    'pe_patient_contribution_facts',
+  ).range(offset, offset + PAGE_SIZE - 1);
 
   if (!factsError && (factsData?.length > 0 || offset > 0)) {
     return (factsData ?? []).map((row) => ({
@@ -239,13 +242,15 @@ async function loadPatientContributionPage(practiceId, offset) {
     }));
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('v_patient_contribution')
-    .select(
-      'practice_id, patient_id, pt_id, contribution, invoice_count, confidence_score, pct_complete',
-    )
-    .eq('practice_id', practiceId)
-    .range(offset, offset + PAGE_SIZE - 1);
+  const { data, error } = await withStableOrder(
+    supabaseAdmin
+      .from('v_patient_contribution')
+      .select(
+        'practice_id, patient_id, pt_id, contribution, invoice_count, confidence_score, pct_complete',
+      )
+      .eq('practice_id', practiceId),
+    'v_patient_contribution',
+  ).range(offset, offset + PAGE_SIZE - 1);
   if (error) throw new Error(`v_patient_contribution: ${error.message}`);
   return data || [];
 }

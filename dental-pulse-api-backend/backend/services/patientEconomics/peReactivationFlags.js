@@ -11,6 +11,10 @@
  *   • event_ledger PATIENT_REACTIVATED with created_at > flagged_at
  *   • contribution_recovered_gbp = sum invoice contribution in
  *     [reactivated_event_at, reactivated_event_at + recovery_window_days]
+ *
+ * READ SCOPE (TopBar):
+ *   • Recovery Loop (funnel, worklist, in-progress, reactivation £) — location only
+ *   • TopBar period does not filter reactivation flags (operational point-in-time)
  */
 
 const { supabaseAdmin } = require('../../config/supabase');
@@ -23,8 +27,9 @@ const {
   buildRecoveryFunnel,
   resolveWorklistDaysOverdue,
 } = require('./peReactivationWorklistLogic');
+const { withStableOrder, DEFAULT_PAGE_SIZE } = require('./peStablePagination');
 
-const PAGE_SIZE = 1000;
+const PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const AT_RISK_STATUSES = new Set(['drifting', 'lapsed', 'effectively_lost']);
 const DERIVED_TIER = 'Derived';
 const RECOVERY_TIER_NOTE =
@@ -258,12 +263,16 @@ async function loadAtRiskPatients(practiceId) {
     let found = false;
 
     for (let i = 0; i < 100; i++) {
-      const { data, error } = await supabaseAdmin
-        .from(table)
-        .select('patient_id, retention_status')
-        .eq('practice_id', practiceId)
-        .in('retention_status', ['drifting', 'lapsed', 'effectively_lost'])
-        .range(offset, offset + PAGE_SIZE - 1);
+      const query = withStableOrder(
+        supabaseAdmin
+          .from(table)
+          .select('patient_id, retention_status')
+          .eq('practice_id', practiceId)
+          .in('retention_status', ['drifting', 'lapsed', 'effectively_lost']),
+        table,
+      );
+
+      const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
       if (error && error.code === '42P01') break;
       if (error) throw new Error(`${table} at-risk: ${error.message}`);
@@ -341,10 +350,16 @@ function rpcRowToDbFlag(row) {
   };
 }
 
-async function fetchRetentionRecoveryLoopRpc(practiceId, locationId = null) {
+async function fetchRetentionRecoveryLoopRpc(practiceId, scope = {}) {
+  const locationId = scope.locationId || null;
+  const startDate = scope.startDate || null;
+  const endDate = scope.endDate || null;
+
   const { data, error } = await supabaseAdmin.rpc('pe_retention_recovery_loop', {
     p_practice_id: practiceId,
     p_location_id: locationId,
+    p_start_date: startDate,
+    p_end_date: endDate,
   });
 
   if (error) {
@@ -352,6 +367,12 @@ async function fetchRetentionRecoveryLoopRpc(practiceId, locationId = null) {
   }
 
   return data && typeof data === 'object' ? data : {};
+}
+
+function resolveRecoveryRpcLocationId(scope, unit, rollupMode) {
+  if (scope.locationId) return scope.locationId;
+  if (rollupMode === 'location') return unit.locationId || null;
+  return null;
 }
 
 function mapFlagRow(flag, patientName, currentRetentionStatus, dentallyPatientUuid = null) {
@@ -383,18 +404,9 @@ function mapFlagRow(flag, patientName, currentRetentionStatus, dentallyPatientUu
   };
 }
 
-async function buildScopedRecoveryPayload(
-  organizationId,
-  unitId,
-  unitName,
-  unitType,
-  locationId = null,
-) {
-  const rpc = await fetchRetentionRecoveryLoopRpc(organizationId, locationId);
-  const enrichedFlags = Array.isArray(rpc.flags) ? rpc.flags : [];
+function mapRpcFlagsToRows(rpc) {
+  const enrichedFlags = Array.isArray(rpc?.flags) ? rpc.flags : [];
   const dbFlags = enrichedFlags.map(rpcRowToDbFlag);
-  const metrics = buildRecoveryMetrics(dbFlags);
-
   const worklistMeta = new Map();
   const flagRows = enrichedFlags.map((row) => {
     const dbFlag = rpcRowToDbFlag(row);
@@ -411,11 +423,27 @@ async function buildScopedRecoveryPayload(
       row.dentally_patient_uuid,
     );
   });
+  return { dbFlags, flagRows, worklistMeta };
+}
 
-  const openValueGbp = round2(metrics.openValueGbp);
-  const openFlagCount = metrics.openFlagCount;
+/**
+ * Recovery Loop payload — location scoped only (all open/recovered flags at site).
+ */
+async function buildScopedRecoveryPayload(
+  organizationId,
+  unitId,
+  unitName,
+  unitType,
+  scope = {},
+) {
+  const locationScope = { locationId: scope.locationId ?? null };
+  const rpc = await fetchRetentionRecoveryLoopRpc(organizationId, locationScope);
+  const { dbFlags, flagRows, worklistMeta } = mapRpcFlagsToRows(rpc);
+  const metrics = buildRecoveryMetrics(dbFlags);
+
   const openWorklist = buildOpenWorklist(flagRows, worklistMeta);
   const funnel = buildRecoveryFunnel(flagRows, openWorklist);
+  const openValueGbp = round2(metrics.openValueGbp);
 
   return {
     practiceId: unitId,
@@ -423,7 +451,7 @@ async function buildScopedRecoveryPayload(
     unitType,
     organizationId,
     reactivationValueGbp: openValueGbp,
-    openFlagCount,
+    openFlagCount: metrics.openFlagCount,
     recoveryWindowDays: num(rpc.recoveryWindowDays) || 365,
     minContributionThresholdGbp: num(rpc.minContributionThresholdGbp) || 100,
     trailingMonths: num(rpc.trailingMonths) || 12,
@@ -438,8 +466,8 @@ async function buildScopedRecoveryPayload(
   };
 }
 
-async function buildPracticeRecoveryPayload(practiceId, practiceName) {
-  return buildScopedRecoveryPayload(practiceId, practiceId, practiceName, 'practice', null);
+async function buildPracticeRecoveryPayload(practiceId, practiceName, scope = {}) {
+  return buildScopedRecoveryPayload(practiceId, practiceId, practiceName, 'practice', scope);
 }
 
 /**
@@ -451,7 +479,7 @@ async function buildRetentionRecoveryLoop(userId, contextPracticeId, scope = {})
   const { rollupMode, units: allUnits } = await resolvePeRollupUnits(userId, contextPracticeId);
 
   let units = allUnits;
-  if (scope.locationId) {
+  if (scope.locationId && rollupMode === 'location') {
     units = allUnits.filter(
       (u) => u.locationId === scope.locationId || u.unitId === scope.locationId,
     );
@@ -474,7 +502,9 @@ async function buildRetentionRecoveryLoop(userId, contextPracticeId, scope = {})
         unit.unitId,
         unit.unitName,
         unit.unitType,
-        scope.locationId || unit.locationId || null,
+        {
+          locationId: resolveRecoveryRpcLocationId(scope, unit, rollupMode),
+        },
       ),
     ),
   );
@@ -521,11 +551,14 @@ async function buildRetentionRecoveryLoop(userId, contextPracticeId, scope = {})
 
   const groupFunnel = buildRecoveryFunnel(groupFlags, groupOpenWorklist);
   const groupRecoveredThisQuarter = recoveredThisQuarterGbp(groupFlags);
-  const groupInProgress = round2(groupMetrics.openValueGbp);
+  const groupInProgress = round2(
+    practicePayloads.reduce((s, p) => s + num(p.reactivationValueGbp), 0),
+  );
 
   const hasData =
     context.totalFlagCount > 0 ||
-    practicePayloads.some((p) => p.totalFlagCount > 0);
+    context.openFlagCount > 0 ||
+    practicePayloads.some((p) => p.totalFlagCount > 0 || p.openFlagCount > 0);
 
   return {
     contextPracticeId,

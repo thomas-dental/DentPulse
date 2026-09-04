@@ -8,8 +8,9 @@ const {
   patientRowsFromAggMap,
   patientFactsGrainKey,
 } = require('./pePatientFactsGrain');
+const { withStableOrder, DEFAULT_PAGE_SIZE } = require('./peStablePagination');
 
-const PAGE_SIZE = 1000;
+const PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const UPSERT_CHUNK = 200;
 
 const INVOICE_VIEW_SELECT =
@@ -92,11 +93,15 @@ async function refreshInvoiceFacts(practiceId) {
   let total = 0;
 
   for (let page = 0; page < 500; page++) {
-    const { data, error } = await supabaseAdmin
-      .from('v_invoice_contribution')
-      .select(INVOICE_VIEW_SELECT)
-      .eq('practice_id', practiceId)
-      .range(offset, offset + PAGE_SIZE - 1);
+    const query = withStableOrder(
+      supabaseAdmin
+        .from('v_invoice_contribution')
+        .select(INVOICE_VIEW_SELECT)
+        .eq('practice_id', practiceId),
+      'v_invoice_contribution',
+    );
+
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
     if (error) throw new Error(`v_invoice_contribution page ${page}: ${error.message}`);
 
@@ -119,12 +124,16 @@ async function loadPatientLocationMap(practiceId) {
   let offset = 0;
 
   for (let page = 0; page < 500; page++) {
-    const { data, error } = await supabaseAdmin
-      .from('patients')
-      .select('id, location_id')
-      .eq('organization_id', practiceId)
-      .is('deleted_at', null)
-      .range(offset, offset + PAGE_SIZE - 1);
+    const query = withStableOrder(
+      supabaseAdmin
+        .from('patients')
+        .select('id, location_id')
+        .eq('organization_id', practiceId)
+        .is('deleted_at', null),
+      'patients',
+    );
+
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
     if (error) throw new Error(`patients location page ${page}: ${error.message}`);
 
@@ -178,13 +187,17 @@ async function refreshPatientFacts(practiceId, retentionByPatient, locationByPat
   let offset = 0;
 
   for (let page = 0; page < 500; page++) {
-    const { data, error } = await supabaseAdmin
-      .from('pe_invoice_contribution_facts')
-      .select(
-        'practice_id, patient_id, pt_id, contribution, revenue_private_plan, confidence_score, is_paid, invoice_date',
-      )
-      .eq('practice_id', practiceId)
-      .range(offset, offset + PAGE_SIZE - 1);
+    const query = withStableOrder(
+      supabaseAdmin
+        .from('pe_invoice_contribution_facts')
+        .select(
+          'practice_id, patient_id, pt_id, contribution, revenue_private_plan, confidence_score, is_paid, invoice_date',
+        )
+        .eq('practice_id', practiceId),
+      'pe_invoice_contribution_facts',
+    );
+
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
     if (error) throw new Error(`pe_invoice_contribution_facts page ${page}: ${error.message}`);
 
@@ -238,11 +251,15 @@ async function loadRetentionByPatient(practiceId) {
   let offset = 0;
 
   for (let page = 0; page < 500; page++) {
-    const { data, error } = await supabaseAdmin
-      .from('v_pe_retention_segment')
-      .select('patient_id, retention_status')
-      .eq('practice_id', practiceId)
-      .range(offset, offset + PAGE_SIZE - 1);
+    const query = withStableOrder(
+      supabaseAdmin
+        .from('v_pe_retention_segment')
+        .select('patient_id, retention_status')
+        .eq('practice_id', practiceId),
+      'v_pe_retention_segment',
+    );
+
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
     if (error && error.code === '42P01') break;
     if (error) throw new Error(`v_pe_retention_segment page ${page}: ${error.message}`);

@@ -10,12 +10,14 @@ const {
   retentionDisplayFromRow,
 } = require('./peRetentionSegmentation');
 
-const PAGE_SIZE = 1000;
+const { queryInPatientChunks } = require('./pePatientQueryChunks');
+const { withStableOrder, DEFAULT_PAGE_SIZE } = require('./peStablePagination');
+const FINANCIAL_RECORD_VIEW = 'v_patient_financial_record';
+
+const PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const PATIENT_META_CHUNK = 50;
 const PATIENT_IN_CHUNK = 100;
 const FINANCIAL_RECORD_IN_CHUNK = 25;
-const { queryInPatientChunks } = require('./pePatientQueryChunks');
-const FINANCIAL_RECORD_VIEW = 'v_patient_financial_record';
 
 const FINANCIAL_RECORD_SELECT =
   'practice_id, patient_id, pt_id, patient_name, patient_uuid, location_id, invoice_count, invoices_with_revenue, ' +
@@ -176,12 +178,16 @@ async function loadMembershipPlanIds(practiceId) {
 async function loadMembershipPlanIdsFromDentallyPlans(practiceId) {
   const ids = new Set();
   for (let from = 0; from < 20_000; from += PAGE_SIZE) {
-    const { data, error } = await supabaseAdmin
-      .from('payment_plans')
-      .select('pp_id, pp_patient_friendly_name, pp_monthly_memberhsip_fee')
-      .eq('organization_id', practiceId)
-      .is('deleted_at', null)
-      .range(from, from + PAGE_SIZE - 1);
+    const query = withStableOrder(
+      supabaseAdmin
+        .from('payment_plans')
+        .select('pp_id, pp_patient_friendly_name, pp_monthly_memberhsip_fee')
+        .eq('organization_id', practiceId)
+        .is('deleted_at', null),
+      'payment_plans',
+    );
+
+    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
 
     if (error) {
       console.warn('[PE read] payment_plans fallback:', error.message);
@@ -211,13 +217,17 @@ async function loadMemberPatientPtIds(practiceId, membershipPpIds) {
   const ppList = [...membershipPpIds];
   const memberPts = new Set();
   for (let from = 0; from < 50_000; from += PAGE_SIZE) {
-    const { data, error } = await supabaseAdmin
-      .from('patients')
-      .select('pt_id, pt_payment_plan_id')
-      .eq('organization_id', practiceId)
-      .is('deleted_at', null)
-      .in('pt_payment_plan_id', ppList)
-      .range(from, from + PAGE_SIZE - 1);
+    const query = withStableOrder(
+      supabaseAdmin
+        .from('patients')
+        .select('pt_id, pt_payment_plan_id')
+        .eq('organization_id', practiceId)
+        .is('deleted_at', null)
+        .in('pt_payment_plan_id', ppList),
+      'patients',
+    );
+
+    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
 
     if (error) {
       console.warn('[PE read] member patients lookup failed:', error.message);
@@ -995,12 +1005,16 @@ async function fetchInvoiceContributionSummary(practiceId, scope = {}) {
       const factsTable = 'pe_invoice_contribution_facts';
       let offset = 0;
       for (let i = 0; i < 50; i++) {
-        const { data, error } = await supabaseAdmin
-          .from(factsTable)
-          .select('revenue_private_plan, pt_id')
-          .eq('practice_id', practiceId)
-          .gt('revenue_private_plan', 0)
-          .range(offset, offset + PAGE_SIZE - 1);
+        const query = withStableOrder(
+          supabaseAdmin
+            .from(factsTable)
+            .select('revenue_private_plan, pt_id')
+            .eq('practice_id', practiceId)
+            .gt('revenue_private_plan', 0),
+          factsTable,
+        );
+
+        const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
         if (error && error.code === '42P01') break;
         if (error) throw error;
@@ -1128,14 +1142,20 @@ async function loadContributionFactStubs(practiceId, scope = {}) {
   const all = [];
   let offset = 0;
   for (let page = 0; page < 50; page++) {
-    const { data, error } = await supabaseAdmin
-      .from('pe_patient_contribution_facts')
-      .select(
-        'patient_id, pt_id, retention_status, contribution, revenue_private_plan, invoice_count, confidence_score, location_id',
-      )
-      .eq('practice_id', practiceId)
-      .order('contribution', { ascending: false })
-      .range(offset, offset + PAGE_SIZE - 1);
+    const query = withStableOrder(
+      supabaseAdmin
+        .from('pe_patient_contribution_facts')
+        .select(
+          'patient_id, pt_id, retention_status, contribution, revenue_private_plan, invoice_count, confidence_score, location_id',
+        )
+        .eq('practice_id', practiceId),
+      [
+        { column: 'contribution', ascending: false },
+        { column: 'patient_id', ascending: true },
+      ],
+    );
+
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
     if (error) throw error;
 

@@ -3,20 +3,42 @@
  *
  * All stages roll up from event_ledger only.
  * Date scope: event_ledger.created_at. Location scope: event_ledger.location_id.
+ *
+ * Aggregated in Postgres via pe_treatment_economic_journey (one round-trip).
  */
 
 const { supabaseAdmin } = require('../../config/supabase');
 const {
   JOURNEY_STAGES,
   FUNNEL_EVENT_TYPES,
-  emptyBuckets,
   aggregateFunnelRows,
-  buildJourneyResult,
   payloadGbp,
   payloadPtId,
+  mapJourneyRpcResult,
 } = require('./treatmentEconomicJourneyLedger');
+const { withStableOrder, DEFAULT_PAGE_SIZE } = require('./peStablePagination');
 
-const PAGE_SIZE = 1000;
+const PAGE_SIZE = DEFAULT_PAGE_SIZE;
+
+async function fetchTreatmentEconomicJourneyRpc(
+  practiceId,
+  locationId = null,
+  startDate = null,
+  endDate = null,
+) {
+  const { data, error } = await supabaseAdmin.rpc('pe_treatment_economic_journey', {
+    p_practice_id: practiceId,
+    p_location_id: locationId,
+    p_start_date: startDate,
+    p_end_date: endDate,
+  });
+
+  if (error) {
+    throw new Error(`pe_treatment_economic_journey: ${error.message}`);
+  }
+
+  return mapJourneyRpcResult(data);
+}
 
 async function paginateFunnelEvents(
   practiceId,
@@ -45,11 +67,7 @@ async function paginateFunnelEvents(
       query = query.lte('created_at', `${endDate}T23:59:59.999Z`);
     }
 
-    // Stable sort required — offset pagination without ORDER BY returns a random
-    // row subset on each request, so journey £/counts drift on reload.
-    query = query
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true });
+    query = withStableOrder(query, 'event_ledger');
 
     const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
     if (error) {
@@ -72,12 +90,8 @@ async function paginateFunnelEvents(
  * @param {string} practiceId organizations.id
  */
 async function getTreatmentEconomicJourney(practiceId, scope = {}) {
-  const { loadPeEconomicAssumptions } = require('./peEconomicAssumptions');
   const { scopeCacheExtra } = require('./peReadScope');
   const { withPeReadCache } = require('./peReadCache');
-  const assumptions = await loadPeEconomicAssumptions(practiceId);
-  const minPlannedEvents = assumptions.journeyMinPlannedEvents;
-  const minTotalFunnelEvents = assumptions.journeyMinTotalFunnelEvents;
   const locationId = scope.locationId || null;
   const startDate = scope.startDate || null;
   const endDate = scope.endDate || null;
@@ -85,27 +99,8 @@ async function getTreatmentEconomicJourney(practiceId, scope = {}) {
   return withPeReadCache(
     'treatment-economic-journey',
     practiceId,
-    async () => {
-      const byType = emptyBuckets();
-      const scheduledPlanValue = new Map();
-
-      const rows = await paginateFunnelEvents(
-        practiceId,
-        startDate,
-        endDate,
-        locationId,
-        FUNNEL_EVENT_TYPES,
-      );
-
-      aggregateFunnelRows(rows, byType, scheduledPlanValue);
-
-      return buildJourneyResult(
-        byType,
-        scheduledPlanValue,
-        minPlannedEvents,
-        minTotalFunnelEvents,
-      );
-    },
+    async () =>
+      fetchTreatmentEconomicJourneyRpc(practiceId, locationId, startDate, endDate),
     { extra: scopeCacheExtra(scope) },
   );
 }
@@ -117,4 +112,6 @@ module.exports = {
   payloadPtId,
   aggregateFunnelRows,
   paginateFunnelEvents,
+  mapJourneyRpcResult,
+  fetchTreatmentEconomicJourneyRpc,
 };

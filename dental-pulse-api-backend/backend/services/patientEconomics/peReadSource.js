@@ -4,9 +4,11 @@
 
 const { supabaseAdmin } = require('../../config/supabase');
 const { queryInPatientChunks } = require('./pePatientQueryChunks');
-
-const DEFAULT_PAGE_SIZE = 1000;
-const DEFAULT_MAX_PAGES = 300;
+const {
+  withStableOrder,
+  DEFAULT_PAGE_SIZE,
+  DEFAULT_MAX_PAGES,
+} = require('./peStablePagination');
 
 const INVOICE_FACTS_TABLE = 'pe_invoice_contribution_facts';
 const INVOICE_VIEW_TABLE = 'v_invoice_contribution';
@@ -59,6 +61,7 @@ async function forEachInvoiceGrainPage(
     for (let page = 0; page < maxPages; page++) {
       let query = supabaseAdmin.from(table).select(select).eq('practice_id', practiceId);
       if (applyFilters) query = applyFilters(query);
+      query = withStableOrder(query, table);
 
       const { data, error } = await query.range(offset, offset + pageSize - 1);
       if (error && error.code === '42P01') break;
@@ -130,6 +133,7 @@ async function forEachPatientRetentionPage(
     for (let page = 0; page < maxPages; page++) {
       let query = supabaseAdmin.from(table).select(select).eq('practice_id', practiceId);
       if (applyFilters) query = applyFilters(query);
+      query = withStableOrder(query, table);
 
       const { data, error } = await query.range(offset, offset + pageSize - 1);
       if (error && error.code === '42P01') break;

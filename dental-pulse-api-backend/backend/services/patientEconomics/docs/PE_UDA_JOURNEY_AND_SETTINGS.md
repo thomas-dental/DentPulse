@@ -204,14 +204,15 @@ Other ledger types (`RECALL_*`, `PATIENT_REACTIVATED`, `ITEM_COMPLETED`, `APPOIN
 ### 4.3 Aggregation rules (API → UI)
 
 **Backend:** `GET /api/economics-engine/journey/treatment-economic?practiceId=`  
-Service: `treatmentEconomicJourney.js` (reads `event_ledger` via `supabaseAdmin`).  
+Service: `treatmentEconomicJourney.js` → RPC `pe_treatment_economic_journey` (single Postgres query, 180s statement timeout).  
 **Frontend:** `fetchTreatmentEconomicJourney` → `useTreatmentEconomicJourney` (no direct Supabase ledger query).
 
-1. Page `event_ledger` for the practice and the six funnel types (server-side).
-2. **Event count** = number of rows of that type.
-3. **£** = sum of payload monetary fields (`planned_value`, `tp_private_treatment_value`, `value`, `amount`, `total` — first present wins).
-4. **Scheduled £ special case:** many links can exist for one plan. Chart takes **max planned_value per `plan_id`**, then sums those — so re-links don’t inflate £.
-5. **Backfilling empty state:** if too few `PLAN_CREATED` / total funnel events → “Ledger data still backfilling” (no fake funnel).
+1. Aggregate the six funnel types in Postgres (no Node pagination over `event_ledger`).
+2. **Stable pagination:** any remaining PE `.range()` reads use `peStablePagination.withStableOrder` so reloads return the same row set.
+3. **Event count** = number of rows of that type.
+4. **£** = sum of payload monetary fields (`planned_value`, `tp_private_treatment_value`, `value`, `amount`, `total` — first present wins).
+5. **Scheduled £ special case:** many links can exist for one plan. Chart takes **max planned_value per `plan_id`**, then sums those — so re-links don’t inflate £.
+6. **Backfilling empty state:** if too few `PLAN_CREATED` / total funnel events → “Ledger data still backfilling” (no fake funnel).
 
 **Not a single-patient cohort funnel:** stages are independent rollups. Started £ can exceed Planned £ when more start events carry value than create events.
 

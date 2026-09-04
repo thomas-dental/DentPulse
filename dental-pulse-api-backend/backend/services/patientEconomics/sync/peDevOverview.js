@@ -384,8 +384,7 @@ async function browseDevRows(practiceId, resource, page = 0, pageSize = 25) {
   let query = supabaseAdmin
     .from(spec.table)
     .select(spec.columns.join(','), { count: 'exact' })
-    .eq('organization_id', practiceId)
-    .range(from, to);
+    .eq('organization_id', practiceId);
 
   if (spec.orFilter) {
     query = query.or(spec.orFilter);
@@ -393,6 +392,8 @@ async function browseDevRows(practiceId, resource, page = 0, pageSize = 25) {
   if (spec.order) {
     query = query.order(spec.order, { ascending: false, nullsFirst: false });
   }
+
+  query = query.range(from, to);
 
   const { data, error, count } = await query;
   if (error) {

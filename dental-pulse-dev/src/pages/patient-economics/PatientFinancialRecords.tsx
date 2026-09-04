@@ -92,14 +92,17 @@ function formatGbp(value: number): string {
 }
 
 function formatGbpCompact(value: number): string {
+  const negative = value < 0;
   const abs = Math.abs(value);
   if (abs >= 1_000_000) {
     const m = abs / 1_000_000;
-    return `£${m.toFixed(m >= 10 ? 1 : 2).replace(/\.?0+$/, '')}m`;
+    const compact = `£${m.toFixed(m >= 10 ? 1 : 2).replace(/\.?0+$/, '')}m`;
+    return negative ? `−${compact}` : compact;
   }
   if (abs >= 1_000) {
     const k = abs / 1_000;
-    return `£${k.toFixed(k >= 10 ? 0 : 1).replace(/\.0$/, '')}k`;
+    const compact = `£${k.toFixed(k >= 10 ? 0 : 1).replace(/\.0$/, '')}k`;
+    return negative ? `−${compact}` : compact;
   }
   return formatGbp(value);
 }

@@ -10,6 +10,7 @@ const {
   payloadPtId,
   rowMatchesLocationScope,
   aggregateFunnelRows,
+  mapJourneyRpcResult,
 } = require('../treatmentEconomicJourneyLedger');
 
 let passed = 0;
@@ -105,6 +106,26 @@ test('aggregateFunnelRows counts all journey event types from ledger rows', () =
   assert.strictEqual(byType.get('APPOINTMENT_LINKED').eventCount, 1);
   assert.strictEqual(scheduledPlanValue.get('7'), 100);
   assert.strictEqual(byType.get('INVOICE_RAISED').valueGbp, 80);
+});
+
+test('mapJourneyRpcResult normalizes RPC payload', () => {
+  const mapped = mapJourneyRpcResult({
+    stages: [
+      {
+        key: 'completed',
+        label: 'Completed',
+        eventType: 'PLAN_COMPLETED',
+        eventCount: 653,
+        valueGbp: 0,
+      },
+    ],
+    totalEvents: 653,
+    plannedEventCount: 6559,
+    isBackfilling: false,
+  });
+
+  assert.strictEqual(mapped.stages[0].eventCount, 653);
+  assert.strictEqual(mapped.isBackfilling, false);
 });
 
 console.log(`\n${passed} tests passed`);

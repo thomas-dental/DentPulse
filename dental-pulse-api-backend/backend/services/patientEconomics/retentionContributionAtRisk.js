@@ -12,8 +12,9 @@ const {
   parseRetentionStatus,
   retentionStatusLabel,
 } = require('./peRetentionSegmentation');
+const { withStableOrder, DEFAULT_PAGE_SIZE } = require('./peStablePagination');
 
-const PAGE_SIZE = 1000;
+const PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const { withPeReadCache } = require('./peReadCache');
 
 const SEGMENT_ORDER = ['active', 'drifting', 'lapsed', 'effectively_lost'];
@@ -174,11 +175,15 @@ async function loadContributionRowsForPractice(practiceId, locationId = null) {
       let found = false;
 
       for (let i = 0; i < 200; i++) {
-        const { data, error } = await supabaseAdmin
-          .from(table)
-          .select('patient_id, retention_status, contribution')
-          .eq('practice_id', practiceId)
-          .range(offset, offset + PAGE_SIZE - 1);
+        const query = withStableOrder(
+          supabaseAdmin
+            .from(table)
+            .select('patient_id, retention_status, contribution')
+            .eq('practice_id', practiceId),
+          table,
+        );
+
+        const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
         if (error && error.code === '42P01') break;
         if (error) throw new Error(`${table}: ${error.message}`);

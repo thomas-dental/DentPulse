@@ -4,8 +4,9 @@
 
 const { supabaseAdmin } = require('../../config/supabase');
 const { round2, DEFAULT_CLTV_MIN_SAMPLE } = require('./growthLeversBenchmarkLogic');
+const { withStableOrder, DEFAULT_PAGE_SIZE } = require('./peStablePagination');
 
-const PAGE_SIZE = 1000;
+const PAGE_SIZE = DEFAULT_PAGE_SIZE;
 
 async function loadPatientIdsForLocation(practiceId, locationId) {
   const { data, error } = await supabaseAdmin
@@ -72,11 +73,15 @@ async function getCltvByAcquisitionSource(practiceId, scope = {}) {
   let unknownQualitySum = 0;
 
   for (let page = 0; page < 200; page++) {
-    const { data, error } = await supabaseAdmin
-      .from('patient_economics_modelled_scores')
-      .select('patient_id, cltv_projection, quality_score')
-      .eq('practice_id', practiceId)
-      .range(offset, offset + PAGE_SIZE - 1);
+    const query = withStableOrder(
+      supabaseAdmin
+        .from('patient_economics_modelled_scores')
+        .select('patient_id, cltv_projection, quality_score')
+        .eq('practice_id', practiceId),
+      'patient_economics_modelled_scores',
+    );
+
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
     if (error) throw new Error(`modelled scores: ${error.message}`);
 

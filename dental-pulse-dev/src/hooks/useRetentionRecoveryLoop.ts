@@ -13,6 +13,7 @@ import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
 export type RetentionRecoveryLoop = {
   contextPracticeId: string;
   practiceName: string;
+  rollupMode: 'location' | 'practice';
   practice: RetentionRecoveryPracticePayload;
   group: RetentionRecoveryPracticePayload & {
     practiceCount: number;
@@ -128,6 +129,10 @@ export function useRetentionRecoveryLoop(options?: { enabled?: boolean }) {
       return {
         contextPracticeId: String(body.contextPracticeId),
         practiceName: String(body.practiceName || ''),
+        rollupMode:
+          body.rollupMode === 'location' || body.rollupMode === 'practice'
+            ? body.rollupMode
+            : 'practice',
         practice: mapPracticePayload(body.practice as Record<string, unknown>),
         group: {
           ...mapPracticePayload(groupRaw),

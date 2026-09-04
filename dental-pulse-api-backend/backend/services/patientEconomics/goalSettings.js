@@ -13,8 +13,9 @@ const {
   loadEligiblePlanItems,
 } = require('./commitmentRate');
 const { loadPeEconomicAssumptions } = require('./peEconomicAssumptions');
+const { withStableOrder, DEFAULT_PAGE_SIZE } = require('./peStablePagination');
 
-const PAGE_SIZE = 1000;
+const PAGE_SIZE = DEFAULT_PAGE_SIZE;
 
 function num(v) {
   const n = Number(v);
@@ -249,13 +250,17 @@ async function computeOpportunityProgressionGbp(practiceId) {
   let total = 0;
 
   for (let page = 0; page < 200; page++) {
-    const { data, error } = await supabaseAdmin
-      .from('event_ledger')
-      .select('payload, created_at')
-      .eq('practice_id', practiceId)
-      .eq('event_type', 'APPOINTMENT_LINKED')
-      .gte('created_at', `${quarterStart}T00:00:00.000Z`)
-      .range(offset, offset + PAGE_SIZE - 1);
+    const query = withStableOrder(
+      supabaseAdmin
+        .from('event_ledger')
+        .select('payload, created_at')
+        .eq('practice_id', practiceId)
+        .eq('event_type', 'APPOINTMENT_LINKED')
+        .gte('created_at', `${quarterStart}T00:00:00.000Z`),
+      'event_ledger',
+    );
+
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
     if (error) throw new Error(`event_ledger: ${error.message}`);
 

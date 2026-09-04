@@ -111,12 +111,13 @@ async function fetchEntityPage(practiceId, spec, page, pageSize) {
     .from(spec.table)
     .select('*', { count: 'exact' })
     .eq('organization_id', practiceId)
-    .range(from, to)
     .order(spec.order, { ascending: true, nullsFirst: false });
 
   if (spec.applyFilters) {
     query = spec.applyFilters(query);
   }
+
+  query = query.range(from, to);
 
   const { data, error, count } = await query;
   if (error) {
