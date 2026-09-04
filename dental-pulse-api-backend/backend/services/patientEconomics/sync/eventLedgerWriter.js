@@ -418,6 +418,14 @@ async function writeLedgerEventsFromUpsert({
   }
 
   if (error) {
+    const retryable = /fetch failed|ECONNRESET|ETIMEDOUT|502|503|504/i.test(error.message);
+    if (retryable) {
+      await new Promise((r) => setTimeout(r, 2000));
+      ({ error } = await supabaseAdmin.from('event_ledger').upsert(inserts, upsertOptions));
+    }
+  }
+
+  if (error) {
     throw new Error(`[PE ledger] Insert failed: ${error.message}`);
   }
 

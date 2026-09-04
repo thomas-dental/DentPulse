@@ -248,32 +248,47 @@ async function refreshPatientFacts(practiceId, retentionByPatient, locationByPat
 
 async function loadRetentionByPatient(practiceId) {
   const map = new Map();
-  let offset = 0;
+  const sources = ['v_pe_patient_live_retention', 'v_pe_retention_segment'];
 
-  for (let page = 0; page < 500; page++) {
-    const query = withStableOrder(
-      supabaseAdmin
-        .from('v_pe_retention_segment')
-        .select('patient_id, retention_status')
-        .eq('practice_id', practiceId),
-      'v_pe_retention_segment',
-    );
+  for (const source of sources) {
+    let offset = 0;
+    let loaded = false;
 
-    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
+    for (let page = 0; page < 500; page++) {
+      const query = withStableOrder(
+        supabaseAdmin
+          .from(source)
+          .select('patient_id, retention_status')
+          .eq('practice_id', practiceId),
+        source,
+      );
 
-    if (error && error.code === '42P01') break;
-    if (error) throw new Error(`v_pe_retention_segment page ${page}: ${error.message}`);
+      const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
 
-    const batch = data ?? [];
-    for (const row of batch) {
-      if (row.patient_id == null) continue;
-      map.set(String(row.patient_id), String(row.retention_status || 'active'));
+      if (error && (error.code === '42P01' || error.code === 'PGRST205')) break;
+      if (error) {
+        console.warn(`[PE facts] ${source} page ${page}: ${error.message}`);
+        break;
+      }
+
+      const batch = data ?? [];
+      if (batch.length > 0) loaded = true;
+      for (const row of batch) {
+        if (row.patient_id == null) continue;
+        map.set(String(row.patient_id), String(row.retention_status || 'active'));
+      }
+
+      if (batch.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
     }
 
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+    if (loaded) {
+      console.log(`[PE facts] Retention loaded from ${source}`);
+      return map;
+    }
   }
 
+  console.warn('[PE facts] Retention view unavailable; patient facts will default to active');
   return map;
 }
 

@@ -6,6 +6,10 @@
 const { supabaseAdmin } = require('../../config/supabase');
 const { transformRecord } = require('../transformers/dentally');
 const { TABLE_MAP, ON_CONFLICT_MAP, ENTITIES_NEEDING_LOCATION_MAP } = require('../../api/dentally/config');
+const {
+  preloadLegacySyncLedgerState,
+  writeLegacySyncLedgerAfterUpsert,
+} = require('../patientEconomics/sync/legacySyncLedgerHook');
 
 // In-memory caches (per org, refreshed every 5 min) to avoid repeated DB queries across jobs
 const treatmentCategoryCache = new Map(); // orgId -> { map, timestamp }
@@ -454,24 +458,69 @@ async function upsertEntityData(entityAlias, organizationId, userId, rawRecords,
 
     // Special handling for invoices: upsert invoices then process line items
     if (entityAlias === 'invoices') {
-      const result = await upsertInvoicesWithLineItems(tableName, onConflict, transformedRecords, targetOrgId, integrationId);
+      const ledgerPreload = await preloadLegacySyncLedgerState(
+        entityAlias,
+        targetOrgId,
+        transformedRecords,
+      );
+      const result = await upsertInvoicesWithLineItems(
+        tableName,
+        onConflict,
+        transformedRecords,
+        targetOrgId,
+        integrationId,
+      );
       processed += result.processed;
       failed += result.failed;
+      await writeLegacySyncLedgerAfterUpsert({
+        entityAlias,
+        practiceId: targetOrgId,
+        preload: ledgerPreload,
+        processed: result.processed,
+      });
       continue;
     }
 
     // Special handling for payments: upsert payments then process explanations
     if (entityAlias === 'payments') {
-      const result = await upsertPaymentsWithExplanations(tableName, onConflict, transformedRecords, targetOrgId);
+      const ledgerPreload = await preloadLegacySyncLedgerState(
+        entityAlias,
+        targetOrgId,
+        transformedRecords,
+      );
+      const result = await upsertPaymentsWithExplanations(
+        tableName,
+        onConflict,
+        transformedRecords,
+        targetOrgId,
+      );
       processed += result.processed;
       failed += result.failed;
+      await writeLegacySyncLedgerAfterUpsert({
+        entityAlias,
+        practiceId: targetOrgId,
+        preload: ledgerPreload,
+        processed: result.processed,
+      });
       continue;
     }
 
-    // Standard batch upsert
+    // Standard batch upsert (+ PE event_ledger for treatment_plans, TAs, TPIs, patients)
+    const ledgerPreload = await preloadLegacySyncLedgerState(
+      entityAlias,
+      targetOrgId,
+      transformedRecords,
+    );
     const result = await batchUpsert(tableName, onConflict, transformedRecords);
     processed += result.processed;
     failed += result.failed;
+    await writeLegacySyncLedgerAfterUpsert({
+      entityAlias,
+      practiceId: targetOrgId,
+      preload: ledgerPreload,
+      processed: result.processed,
+      failed: result.failed,
+    });
   }
 
   return { processed, failed };

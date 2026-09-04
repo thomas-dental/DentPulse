@@ -5,11 +5,11 @@
 const { supabaseAdmin } = require('../../config/supabase');
 const { DEFAULT_LEAKAGE_UNSCHEDULED_THRESHOLD_DAYS } = require('./plannedUnscheduledLeakageLogic');
 const { withPeReadCache } = require('./peReadCache');
-const { scopeCacheExtra } = require('./peReadScope');
+const { scopeCacheExtra, hasDateScope } = require('./peReadScope');
 
 const TIER = 'Derived';
 const TIER_NOTE =
-  'Private planned items on ledger plans with no active appointment link beyond threshold days after PLAN_CREATED. NHS items excluded.';
+  'Private planned items on open ledger plans with no active appointment link, where days since PLAN_CREATED exceed the threshold (default 60, relative to today). NHS items excluded. TopBar period filters plan creation date; link state uses full ledger history.';
 
 function num(v) {
   const n = Number(v);
@@ -79,7 +79,10 @@ async function getPlannedUnscheduledLeakage(practiceId, scope = {}) {
     'planned-unscheduled-leakage',
     practiceId,
     () => fetchPlannedUnscheduledLeakageRpc(practiceId, locationId, startDate, endDate),
-    { extra: scopeCacheExtra(scope), ttlMs: 120_000 },
+    {
+      extra: hasDateScope(scope) ? scopeCacheExtra(scope) : (scope.locationId || 'all'),
+      ttlMs: 120_000,
+    },
   );
 }
 

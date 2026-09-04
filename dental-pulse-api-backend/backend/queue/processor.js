@@ -24,6 +24,16 @@ const logger = require('../services/sync/logger');
 const { decryptIntegrationPat } = require('../services/patientEconomics/integrationPat');
 
 const { getSyncSettings } = require('../services/sync/settingsStore');
+const {
+  schedulePeFactsRefreshWhenLegacySyncBatchIdle,
+} = require('../services/patientEconomics/legacySyncFactsRefresh');
+
+function notifyLegacySyncBatchJobTerminal(job) {
+  schedulePeFactsRefreshWhenLegacySyncBatchIdle({
+    practiceId: job.organization_id,
+    integrationId: job.integration_id,
+  });
+}
 
 function readSyncMode() {
   try {
@@ -56,6 +66,7 @@ async function processSyncJob(job, integration, cancelTokens) {
   } catch (err) {
     console.error(`[SyncEngine] Job ${job.id}: ${err.message}`);
     await logger.markFailed(job.id, err.message);
+    notifyLegacySyncBatchJobTerminal(job);
     return;
   }
 
@@ -374,6 +385,8 @@ async function processSyncJob(job, integration, cancelTokens) {
     const dedupMsg = totalDuplicatesSkipped > 0 ? `, ${totalDuplicatesSkipped} duplicates skipped` : '';
     console.log(`[SyncEngine] ${entityAlias}${dateLabel}: ${totalProcessed} records synced, ${totalFailed} failed${dedupMsg}`);
 
+    notifyLegacySyncBatchJobTerminal(job);
+
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error(`[SyncEngine] Job ${job.id} error:`, errorMessage);
@@ -399,6 +412,7 @@ async function processSyncJob(job, integration, cancelTokens) {
       return 'retry';
     } else {
       await logger.markFailed(job.id, errorMessage);
+      notifyLegacySyncBatchJobTerminal(job);
       return 'failed';
     }
   }
