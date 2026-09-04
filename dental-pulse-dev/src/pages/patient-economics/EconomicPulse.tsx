@@ -3,6 +3,7 @@
  */
 
 import type { ReactNode } from 'react';
+import { useMemo } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { Link, useSearchParams } from 'react-router-dom';
 import { AlertCircle, AlertTriangle, Download, Info, Plus, Settings2 } from 'lucide-react';
@@ -10,7 +11,6 @@ import { MainLayout } from '@/components/layout/MainLayout';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
-  useInvoiceContributionSummary,
   type InvoiceContributionSummary,
 } from '@/hooks/usePatientContributionSummary';
 import {
@@ -22,6 +22,8 @@ import {
   useSortedPracticeContributionRollup,
   type PracticeSortKey,
 } from '@/hooks/usePracticeContributionRollup';
+import { useRetentionRecoveryLoop } from '@/hooks/useRetentionRecoveryLoop';
+import { usePlannedUnscheduledLeakage } from '@/hooks/usePlannedUnscheduledLeakage';
 import { cn } from '@/lib/utils';
 import {
   PE_CHART_LABEL_PX,
@@ -42,12 +44,38 @@ import {
   type ProvenanceKind,
 } from '@/components/patient-economics/ProvenanceChip';
 import {
-  useEconomicPulseMetrics,
   type EconomicPulseMetrics,
 } from '@/hooks/useEconomicPulseMetrics';
 import { useEconomicPulseHero } from '@/hooks/useEconomicPulseHero';
+import { useValueLeakageSummary } from '@/hooks/useValueLeakageSummary';
+import { useRetentionContributionAtRisk } from '@/hooks/useRetentionContributionAtRisk';
+import { useGrowthLeversSummary } from '@/hooks/useGrowthLeversSummary';
+import { computePatientEconomicValueGbp } from '@/lib/peGrowthLeversDisplay';
+import { PeFilterGate } from '@/components/patient-economics/PeFilterGate';
+import { usePeReadScope } from '@/contexts/PeReadScopeContext';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
+import { useLocations } from '@/hooks/useLocations';
+import { getDateFilterLabel } from '@/components/ui/chart-date-filter';
+import { peReadPending } from '@/lib/peReadLoading';
+import { PeChartSkeleton } from '@/components/patient-economics/PeHeroCard';
 
 type HeroTone = 'default' | 'opp' | 'risk' | 'conv' | 'qual';
+
+type EconomicPulseHeroSlice = Pick<
+  EconomicPulseMetrics,
+  | 'opportunityWeighted'
+  | 'opportunityGross'
+  | 'opportunityWeightedTier'
+  | 'atRiskContributionGbp'
+  | 'retentionTier'
+  | 'commitmentRate30d'
+  | 'commitmentRate30dTier'
+  | 'avgAnnualContribution'
+  | 'projectedLtv'
+  | 'projectedLtvTier'
+>;
+
+const DEFAULT_REACTIVATION_MIN_CONTRIBUTION_GBP = 100;
 
 function contributionStatusChip(
   status: InvoiceContributionSummary['dominantProvenanceStatus'] | undefined,
@@ -114,13 +142,15 @@ type RevenueMixSegment = {
 
 function mixBarLabel(segment: RevenueMixSegment, pct: number): string | null {
   if (segment.key === 'empty') return null;
+  const pctLabel =
+    pct === 0 && segment.value > 0 ? '<1' : String(pct);
   // Wide enough for full copy
   if (pct >= 18) {
-    return `${segment.label} ${formatGbpCompact(segment.value)} · ${pct}%`;
+    return `${segment.label} ${formatGbpCompact(segment.value)} · ${pctLabel}%`;
   }
   // Medium: keep amount + %
   if (pct >= 10) {
-    return `${formatGbpCompact(segment.value)} · ${pct}%`;
+    return `${formatGbpCompact(segment.value)} · ${pctLabel}%`;
   }
   // Narrow: letter(s) still flow in the slice (P / Pl / N)
   return segment.shortLabel;
@@ -322,12 +352,13 @@ function RevenueMixCard({
           {segments.map((segment) => {
             const pct =
               totalMix > 0 ? Math.round((segment.value / totalMix) * 100) : 0;
+            const pctLabel = pct === 0 && segment.value > 0 ? '<1' : String(pct);
             return (
               <span key={segment.key} className="inline-flex items-center gap-1.5">
                 <span className={cn('h-2 w-2 shrink-0 rounded-sm', segment.barClass)} />
                 <span className="font-medium text-foreground">{segment.label}</span>
                 <span>
-                  {formatGbpCompact(segment.value)} · {pct}%
+                  {formatGbpCompact(segment.value)} · {pctLabel}%
                 </span>
               </span>
             );
@@ -433,11 +464,13 @@ function HeroCard({
   question,
   children,
   subtitle,
+  pending = false,
 }: {
   tone?: HeroTone;
   question: string;
   children: ReactNode;
   subtitle: ReactNode;
+  pending?: boolean;
 }) {
   const bar =
     tone === 'opp'
@@ -456,8 +489,17 @@ function HeroCard({
       <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-muted-foreground mb-[9px] min-h-[26px]">
         {question}
       </div>
-      <div className="mt-2 min-h-[2.5rem]">{children}</div>
-      <div className="mt-2 text-[11.5px] leading-relaxed text-muted-foreground">{subtitle}</div>
+      {pending ? (
+        <>
+          <Skeleton className="h-8 w-[92px]" />
+          <Skeleton className="mt-2 h-3.5 w-full" />
+        </>
+      ) : (
+        <>
+          <div className="mt-2 min-h-[2.5rem]">{children}</div>
+          <div className="mt-2 text-[11.5px] leading-relaxed text-muted-foreground">{subtitle}</div>
+        </>
+      )}
     </div>
   );
 }
@@ -467,6 +509,37 @@ function PendingValue() {
     <div className="text-[22px] font-extrabold tracking-tight text-muted-foreground/80">
       —
     </div>
+  );
+}
+
+function PeScopeBannerText() {
+  const scope = usePeReadScope();
+  const { locations } = useLocations();
+
+  if (!scope.isReady || !scope.startDate) {
+    return (
+      <>
+        figures aggregate <b className="font-semibold text-primary">all locations</b> when your
+        organisation has multiple sites.
+      </>
+    );
+  }
+
+  const locationLabel = scope.locationId
+    ? (locations.find((l) => l.id === scope.locationId)?.location_name ?? 'selected location')
+    : 'all locations';
+
+  const periodLabel = getDateFilterLabel(
+    scope.dateRangeId as Parameters<typeof getDateFilterLabel>[0],
+  );
+
+  return (
+    <>
+      figures for <b className="font-semibold text-primary">{locationLabel}</b>
+      {' · '}
+      period <b className="font-semibold text-primary">{periodLabel}</b>
+      {scope.locationId == null && ' (organisation-wide when multiple sites are visible)'}
+    </>
   );
 }
 
@@ -501,8 +574,8 @@ function PageChrome({ activeTab }: { activeTab: string | null }) {
         <span>
           Viewing as <b className="font-semibold text-primary">Practice manager</b>
           {' · '}
-          figures aggregate <b className="font-semibold text-primary">all locations</b> when your
-          organisation has multiple sites.
+          <PeScopeBannerText />
+          {' '}
           Contribution figures use the{' '}
           <b className="font-semibold text-primary">Economic Assumptions</b> in Settings where
           live cost feeds aren&apos;t connected, each number carries a data-confidence tag.
@@ -540,28 +613,33 @@ function SectionLabel({ children }: { children: ReactNode }) {
   );
 }
 
-function PendingChartPlaceholder({ height = 220 }: { height?: number }) {
-  return (
-    <div
-      className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/30 text-center"
-      style={{ minHeight: height }}
-    >
-      <div className="text-[13px] font-semibold text-muted-foreground">Calculating</div>
-      <div className="mt-1.5 text-[12px] text-muted-foreground/80">
-        Chart lands with the full economics engine
-      </div>
-      <div className="mt-3">
-        <ProvenanceChip kind="pending" />
-      </div>
-    </div>
-  );
-}
-
-function OpportunityActions({ metrics, isLoading }: { metrics: EconomicPulseMetrics | null; isLoading: boolean }) {
+function OpportunityActions({
+  metrics,
+  pending,
+  highValueThresholdGbp,
+}: {
+  metrics: EconomicPulseMetrics | null;
+  pending: boolean;
+  highValueThresholdGbp: number | null;
+}) {
   const highValueThreshold =
-    metrics != null
-      ? metrics.highValueThresholdGbp.toLocaleString('en-GB', { maximumFractionDigits: 0 })
-      : '1,000';
+    highValueThresholdGbp != null
+      ? highValueThresholdGbp.toLocaleString('en-GB', { maximumFractionDigits: 0 })
+      : null;
+
+  const retentionDescription =
+    highValueThreshold != null ? (
+      <>
+        Lapsed patients who previously generated £{highValueThreshold}+ contribution/yr.
+        Prioritise reactivation.
+      </>
+    ) : (
+      <>
+        Lapsed patients who previously generated{' '}
+        <Skeleton className="inline-block h-3 w-10 align-middle" /> contribution/yr. Prioritise
+        reactivation.
+      </>
+    );
 
   const priorities = [
     {
@@ -570,7 +648,7 @@ function OpportunityActions({ metrics, isLoading }: { metrics: EconomicPulseMetr
         metrics != null && metrics.highValueCount > 0
           ? `${metrics.highValueCount.toLocaleString('en-GB')} high-value overdue patients`
           : 'High-value overdue patients',
-      description: `Lapsed patients who previously generated £${highValueThreshold}+ contribution/yr. Prioritise reactivation.`,
+      description: retentionDescription,
       amount:
         metrics != null && metrics.retentionOpenAtRiskGbp > 0
           ? formatGbpCompact(metrics.retentionOpenAtRiskGbp)
@@ -578,7 +656,7 @@ function OpportunityActions({ metrics, isLoading }: { metrics: EconomicPulseMetr
             ? formatGbp(0)
             : null,
       metric: 'at risk',
-      pending: isLoading,
+      cardPending: pending,
     },
     {
       label: 'Priority 2 · Commercial opportunity',
@@ -597,7 +675,7 @@ function OpportunityActions({ metrics, isLoading }: { metrics: EconomicPulseMetr
               ? formatGbp(0)
               : null,
       metric: 'contribution',
-      pending: isLoading,
+      cardPending: pending,
     },
     {
       label: 'Priority 3 · Billing leakage',
@@ -615,7 +693,7 @@ function OpportunityActions({ metrics, isLoading }: { metrics: EconomicPulseMetr
               ? formatGbp(0)
               : null,
       metric: 'contribution',
-      pending: isLoading || metrics?.billingPending === true,
+      cardPending: pending || metrics?.billingPending === true,
     },
   ];
 
@@ -641,18 +719,20 @@ function OpportunityActions({ metrics, isLoading }: { metrics: EconomicPulseMetr
       <div className="mb-3.5 flex flex-wrap items-center justify-between gap-2">
         <div className="text-[15px] font-extrabold text-foreground">
           DentPulse has identified{' '}
-          {isLoading ? (
-            <span className="text-muted-foreground/80">—</span>
+          {pending ? (
+            <Skeleton className="inline-block h-5 w-20 align-middle" />
           ) : (
             <b>{formatGbp(metrics?.totalIdentifiedGbp ?? 0)}</b>
           )}{' '}
           of patient economic opportunity
         </div>
-        <span className="text-[12px] text-muted-foreground">
-          {isLoading
-            ? 'Calculating — full breakdown not yet available'
-            : breakdown || 'No actionable opportunity identified yet'}
-        </span>
+        {pending ? (
+          <Skeleton className="h-3 w-56" />
+        ) : (
+          <span className="text-[12px] text-muted-foreground">
+            {breakdown || 'No actionable opportunity identified yet'}
+          </span>
+        )}
       </div>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {priorities.map((item) => (
@@ -667,21 +747,16 @@ function OpportunityActions({ metrics, isLoading }: { metrics: EconomicPulseMetr
             <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
               {item.description}
             </p>
-            <div className="mt-2 text-[19px] font-extrabold text-foreground">
-              {item.pending || item.amount == null ? (
-                <>
-                  <span className="text-muted-foreground/70">—</span>{' '}
-                  <span className="text-[12px] font-semibold text-muted-foreground">
-                    {item.metric}
-                  </span>
-                </>
+            <div className="mt-2">
+              {item.cardPending || item.amount == null ? (
+                <Skeleton className="h-7 w-24" />
               ) : (
-                <>
+                <div className="text-[19px] font-extrabold text-foreground">
                   {item.amount}{' '}
                   <span className="text-[12px] font-semibold text-muted-foreground">
                     {item.metric}
                   </span>
-                </>
+                </div>
               )}
             </div>
           </div>
@@ -867,6 +942,8 @@ function TreatmentEconomicJourneyCard({
   isFetching: boolean;
   journey: TreatmentEconomicJourney | undefined;
 }) {
+  const pending = isLoading || isFetching;
+
   return (
     <div className="rounded-[14px] border border-border bg-card px-5 py-[18px] shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -900,14 +977,14 @@ function TreatmentEconomicJourneyCard({
         </div>
       )}
 
-      {!isError && isLoading && (
+      {!isError && pending && (
         <div className="mt-3.5 space-y-3">
-          <Skeleton className="h-[180px] w-full rounded-lg" />
+          <PeChartSkeleton className="h-[180px]" />
           <Skeleton className="h-3 w-48" />
         </div>
       )}
 
-      {!isError && !isLoading && journey?.isBackfilling && (
+      {!isError && !pending && journey?.isBackfilling && (
         <div className="mt-3.5 flex min-h-[220px] flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/30 px-4 text-center">
           <div className="text-[13px] font-semibold text-foreground">
             Ledger data still backfilling
@@ -922,7 +999,7 @@ function TreatmentEconomicJourneyCard({
         </div>
       )}
 
-      {!isError && !isLoading && journey && !journey.isBackfilling && (
+      {!isError && !pending && journey && !journey.isBackfilling && (
         <div className="mt-3.5">
           <JourneyWaterfallChart stages={journey.stages} />
         </div>
@@ -932,14 +1009,14 @@ function TreatmentEconomicJourneyCard({
 }
 
 function ContributionVsRevenueCard({
-  isLoading,
+  pending,
   isError,
   revenue,
   contribution,
   showEmpty,
   contributionTier,
 }: {
-  isLoading: boolean;
+  pending: boolean;
   isError: boolean;
   revenue: number;
   contribution: number;
@@ -959,23 +1036,26 @@ function ContributionVsRevenueCard({
         <ProvenanceChip kind={tierToChip(contributionTier)} />
       </div>
 
-      {isLoading && (
+      {pending && (
         <div className="mt-2.5 space-y-2">
-          <Skeleton className="h-[140px] w-full rounded-lg" />
+          <PeChartSkeleton className="h-[140px]" />
           <Skeleton className="h-3 w-full" />
         </div>
       )}
 
-      {!isLoading && (isError || showEmpty) && (
-        <div className="mt-2.5">
-          <PendingChartPlaceholder height={160} />
-          <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
-            Margin summary calculates once revenue and contribution feeds are connected.
-          </p>
-        </div>
+      {!pending && isError && (
+        <p className="mt-2.5 text-[12px] leading-relaxed text-muted-foreground">
+          Couldn&apos;t load revenue and contribution for this scope.
+        </p>
       )}
 
-      {!isLoading && !isError && !showEmpty && (
+      {!pending && !isError && showEmpty && (
+        <p className="mt-2.5 text-[12px] leading-relaxed text-muted-foreground">
+          Margin summary calculates once revenue and contribution feeds are connected.
+        </p>
+      )}
+
+      {!pending && !isError && !showEmpty && (
         <>
           <div className="mt-2.5">
             <ContributionVsRevenueChart revenue={revenue} contribution={contribution} />
@@ -1001,13 +1081,20 @@ function ContributionVsRevenueCard({
   );
 }
 
-function WhereTheValueSits() {
+function WhereTheValueSits({
+  invoiceSummary,
+  invoiceLoading,
+  invoiceError,
+}: {
+  invoiceSummary: InvoiceContributionSummary | undefined;
+  invoiceLoading: boolean;
+  invoiceError: boolean;
+}) {
   const journeyQuery = useTreatmentEconomicJourney();
-  const contribQuery = useInvoiceContributionSummary();
 
   const hasSyncedFinancials =
-    !!contribQuery.data &&
-    (contribQuery.data.totalRevenue > 0 || contribQuery.data.revenueNhs > 0);
+    !!invoiceSummary &&
+    (invoiceSummary.totalRevenue > 0 || invoiceSummary.revenueNhs > 0);
 
   return (
     <>
@@ -1024,12 +1111,12 @@ function WhereTheValueSits() {
           journey={journeyQuery.data}
         />
         <ContributionVsRevenueCard
-          isLoading={contribQuery.isLoading}
-          isError={contribQuery.isError}
-          revenue={contribQuery.data?.totalRevenue ?? 0}
-          contribution={contribQuery.data?.totalContribution ?? 0}
+          pending={invoiceLoading}
+          isError={invoiceError}
+          revenue={invoiceSummary?.totalRevenue ?? 0}
+          contribution={invoiceSummary?.totalContribution ?? 0}
           showEmpty={!hasSyncedFinancials}
-          contributionTier={contribQuery.data?.contributionTier}
+          contributionTier={invoiceSummary?.contributionTier}
         />
       </div>
     </>
@@ -1119,7 +1206,7 @@ function PerPracticeEconomicsTable() {
               </tr>
             </thead>
             <tbody>
-              {isLoading &&
+              {(isLoading || (isFetching && rows.length === 0)) &&
                 Array.from({ length: 4 }).map((_, i) => (
                   <tr key={i} className="border-b border-border/60">
                     {columns.map((col) => (
@@ -1192,13 +1279,105 @@ function PerPracticeEconomicsTable() {
   );
 }
 
-function EconomicPulseBelowFold() {
-  const { metrics, extendedMetricsLoading } = useEconomicPulseMetrics();
+function EconomicPulseBelowFold({
+  heroSlice,
+  invoiceSummary,
+  invoiceLoading,
+  invoiceError,
+  enabled,
+}: {
+  heroSlice: EconomicPulseHeroSlice | null;
+  invoiceSummary: InvoiceContributionSummary | undefined;
+  invoiceLoading: boolean;
+  invoiceError: boolean;
+  enabled: boolean;
+}) {
+  const recoveryQuery = useRetentionRecoveryLoop({ enabled });
+  const plannedQuery = usePlannedUnscheduledLeakage({ enabled });
+  const journeyQuery = useTreatmentEconomicJourney({ enabled });
+
+  const reactivationMinContributionGbp =
+    recoveryQuery.data?.group.minContributionThresholdGbp ??
+    DEFAULT_REACTIVATION_MIN_CONTRIBUTION_GBP;
+
+  const metrics = useMemo((): EconomicPulseMetrics | null => {
+    if (!heroSlice) return null;
+
+    const highValueThresholdGbp = reactivationMinContributionGbp;
+    const openWorklist = recoveryQuery.data?.group.openWorklist ?? [];
+    const highValueOpen = openWorklist.filter(
+      (w) => w.histContributionYr >= highValueThresholdGbp,
+    );
+
+    const journeyStages = journeyQuery.data?.stages ?? [];
+    const completed = journeyStages.find((s) => s.key === 'completed');
+    const charged = journeyStages.find((s) => s.key === 'charged');
+    const billingRevenueGapGbp = Math.max(
+      0,
+      (completed?.valueGbp ?? 0) - (charged?.valueGbp ?? 0),
+    );
+    const billingItemCount = Math.max(
+      0,
+      (completed?.eventCount ?? 0) - (charged?.eventCount ?? 0),
+    );
+    const marginPct = plannedQuery.data?.marginPct;
+    const billingPending =
+      journeyQuery.isLoading || (billingRevenueGapGbp > 0 && marginPct == null);
+    const billingContributionGbp =
+      !billingPending && billingRevenueGapGbp > 0 && marginPct != null
+        ? Math.round((billingRevenueGapGbp * marginPct) / 100)
+        : billingRevenueGapGbp <= 0
+          ? 0
+          : null;
+
+    const retentionOpenAtRiskGbp = recoveryQuery.data?.group.openValueGbp ?? 0;
+    const billingPart = billingContributionGbp ?? 0;
+
+    return {
+      ...heroSlice,
+      highValueCount: highValueOpen.length,
+      highValueThresholdGbp,
+      retentionOpenAtRiskGbp,
+      plannedContributionGbp: plannedQuery.data?.contributionOpportunity ?? null,
+      plannedTotalValueGbp: plannedQuery.data?.totalValueAtRisk ?? 0,
+      plannedItemCount: plannedQuery.data?.itemCount ?? 0,
+      billingContributionGbp,
+      billingRevenueGapGbp,
+      billingItemCount,
+      billingPending,
+      totalIdentifiedGbp:
+        heroSlice.opportunityWeighted + retentionOpenAtRiskGbp + billingPart,
+    };
+  }, [
+    heroSlice,
+    reactivationMinContributionGbp,
+    recoveryQuery.data,
+    plannedQuery.data,
+    journeyQuery.data,
+    journeyQuery.isLoading,
+  ]);
+
+  const extendedMetricsPending =
+    peReadPending(recoveryQuery) ||
+    peReadPending(plannedQuery) ||
+    peReadPending(journeyQuery);
 
   return (
     <>
-      <OpportunityActions metrics={metrics} isLoading={extendedMetricsLoading} />
-      <WhereTheValueSits />
+      <OpportunityActions
+        metrics={metrics}
+        pending={extendedMetricsPending || !heroSlice}
+        highValueThresholdGbp={
+          peReadPending(recoveryQuery)
+            ? null
+            : reactivationMinContributionGbp
+        }
+      />
+      <WhereTheValueSits
+        invoiceSummary={invoiceSummary}
+        invoiceLoading={invoiceLoading}
+        invoiceError={invoiceError}
+      />
       <PerPracticeEconomicsTable />
     </>
   );
@@ -1224,58 +1403,145 @@ function PendingTabPanel({ title }: { title: string }) {
 }
 
 function EconomicPulseHeroes() {
+  const { enabled: scopeEnabled } = usePeScopedRead();
   const heroQuery = useEconomicPulseHero();
-  const useLegacy = heroQuery.isError;
-  const legacyInvoice = useInvoiceContributionSummary({ enabled: useLegacy });
-  const pulseMetrics = useEconomicPulseMetrics();
+  const data = heroQuery.data?.invoiceSummary;
 
-  const data = heroQuery.data?.invoiceSummary ?? legacyInvoice.data;
-  const metrics: EconomicPulseMetrics | null = heroQuery.data
-    ? ({
-        opportunityWeighted: heroQuery.data.heroMetrics.opportunityWeighted,
-        opportunityGross: heroQuery.data.heroMetrics.opportunityGross,
-        opportunityWeightedTier: heroQuery.data.heroMetrics.opportunityWeightedTier,
-        atRiskContributionGbp: heroQuery.data.heroMetrics.atRiskContributionGbp,
-        retentionTier: heroQuery.data.heroMetrics.retentionTier,
-        commitmentRate30d: heroQuery.data.heroMetrics.commitmentRate30d,
-        commitmentRate30dTier: heroQuery.data.heroMetrics.commitmentRate30dTier,
-        avgAnnualContribution: heroQuery.data.heroMetrics.avgAnnualContribution,
-        projectedLtv: heroQuery.data.heroMetrics.projectedLtv,
-        projectedLtvTier: heroQuery.data.heroMetrics.projectedLtvTier,
-        highValueCount: 0,
-        highValueThresholdGbp: 500,
-        retentionOpenAtRiskGbp: 0,
-        plannedContributionGbp: null,
-        plannedTotalValueGbp: 0,
-        plannedItemCount: 0,
-        billingContributionGbp: null,
-        billingRevenueGapGbp: 0,
-        billingItemCount: 0,
-        billingPending: true,
-        totalIdentifiedGbp: heroQuery.data.heroMetrics.opportunityWeighted,
-      } satisfies EconomicPulseMetrics)
-    : pulseMetrics.heroMetrics;
+  // Cards 2–5: separate endpoints so card 1 + mix are not blocked.
+  const leakageQuery = useValueLeakageSummary({ enabled: !heroQuery.isError });
+  const retentionQuery = useRetentionContributionAtRisk({ enabled: !heroQuery.isError });
+  const growthQuery = useGrowthLeversSummary({ enabled: !heroQuery.isError });
 
-  const isLoading = useLegacy ? legacyInvoice.isLoading : heroQuery.isLoading;
-  const isError = useLegacy && legacyInvoice.isError;
-  const error = legacyInvoice.error;
+  const metrics = useMemo((): EconomicPulseMetrics | null => {
+    if (!leakageQuery.data || !retentionQuery.data) return null;
+
+    const growth = growthQuery.data;
+    const projectedLtv =
+      growth != null
+        ? computePatientEconomicValueGbp(
+            growth.visitFrequency,
+            growth.valuePerVisit,
+            growth.projectedLifetimeYears,
+            growth.tenureYears,
+          )
+        : null;
+
+    let avgAnnualContribution: number | null = null;
+    if (growth && growth.activePatientCount > 0) {
+      const months = growth.trailingMonths > 0 ? growth.trailingMonths : 12;
+      avgAnnualContribution = Math.round(
+        ((growth.totalRevenuePrivatePlan / months) * 12) / growth.activePatientCount,
+      );
+    }
+
+    return {
+      opportunityWeighted: leakageQuery.data.opportunityWeighted,
+      opportunityGross: leakageQuery.data.opportunityGross,
+      opportunityWeightedTier: leakageQuery.data.opportunityWeightedTier,
+      atRiskContributionGbp: retentionQuery.data.group.atRiskContributionGbp,
+      retentionTier: retentionQuery.data.group.tier,
+      commitmentRate30d: leakageQuery.data.commitmentRate30d,
+      commitmentRate30dTier: leakageQuery.data.commitmentRate30dTier,
+      avgAnnualContribution,
+      projectedLtv,
+      projectedLtvTier: growth?.projectedLifetimeTier ?? 'Modelled',
+      highValueCount: 0,
+      highValueThresholdGbp: 500,
+      retentionOpenAtRiskGbp: 0,
+      plannedContributionGbp: null,
+      plannedTotalValueGbp: 0,
+      plannedItemCount: 0,
+      billingContributionGbp: null,
+      billingRevenueGapGbp: 0,
+      billingItemCount: 0,
+      billingPending: true,
+      totalIdentifiedGbp: leakageQuery.data.opportunityWeighted,
+    };
+  }, [leakageQuery.data, retentionQuery.data, growthQuery.data]);
+
+  const waitingForScope = !scopeEnabled;
+  const heroPending =
+    waitingForScope || heroQuery.isPending || heroQuery.isFetching;
+  const metricsPending =
+    waitingForScope ||
+    ((leakageQuery.isPending ||
+      leakageQuery.isFetching ||
+      retentionQuery.isPending ||
+      retentionQuery.isFetching) &&
+      !leakageQuery.isError &&
+      !retentionQuery.isError);
+  const metricsFailed = leakageQuery.isError || retentionQuery.isError;
+  const metricsErrorMessage =
+    (leakageQuery.error as Error | undefined)?.message ||
+    (retentionQuery.error as Error | undefined)?.message ||
+    'Could not load opportunity or retention metrics.';
+
+  const isLoading = heroPending;
+  const isError = heroQuery.isError;
+  const error = heroQuery.error;
   const refetch = () => {
-    if (useLegacy) legacyInvoice.refetch();
-    else heroQuery.refetch();
+    heroQuery.refetch();
+    leakageQuery.refetch();
+    retentionQuery.refetch();
+    growthQuery.refetch();
   };
-  const isFetching = useLegacy ? legacyInvoice.isFetching : heroQuery.isFetching;
+  const isFetching =
+    heroQuery.isFetching ||
+    leakageQuery.isFetching ||
+    retentionQuery.isFetching ||
+    growthQuery.isFetching;
 
   const hasSyncedFinancials =
     !!data && (data.totalRevenue > 0 || data.revenueNhs > 0);
   const isEmpty =
     !!data && data.totalRevenue <= 0 && data.revenueNhs <= 0 && !isLoading;
 
-  const heroesLoading = useLegacy
-    ? legacyInvoice.isLoading || pulseMetrics.heroMetricsLoading
-    : heroQuery.isLoading;
+  const heroesLoading = heroPending;
+
+  const metricsSubtitleSuffix =
+    metricsPending ? (
+      <>
+        Calculating &nbsp;
+        <ProvenanceChip kind="pending" />
+      </>
+    ) : metricsFailed ? (
+      <>
+        Unavailable &nbsp;
+        <ProvenanceChip kind="pending" />
+      </>
+    ) : null;
+
+  const belowFoldHeroSlice: EconomicPulseHeroSlice | null =
+    metrics != null
+      ? {
+          opportunityWeighted: metrics.opportunityWeighted,
+          opportunityGross: metrics.opportunityGross,
+          opportunityWeightedTier: metrics.opportunityWeightedTier,
+          atRiskContributionGbp: metrics.atRiskContributionGbp,
+          retentionTier: metrics.retentionTier,
+          commitmentRate30d: metrics.commitmentRate30d,
+          commitmentRate30dTier: metrics.commitmentRate30dTier,
+          avgAnnualContribution: metrics.avgAnnualContribution,
+          projectedLtv: metrics.projectedLtv,
+          projectedLtvTier: metrics.projectedLtvTier,
+        }
+      : null;
 
   return (
     <>
+      {metricsFailed && !metricsPending && (
+        <div className="flex flex-wrap items-start gap-3 rounded-[10px] border border-danger/30 bg-danger-muted px-4 py-3 text-sm text-danger-strong">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div className="flex-1">
+            <div className="font-semibold">Couldn’t load hero metrics (cards 2–5)</div>
+            <div className="mt-0.5 text-danger-strong/80">{metricsErrorMessage}</div>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+            Retry
+          </Button>
+        </div>
+      )}
+
       {isError && (
         <div className="flex flex-wrap items-start gap-3 rounded-[10px] border border-danger/30 bg-danger-muted px-4 py-3 text-sm text-danger-strong">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -1313,24 +1579,13 @@ function EconomicPulseHeroes() {
         <PartialDataBanner summary={data} />
       )}
 
-      {heroesLoading ? (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="rounded-[14px] border border-border bg-card p-4 shadow-sm">
-              <Skeleton className="h-3 w-28" />
-              <Skeleton className="mt-3 h-8 w-24" />
-              <Skeleton className="mt-3 h-3 w-full" />
-              <Skeleton className="mt-2 h-3 w-2/3" />
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
           <HeroCard
+            pending={heroPending}
             question="1 · Existing patient value"
             subtitle={
               <>
-                Contribution to date (private + plan)
+                Paid contribution to date (private + plan)
                 <br />
                 NHS/UDA excluded &nbsp;
                 <ProvenanceChip
@@ -1357,6 +1612,7 @@ function EconomicPulseHeroes() {
 
           <HeroCard
             tone="opp"
+            pending={metricsPending}
             question="2 · Opportunity in your database"
             subtitle={
               metrics != null ? (
@@ -1370,8 +1626,7 @@ function EconomicPulseHeroes() {
                 <>
                   Unrealised contribution (prob-weighted)
                   <br />
-                  Calculating &nbsp;
-                  <ProvenanceChip kind="pending" />
+                  {metricsSubtitleSuffix}
                 </>
               )
             }
@@ -1380,13 +1635,18 @@ function EconomicPulseHeroes() {
               <div className="text-[28px] font-extrabold tracking-tight text-[hsl(var(--chart-5))]">
                 {formatGbp(metrics.opportunityWeighted)}
               </div>
-            ) : (
+            ) : metricsPending ? (
               <PendingValue />
+            ) : (
+              <div className="text-[28px] font-extrabold tracking-tight text-muted-foreground/80">
+                —
+              </div>
             )}
           </HeroCard>
 
           <HeroCard
             tone="risk"
+            pending={metricsPending}
             question="3 · Value at risk"
             subtitle={
               metrics != null ? (
@@ -1402,8 +1662,7 @@ function EconomicPulseHeroes() {
                   Patient Contribution at Risk
                   <span className="align-super text-[9px]">™</span>
                   <br />
-                  Calculating &nbsp;
-                  <ProvenanceChip kind="pending" />
+                  {metricsSubtitleSuffix}
                 </>
               )
             }
@@ -1412,13 +1671,18 @@ function EconomicPulseHeroes() {
               <div className="text-[28px] font-extrabold tracking-tight text-danger-strong">
                 {formatGbp(metrics.atRiskContributionGbp)}
               </div>
-            ) : (
+            ) : metricsPending ? (
               <PendingValue />
+            ) : (
+              <div className="text-[28px] font-extrabold tracking-tight text-muted-foreground/80">
+                —
+              </div>
             )}
           </HeroCard>
 
           <HeroCard
             tone="conv"
+            pending={metricsPending}
             question="4 · Conversion"
             subtitle={
               metrics != null ? (
@@ -1433,8 +1697,7 @@ function EconomicPulseHeroes() {
                   Commitment Rate
                   <span className="align-super text-[9px]">™</span> (planned→scheduled 30d)
                   <br />
-                  Calculating &nbsp;
-                  <ProvenanceChip kind="pending" />
+                  {metricsSubtitleSuffix}
                 </>
               )
             }
@@ -1443,13 +1706,18 @@ function EconomicPulseHeroes() {
               <div className="text-[28px] font-extrabold tracking-tight text-warning">
                 {formatPct(metrics.commitmentRate30d)}
               </div>
-            ) : (
+            ) : metricsPending ? (
               <PendingValue />
+            ) : (
+              <div className="text-[28px] font-extrabold tracking-tight text-muted-foreground/80">
+                —
+              </div>
             )}
           </HeroCard>
 
           <HeroCard
             tone="qual"
+            pending={metricsPending}
             question="5 · Patient quality"
             subtitle={
               metrics != null ? (
@@ -1467,8 +1735,7 @@ function EconomicPulseHeroes() {
                 <>
                   Avg annual contribution / projected LTV
                   <br />
-                  Calculating &nbsp;
-                  <ProvenanceChip kind="pending" />
+                  {metricsSubtitleSuffix}
                 </>
               )
             }
@@ -1479,12 +1746,15 @@ function EconomicPulseHeroes() {
                   ? formatGbp(metrics.avgAnnualContribution)
                   : '—'}
               </div>
-            ) : (
+            ) : metricsPending ? (
               <PendingValue />
+            ) : (
+              <div className="text-[28px] font-extrabold tracking-tight text-muted-foreground/80">
+                —
+              </div>
             )}
           </HeroCard>
         </div>
-      )}
 
       {!isError && (heroesLoading || hasSyncedFinancials) && (
         <RevenueMixCard
@@ -1499,7 +1769,13 @@ function EconomicPulseHeroes() {
         />
       )}
 
-      {!isError && <EconomicPulseBelowFold />}
+      {!isError && <EconomicPulseBelowFold
+        heroSlice={belowFoldHeroSlice}
+        invoiceSummary={data}
+        invoiceLoading={heroesLoading}
+        invoiceError={isError}
+        enabled={!isError}
+      />}
     </>
   );
 }
@@ -1558,30 +1834,32 @@ export default function EconomicPulse() {
       </Helmet>
 
       <div className="w-full max-w-[1460px]">
-        <PageChrome activeTab={activeTab} />
-        <div className="space-y-4">
-          {isSettingsTab ? (
-            <PatientEconomicsSettingsTab />
-          ) : isPatientListTab ? (
-            <PatientListDirectory />
-          ) : isPatientRecordsTab ? (
-            <PatientFinancialRecords />
-          ) : isValueLeakageTab ? (
-            <ValueLeakage />
-          ) : isGrowthLeversTab ? (
-            <GrowthLevers />
-          ) : isInvoicesTab ? (
-            <Invoices />
-          ) : isGoalSettingsTab ? (
-            <GoalSettings />
-          ) : isRetentionTab ? (
-            <RetentionReactivation />
-          ) : pending ? (
-            <PendingTabPanel title={pending.title} />
-          ) : (
-            <EconomicPulseHeroes />
-          )}
-        </div>
+        <PeFilterGate skipFilters={isSettingsTab}>
+          <PageChrome activeTab={activeTab} />
+          <div className="space-y-4">
+            {isSettingsTab ? (
+              <PatientEconomicsSettingsTab />
+            ) : isPatientListTab ? (
+              <PatientListDirectory />
+            ) : isPatientRecordsTab ? (
+              <PatientFinancialRecords />
+            ) : isValueLeakageTab ? (
+              <ValueLeakage />
+            ) : isGrowthLeversTab ? (
+              <GrowthLevers />
+            ) : isInvoicesTab ? (
+              <Invoices />
+            ) : isGoalSettingsTab ? (
+              <GoalSettings />
+            ) : isRetentionTab ? (
+              <RetentionReactivation />
+            ) : pending ? (
+              <PendingTabPanel title={pending.title} />
+            ) : (
+              <EconomicPulseHeroes />
+            )}
+          </div>
+        </PeFilterGate>
       </div>
     </MainLayout>
   );

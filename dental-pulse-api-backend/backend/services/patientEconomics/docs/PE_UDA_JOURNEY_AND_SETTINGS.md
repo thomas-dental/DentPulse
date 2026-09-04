@@ -1,5 +1,7 @@
 # Patient Economics — UDA/NHS, Treatment Economic Journey™ & Settings
 
+**Read contract:** PE list/summary surfaces use backend APIs with server pagination and facts-first SQL — see [`PE_READ_CONTRACT.md`](./PE_READ_CONTRACT.md). Do not add direct Supabase reads for PE metrics in the frontend.
+
 This document explains how **NHS/UDA**, **Plan vs Private revenue mix**, the **Treatment Economic Journey™**, and **Settings** work in DentPulse Patient Economics: formulas, UI surfaces, what must be filled manually (and why), and the meaning of each **new** table/field introduced for this work.
 
 ---
@@ -219,6 +221,7 @@ Service: `treatmentEconomicJourney.js` (reads `event_ledger` via `supabaseAdmin`
 |-------|------|
 | Diff (pure) | `eventLedgerDiff.js` |
 | Prefetch + upsert | `eventLedgerWriter.js` |
+| Patient gate | Source `pt_id` must resolve to `patients.id`; otherwise **no ledger row** (Journey chart excludes orphans) |
 | Schema / payload contract | `20260826130001_event_ledger_append_only.sql` |
 | Scheduled £ enrichment | Writer loads `treatment_plans.tp_private_treatment_value` onto `APPOINTMENT_LINKED`; backfill migration `20260827180001_…` |
 

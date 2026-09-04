@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { useOrganization } from '@/hooks/useOrganization';
 import { fetchInvoiceContributionSummaryApi } from '@/services/integrations/patientEconomicsService';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
 import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
 
 /** Practice rollup from invoice-grained v_invoice_contribution + UDA lens. */
@@ -91,19 +91,20 @@ export function mapInvoiceContributionSummary(raw: Record<string, unknown>): Inv
 
 async function fetchInvoiceContributionSummary(
   practiceId: string,
+  scope?: import('@/services/integrations/patientEconomicsService').PeApiScope,
 ): Promise<InvoiceContributionSummary> {
-  const { summary } = await fetchInvoiceContributionSummaryApi(practiceId);
+  const { summary } = await fetchInvoiceContributionSummaryApi(practiceId, scope);
   return mapInvoiceContributionSummary(summary);
 }
 
 export function useInvoiceContributionSummary(options?: { enabled?: boolean }) {
-  const { organizationId } = useOrganization();
+  const { organizationId, scopeKey, apiScope, enabled: scopeEnabled } = usePeScopedRead();
 
   return useQuery({
-    queryKey: ['invoice-contribution-summary', organizationId],
-    enabled: !!organizationId && (options?.enabled ?? true),
+    queryKey: ['invoice-contribution-summary', organizationId, scopeKey],
+    enabled: scopeEnabled && (options?.enabled ?? true),
     staleTime: PE_READ_STALE_MS,
-    queryFn: () => fetchInvoiceContributionSummary(organizationId!),
+    queryFn: () => fetchInvoiceContributionSummary(organizationId!, apiScope),
   });
 }
 

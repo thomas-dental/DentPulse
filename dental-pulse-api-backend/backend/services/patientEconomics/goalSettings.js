@@ -6,11 +6,10 @@ const { supabaseAdmin } = require('../../config/supabase');
 const { resolvePeRollupUnits } = require('./peRollupUnits');
 const { loadPatientUuidsForLocation } = require('./peLocationScope');
 const {
-  aggregatePlansFromLedger,
   computePracticeCommitmentRate,
 } = require('./commitmentRateLogic');
 const {
-  loadLedgerPlanEvents,
+  loadAggregatedPlans,
   loadEligiblePlanItems,
 } = require('./commitmentRate');
 const { loadPeEconomicAssumptions } = require('./peEconomicAssumptions');
@@ -169,36 +168,18 @@ async function loadLocationOverrides(locationIds) {
 }
 
 async function loadPatientRetentionRows(practiceId) {
+  const { forEachPatientRetentionPage } = require('./peReadSource');
   const rows = [];
-  let offset = 0;
-  const tables = ['pe_patient_contribution_facts', 'v_pe_retention_segment'];
 
-  for (const table of tables) {
-    rows.length = 0;
-    offset = 0;
-    let found = false;
-
-    for (let i = 0; i < 100; i++) {
-      const { data, error } = await supabaseAdmin
-        .from(table)
-        .select('patient_id, retention_status')
-        .eq('practice_id', practiceId)
-        .range(offset, offset + PAGE_SIZE - 1);
-
-      if (error && error.code === '42P01') break;
-      if (error) throw new Error(`${table}: ${error.message}`);
-
-      const batch = data ?? [];
-      if (batch.length > 0) found = true;
+  const found = await forEachPatientRetentionPage(
+    practiceId,
+    { select: 'patient_id, retention_status', maxPages: 100 },
+    async (batch) => {
       rows.push(...batch);
-      if (batch.length < PAGE_SIZE) break;
-      offset += PAGE_SIZE;
-    }
+    },
+  );
 
-    if (found) return rows;
-  }
-
-  return rows;
+  return found ? rows : [];
 }
 
 function scopeRetentionRows(rows, patientUuids) {
@@ -210,8 +191,7 @@ function scopeRetentionRows(rows, patientUuids) {
 async function computeCommitmentRate30d(practiceId) {
   const assumptions = await loadPeEconomicAssumptions(practiceId);
   const windowDays = assumptions.commitmentRateWindowDays;
-  const ledgerRows = await loadLedgerPlanEvents(practiceId);
-  const plans = aggregatePlansFromLedger(ledgerRows);
+  const plans = await loadAggregatedPlans(practiceId);
   const planIds = [...plans.keys()];
   const items = await loadEligiblePlanItems(practiceId, planIds);
   const result = computePracticeCommitmentRate(plans, items, windowDays);
@@ -441,7 +421,7 @@ function buildPracticeRow(
  * @param {string} userId
  * @param {string} contextPracticeId
  */
-async function getGoalSettingsSummary(userId, contextPracticeId) {
+async function getGoalSettingsSummary(userId, contextPracticeId, scope = {}) {
   const { rollupMode, organizationIds, units } = await resolvePeRollupUnits(
     userId,
     contextPracticeId,

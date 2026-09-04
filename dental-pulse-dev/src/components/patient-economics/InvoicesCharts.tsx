@@ -113,11 +113,11 @@ export function AgedDebtChart({ buckets }: { buckets: PeAgedDebtBucket[] }) {
 
 export function CollectionRateByPracticeChart({
   rows,
-  trailingMonths,
   targetRate = PE_COLLECTION_RATE_TARGET_DEFAULT,
 }: {
   rows: PeCollectionRatePracticeRow[];
-  trailingMonths: number;
+  /** @deprecated Caption no longer shows trailing window — TopBar dates define scope. */
+  trailingMonths?: number;
   targetRate?: number;
 }) {
   if (rows.length === 0) {
@@ -160,7 +160,7 @@ export function CollectionRateByPracticeChart({
       preserveAspectRatio="xMinYMin meet"
     >
       <text x={pl} y={14} fontSize={PE_CHART_CAPTION_PX} fill={muted}>
-        Last {trailingMonths} months · collected ÷ invoiced
+        collected ÷ invoiced
       </text>
       <text x={targetX + 6} y={32} fontSize={PE_CHART_CAPTION_PX} fill={primary} fontWeight={600}>
         {formatPct(targetRate)} target

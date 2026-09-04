@@ -55,6 +55,7 @@ const BACKFILL_SPECS = [
     idField: 'pt_id',
     order: 'pt_id',
     applyFilters: (query) => query.is('deleted_at', null),
+    pageSize: 100,
   },
 ];
 
@@ -127,7 +128,7 @@ async function fetchEntityPage(practiceId, spec, page, pageSize) {
 
 /**
  * Backfill one ledger entity for a practice.
- * @returns {Promise<{ entityAlias: string, pages: number, rowsScanned: number, written: number, skippedNoPatient: number }>}
+ * @returns {Promise<{ entityAlias: string, pages: number, rowsScanned: number, written: number, skippedNoPatient: number, orphanedNoPatient: number }>}
  */
 async function backfillLedgerEntity(practiceId, entityAlias, options = {}) {
   const spec = BACKFILL_SPECS.find((s) => s.alias === entityAlias);
@@ -135,11 +136,12 @@ async function backfillLedgerEntity(practiceId, entityAlias, options = {}) {
     throw new Error(`Unknown ledger entity: ${entityAlias}`);
   }
 
-  const pageSize = options.pageSize || DEFAULT_PAGE_SIZE;
+  const pageSize = options.pageSize || spec.pageSize || DEFAULT_PAGE_SIZE;
   let page = 0;
   let rowsScanned = 0;
   let written = 0;
   let skippedNoPatient = 0;
+  let orphanedNoPatient = 0;
 
   for (;;) {
     const { rows, total } = await fetchEntityPage(practiceId, spec, page, pageSize);
@@ -169,6 +171,7 @@ async function backfillLedgerEntity(practiceId, entityAlias, options = {}) {
 
     written += result.written || 0;
     skippedNoPatient += result.skippedNoPatient || 0;
+    orphanedNoPatient += result.orphanedNoPatient || 0;
 
     if (options.onProgress) {
       options.onProgress({
@@ -177,6 +180,7 @@ async function backfillLedgerEntity(practiceId, entityAlias, options = {}) {
         rows: rows.length,
         written: result.written || 0,
         skippedNoPatient: result.skippedNoPatient || 0,
+        orphanedNoPatient: result.orphanedNoPatient || 0,
       });
     }
 
@@ -191,6 +195,7 @@ async function backfillLedgerEntity(practiceId, entityAlias, options = {}) {
     rowsScanned,
     written,
     skippedNoPatient,
+    orphanedNoPatient,
   };
 }
 
@@ -220,6 +225,7 @@ async function backfillPracticeEventLedger(practiceId, options = {}) {
     rowsScanned: results.reduce((n, r) => n + r.rowsScanned, 0),
     written: results.reduce((n, r) => n + r.written, 0),
     skippedNoPatient: results.reduce((n, r) => n + r.skippedNoPatient, 0),
+    orphanedNoPatient: results.reduce((n, r) => n + r.orphanedNoPatient, 0),
   };
 
   return { practiceId, results, summary };

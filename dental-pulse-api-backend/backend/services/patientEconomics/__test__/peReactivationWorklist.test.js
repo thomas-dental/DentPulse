@@ -84,5 +84,7 @@ test('buildRecoveryFunnel uses worklist workflow not flag-age thresholds', () =>
   assert.equal(funnel.openValueGbp, 1500);
   assert.equal(funnel.contactedGbp, 700);
   assert.equal(funnel.bookedGbp, 200);
-  assert.equal(funnel.stages.find((s) => s.key === 'recovered')?.label, 'At-risk recovered');
+  assert.equal(funnel.stages.length, 5);
+  assert.equal(funnel.stages.find((s) => s.key === 'assigned')?.label, 'Assigned');
+  assert.equal(funnel.stages.find((s) => s.key === 'recovered')?.label, 'Recovered');
 });

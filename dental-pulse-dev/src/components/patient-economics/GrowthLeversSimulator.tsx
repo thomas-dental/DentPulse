@@ -69,6 +69,14 @@ function defaultTargetsFromBaseline(baseline: {
   };
 }
 
+function formatGbpWhole(value: number): string {
+  return new Intl.NumberFormat('en-GB', {
+    style: 'currency',
+    currency: 'GBP',
+    maximumFractionDigits: 0,
+  }).format(Math.round(value));
+}
+
 function SimulatorActCard({
   label,
   baselineDisplay,
@@ -115,12 +123,14 @@ function SimulatorActCard({
         {suffix && <span className="text-[13px] font-semibold text-muted-foreground">{suffix}</span>}
       </div>
       <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">{hint}</p>
-      {uplift != null && Math.abs(uplift) >= 1 && (
-        <div className="mt-2.5 text-[19px] font-extrabold tracking-tight text-primary">
-          {formatGbpCompact(uplift)}{' '}
-          <span className="text-[12px] font-semibold text-muted-foreground">contribution</span>
-        </div>
-      )}
+      <div className="mt-2.5 min-h-[28px]">
+        {uplift != null ? (
+          <div className="text-[19px] font-extrabold tracking-tight text-primary">
+            {formatGbpCompact(uplift)}{' '}
+            <span className="text-[12px] font-semibold text-muted-foreground">contribution</span>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -217,7 +227,7 @@ export function GrowthLeversSimulator() {
       {isLoading ? (
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-[130px] rounded-[11px]" />
+            <Skeleton key={i} className="h-[168px] rounded-[11px]" />
           ))}
         </div>
       ) : isError ? (
@@ -242,7 +252,7 @@ export function GrowthLeversSimulator() {
           <SimulatorActCard
             label="Visit Frequency"
             baselineDisplay={baselineLevers.visitFrequency.toFixed(1)}
-            inputValue={String(targets.visitFrequency)}
+            inputValue={String(roundLeverInput(targets.visitFrequency, 1))}
             onInputChange={(raw) => {
               const n = Number(raw);
               if (!Number.isFinite(n)) return;
@@ -254,7 +264,7 @@ export function GrowthLeversSimulator() {
           />
           <SimulatorActCard
             label="Value per Visit"
-            baselineDisplay={formatGbp(baselineLevers.valuePerVisit)}
+            baselineDisplay={formatGbpWhole(baselineLevers.valuePerVisit)}
             inputValue={String(Math.round(targets.valuePerVisit))}
             onInputChange={(raw) => {
               const n = Number(raw);
@@ -290,7 +300,7 @@ export function GrowthLeversSimulator() {
               Stacked effect, not the sum of the parts.
             </p>
             {compounded != null && (
-              <div className="mt-2.5 text-[22px] font-extrabold tracking-tight text-primary">
+              <div className="mt-2.5 min-h-[32px] text-[22px] font-extrabold tracking-tight text-primary">
                 {formatGbpCompact(compounded.uplift)}
               </div>
             )}

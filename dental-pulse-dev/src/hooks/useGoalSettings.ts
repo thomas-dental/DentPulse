@@ -1,18 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
-import { useOrganization } from '@/hooks/useOrganization';
 import { fetchGoalSettingsApi } from '@/services/integrations/patientEconomicsService';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
 import type { PeGoalSettingsSummary } from '@/types/peGoalSettings';
 import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
 
-export function useGoalSettings() {
-  const { organizationId } = useOrganization();
+export function useGoalSettings(options?: { enabled?: boolean }) {
+  const { organizationId, scopeKey, apiScope, enabled: scopeEnabled } = usePeScopedRead();
 
   return useQuery({
-    queryKey: ['pe-goal-settings', organizationId],
-    enabled: !!organizationId,
+    queryKey: ['pe-goal-settings', organizationId, scopeKey],
+    enabled: scopeEnabled && (options?.enabled ?? true),
     staleTime: PE_READ_STALE_MS,
     queryFn: async (): Promise<PeGoalSettingsSummary> => {
-      const body = await fetchGoalSettingsApi(organizationId!);
+      const body = await fetchGoalSettingsApi(organizationId!, apiScope);
       return {
         contextPracticeId: String(body.contextPracticeId),
         rollupMode: body.rollupMode === 'location' ? 'location' : 'practice',

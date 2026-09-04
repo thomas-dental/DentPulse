@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { useOrganization } from '@/hooks/useOrganization';
 import { fetchCltvByAcquisitionSourceApi } from '@/services/integrations/patientEconomicsService';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
 
 export type CltvAcquisitionSourceRow = {
   acquisitionSourceName: string;
@@ -22,13 +22,13 @@ export type CltvByAcquisitionSource = {
 };
 
 export function useCltvByAcquisitionSource() {
-  const { organizationId } = useOrganization();
+  const { organizationId, scopeKey, apiScope, enabled } = usePeScopedRead();
 
   return useQuery({
-    queryKey: ['cltv-by-acquisition-source', organizationId],
-    enabled: !!organizationId,
+    queryKey: ['cltv-by-acquisition-source', organizationId, scopeKey],
+    enabled,
     queryFn: async (): Promise<CltvByAcquisitionSource> => {
-      const body = await fetchCltvByAcquisitionSourceApi(organizationId!);
+      const body = await fetchCltvByAcquisitionSourceApi(organizationId!, apiScope);
       return {
         minSampleSize: Number(body.minSampleSize) || 5,
         minSampleTierNote: String(body.minSampleTierNote || ''),

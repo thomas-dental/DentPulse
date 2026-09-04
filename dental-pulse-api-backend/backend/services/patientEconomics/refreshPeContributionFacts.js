@@ -3,6 +3,11 @@
  */
 
 const { supabaseAdmin } = require('../../config/supabase');
+const {
+  accumulateInvoiceIntoPatientMap,
+  patientRowsFromAggMap,
+  patientFactsGrainKey,
+} = require('./pePatientFactsGrain');
 
 const PAGE_SIZE = 1000;
 const UPSERT_CHUNK = 200;
@@ -15,7 +20,7 @@ const INVOICE_VIEW_SELECT =
   'membership_service_cost, allocated_cac, direct_cost, contribution, ' +
   'contribution_provenance_status, revenue_tier, clinician_cost_tier, lab_cost_tier, ' +
   'material_cost_tier, membership_service_cost_tier, allocated_cac_tier, contribution_tier, ' +
-  'confidence_score, confidence';
+  'confidence_score, confidence, is_paid, status';
 
 function num(v) {
   const n = Number(v);
@@ -62,6 +67,8 @@ function mapInvoiceFactRow(row) {
     contribution_tier: row.contribution_tier,
     confidence_score: row.confidence_score,
     confidence: row.confidence,
+    is_paid: Boolean(row.is_paid),
+    status: row.status != null ? String(row.status) : null,
     refreshed_at: new Date().toISOString(),
   };
 }
@@ -107,57 +114,66 @@ async function refreshInvoiceFacts(practiceId) {
   return total;
 }
 
-function accumulateInvoiceIntoPatientMap(map, row) {
-  if (!row.patient_id) return;
-  const pid = String(row.patient_id);
-  let agg = map.get(pid);
-  if (!agg) {
-    agg = {
-      practice_id: row.practice_id,
-      patient_id: row.patient_id,
-      pt_id: row.pt_id,
-      contribution: 0,
-      revenue_private_plan: 0,
-      invoice_count: 0,
-      confidence_score_sum: 0,
-    };
-    map.set(pid, agg);
+async function loadPatientLocationMap(practiceId) {
+  const map = new Map();
+  let offset = 0;
+
+  for (let page = 0; page < 500; page++) {
+    const { data, error } = await supabaseAdmin
+      .from('patients')
+      .select('id, location_id')
+      .eq('organization_id', practiceId)
+      .is('deleted_at', null)
+      .range(offset, offset + PAGE_SIZE - 1);
+
+    if (error) throw new Error(`patients location page ${page}: ${error.message}`);
+
+    const batch = data ?? [];
+    for (const row of batch) {
+      if (row.id == null) continue;
+      map.set(String(row.id), {
+        locationId: row.location_id != null ? String(row.location_id) : null,
+      });
+    }
+
+    if (batch.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
   }
-  agg.contribution += num(row.contribution);
-  agg.revenue_private_plan += num(row.revenue_private_plan);
-  agg.invoice_count += 1;
-  agg.confidence_score_sum += num(row.confidence_score);
-  if (row.pt_id != null) agg.pt_id = row.pt_id;
+
+  return map;
 }
 
-function patientRowsFromAggMap(map, retentionByPatient) {
-  const rows = [];
-  for (const [pid, agg] of map.entries()) {
-    rows.push({
-      practice_id: agg.practice_id,
-      patient_id: agg.patient_id,
-      pt_id: agg.pt_id,
-      retention_status: retentionByPatient.get(pid) ?? 'active',
-      contribution: round2(agg.contribution),
-      revenue_private_plan: round2(agg.revenue_private_plan),
-      invoice_count: agg.invoice_count,
-      confidence_score:
-        agg.invoice_count > 0
-          ? Math.round(agg.confidence_score_sum / agg.invoice_count)
-          : null,
-      refreshed_at: new Date().toISOString(),
-    });
+async function loadFirstVisitByPtId(practiceId) {
+  const map = new Map();
+  const { data, error } = await supabaseAdmin.rpc('pe_first_completed_visit_by_pt', {
+    p_practice_id: practiceId,
+    p_location_id: null,
+  });
+
+  if (error) {
+    console.warn(`[PE facts] pe_first_completed_visit_by_pt failed: ${error.message}`);
+    return map;
   }
-  return rows;
+
+  if (data && typeof data === 'object') {
+    for (const [ptId, dateVal] of Object.entries(data)) {
+      if (dateVal == null) continue;
+      map.set(String(ptId), String(dateVal).slice(0, 10));
+    }
+  }
+
+  return map;
 }
 
-async function refreshPatientFacts(practiceId, retentionByPatient) {
+async function refreshPatientFacts(practiceId, retentionByPatient, locationByPatient) {
   const { error: delErr } = await supabaseAdmin
     .from('pe_patient_contribution_facts')
     .delete()
     .eq('practice_id', practiceId);
   if (delErr) throw new Error(`pe_patient_contribution_facts delete: ${delErr.message}`);
 
+  const firstVisitByPtId = await loadFirstVisitByPtId(practiceId);
+  const today = new Date().toISOString().slice(0, 10);
   const patientAgg = new Map();
   let offset = 0;
 
@@ -165,7 +181,7 @@ async function refreshPatientFacts(practiceId, retentionByPatient) {
     const { data, error } = await supabaseAdmin
       .from('pe_invoice_contribution_facts')
       .select(
-        'practice_id, patient_id, pt_id, contribution, revenue_private_plan, confidence_score',
+        'practice_id, patient_id, pt_id, contribution, revenue_private_plan, confidence_score, is_paid, invoice_date',
       )
       .eq('practice_id', practiceId)
       .range(offset, offset + PAGE_SIZE - 1);
@@ -174,6 +190,8 @@ async function refreshPatientFacts(practiceId, retentionByPatient) {
 
     const batch = data ?? [];
     for (const row of batch) {
+      // Patient-grain contribution matches Existing Patient Value (paid only).
+      if (!row.is_paid) continue;
       accumulateInvoiceIntoPatientMap(patientAgg, row);
     }
 
@@ -181,10 +199,17 @@ async function refreshPatientFacts(practiceId, retentionByPatient) {
     offset += PAGE_SIZE;
   }
 
-  const patientRows = patientRowsFromAggMap(patientAgg, retentionByPatient);
+  const patientRows = patientRowsFromAggMap(
+    patientAgg,
+    retentionByPatient,
+    locationByPatient,
+    firstVisitByPtId,
+    today,
+  );
 
   for (const [pid, status] of retentionByPatient.entries()) {
     if (patientAgg.has(pid)) continue;
+    const location = locationByPatient.get(pid) ?? {};
     patientRows.push({
       practice_id: practiceId,
       patient_id: pid,
@@ -192,6 +217,7 @@ async function refreshPatientFacts(practiceId, retentionByPatient) {
       contribution: 0,
       revenue_private_plan: 0,
       invoice_count: 0,
+      location_id: location.locationId ?? null,
       refreshed_at: new Date().toISOString(),
     });
   }
@@ -200,7 +226,7 @@ async function refreshPatientFacts(practiceId, retentionByPatient) {
     await upsertInChunks(
       'pe_patient_contribution_facts',
       patientRows,
-      'practice_id,patient_id',
+      'practice_id,grain_key',
     );
   }
 
@@ -291,7 +317,10 @@ async function refreshPeContributionFacts(practiceId) {
   const retentionByPatient = await loadRetentionByPatient(practiceId);
   console.log(`[PE facts] Retention segment: ${retentionByPatient.size} patients`);
 
-  const patientCount = await refreshPatientFacts(practiceId, retentionByPatient);
+  const locationByPatient = await loadPatientLocationMap(practiceId);
+  console.log(`[PE facts] Patient locations: ${locationByPatient.size} patients`);
+
+  const patientCount = await refreshPatientFacts(practiceId, retentionByPatient, locationByPatient);
   console.log(`[PE facts] Patient facts: ${patientCount} rows`);
 
   await refreshPracticeFacts(practiceId);
@@ -307,4 +336,7 @@ async function refreshPeContributionFacts(practiceId) {
 
 module.exports = {
   refreshPeContributionFacts,
+  patientFactsGrainKey,
+  accumulateInvoiceIntoPatientMap,
+  patientRowsFromAggMap,
 };

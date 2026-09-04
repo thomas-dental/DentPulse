@@ -19,6 +19,11 @@
  * Diary syncAppointments is intentionally not hooked — plan link state lives on
  * treatment_appointments.ta_appointment_id (Step 1 payload contract).
  *
+ * Patient match (Treatment Economic Journey™):
+ *   - Resolve source pt_id → patients.id when possible.
+ *   - No match → still insert with patient_id NULL and pt_id in payload (orphan grain).
+ *   - Missing pt_id on source row → skip (cannot attribute the event).
+ *
  * Resume / chunk safety:
  *   - Prefetch source rows before upsert (diff baseline).
  *   - Prefetch existing ledger idempotency keys (heal mid-chunk failures).
@@ -36,6 +41,11 @@ const {
   toDateOnly,
   todayUtcDate,
 } = require('./eventLedgerDiff');
+const {
+  resolveLedgerPatientBinding,
+  resolveLedgerLocationId,
+  buildLedgerInsertRow,
+} = require('./eventLedgerPatientBinding');
 
 const LEDGER_ENTITIES = new Set([
   'treatment_plans',
@@ -150,24 +160,27 @@ async function fetchExistingSourceRows(practiceId, entityAlias, entityIds) {
   return map;
 }
 
-async function resolvePatientUuidMap(practiceId, ptIds) {
+async function resolvePatientMetaByPtId(practiceId, ptIds) {
   const unique = [...new Set(ptIds.filter((id) => id != null))];
   const map = new Map();
   if (unique.length === 0) return map;
 
   const { data, error } = await supabaseAdmin
     .from('patients')
-    .select('id, pt_id')
+    .select('id, pt_id, location_id')
     .eq('organization_id', practiceId)
     .is('deleted_at', null)
     .in('pt_id', unique);
 
   if (error) {
-    throw new Error(`[PE ledger] Patient UUID lookup failed: ${error.message}`);
+    throw new Error(`[PE ledger] Patient meta lookup failed: ${error.message}`);
   }
 
   for (const row of data || []) {
-    map.set(normalizeBigInt(row.pt_id), row.id);
+    map.set(normalizeBigInt(row.pt_id), {
+      id: row.id,
+      location_id: row.location_id ?? null,
+    });
   }
   return map;
 }
@@ -332,23 +345,34 @@ async function writeLedgerEventsFromUpsert({
   const patientField = ENTITY_PATIENT_FIELD[entityAlias];
   const idField = ENTITY_ID_FIELD[entityAlias];
   const ptIds = rows.map((row) => normalizeBigInt(row[patientField]));
-  const patientUuidByPtId = await resolvePatientUuidMap(practiceId, ptIds);
+  const patientMetaByPtId = await resolvePatientMetaByPtId(practiceId, ptIds);
 
   const inserts = [];
   let skippedNoPatient = 0;
+  let orphanedNoPatient = 0;
 
   for (const newRow of rows) {
     const entityId = normalizeEntityId(entityAlias, newRow[idField]);
     const oldRow = existingByEntityId.get(entityId) ?? null;
     const ptId = normalizeBigInt(newRow[patientField]);
-    const patientId = patientUuidByPtId.get(ptId);
+    const patientMeta = patientMetaByPtId.get(ptId);
+    const patientId = patientMeta?.id;
+    const binding = resolveLedgerPatientBinding(ptId, patientId);
+    const locationId = resolveLedgerLocationId(entityAlias, newRow, patientMeta);
 
-    if (!patientId) {
+    if (binding.skip) {
       skippedNoPatient += 1;
       console.warn(
-        `[PE ledger] Skip events for ${entityAlias} ${entityId}: no patients row for pt_id=${ptId}`,
+        `[PE ledger] Skip events for ${entityAlias} ${entityId}: no pt_id on source row`,
       );
       continue;
+    }
+
+    if (binding.patientMatch === 'orphan') {
+      orphanedNoPatient += 1;
+      console.warn(
+        `[PE ledger] Orphan events for ${entityAlias} ${entityId}: no patients row for pt_id=${ptId}`,
+      );
     }
 
     const rowEvents = diffRowEvents(
@@ -358,23 +382,23 @@ async function writeLedgerEventsFromUpsert({
       existingLedgerKeys,
     );
     for (const evt of rowEvents) {
-      inserts.push({
-        practice_id: practiceId,
-        patient_id: patientId,
-        event_type: evt.event_type,
-        payload: {
-          ...evt.payload,
-          source: payloadSource,
-          sync_run_id: syncRunId ?? null,
-        },
-        created_at: evt.created_at,
-        idempotency_key: evt.idempotency_key,
-      });
+      inserts.push(
+        buildLedgerInsertRow({
+          practiceId,
+          patientId: binding.patientId,
+          patientMatch: binding.patientMatch,
+          ptId,
+          locationId,
+          evt,
+          payloadSource,
+          syncRunId,
+        }),
+      );
     }
   }
 
   if (inserts.length === 0) {
-    return { written: 0, skippedNoPatient };
+    return { written: 0, skippedNoPatient, orphanedNoPatient };
   }
 
   const { error } = await supabaseAdmin.from('event_ledger').upsert(inserts, {
@@ -386,7 +410,7 @@ async function writeLedgerEventsFromUpsert({
     throw new Error(`[PE ledger] Insert failed: ${error.message}`);
   }
 
-  return { written: inserts.length, skippedNoPatient };
+  return { written: inserts.length, skippedNoPatient, orphanedNoPatient };
 }
 
 module.exports = {
@@ -397,4 +421,8 @@ module.exports = {
   loadExistingLedgerKeys,
   candidateKeysForRows,
   normalizeEntityId,
+  resolveLedgerPatientBinding,
+  resolveLedgerLocationId,
+  buildLedgerInsertRow,
+  resolvePatientMetaByPtId,
 };

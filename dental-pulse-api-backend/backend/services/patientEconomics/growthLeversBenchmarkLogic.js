@@ -26,6 +26,14 @@ function numOrNull(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Admin / non-clinical locations: no visit revenue → headroom ranks are not meaningful. */
+function hasClinicalLeverData(row) {
+  if (row?.visitFrequency == null || row?.valuePerVisit == null) return false;
+  const visitFrequency = numOrNull(row.visitFrequency);
+  const valuePerVisit = numOrNull(row.valuePerVisit);
+  return visitFrequency != null && visitFrequency > 0 && valuePerVisit != null;
+}
+
 /**
  * @param {Array<{ visitFrequency?: number|null, valuePerVisit?: number|null, tenureYears?: number|null, projectedLifetimeYears?: number|null }>} rows
  */
@@ -153,4 +161,6 @@ module.exports = {
   combinedHeadroomPct,
   topLeverToPull,
   benchmarkMethodNote,
+  numOrNull,
+  hasClinicalLeverData,
 };

@@ -1,25 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
 import { useOrganization } from '@/hooks/useOrganization';
 import {
-  buildLocationOptions,
-  filterPatientRows,
-  filterPatientRowsByChips,
-  filterPatientRowsByLocation,
   mapPatientContributionRow,
-  sortPatientRows,
   type PatientContributionRow,
   type PatientListRetentionFilter,
   type PatientListSortKey,
   type PatientListTypeFilter,
   type PatientProvenanceStatus,
-  type PeLocationScope,
 } from '@/hooks/usePatientContributionList';
 import {
   fetchPatientFinancialRecordApi,
   fetchPatientFinancialRecordList,
   fetchPatientInvoicesApi,
   fetchPatientTreatmentLinesApi,
+  type PePatientListParams,
 } from '@/services/integrations/patientEconomicsService';
 import type { PeRetentionStatus } from '@/lib/peRetentionConstants';
 import { PE_OPPORTUNITY_WEIGHTED_TIER_NOTE } from '@/lib/peRetentionConstants';
@@ -43,6 +39,10 @@ export type PatientInvoiceRow = {
   clinicianCostTier: string;
   contributionTier: string;
   confidenceScore: number | null;
+  dentallyPatientUuid: string | null;
+  invoiceUuid: string | null;
+  accountUuid: string | null;
+  dentallyInvoiceUrl: string | null;
 };
 
 export type PatientTreatmentLineRow = {
@@ -140,6 +140,12 @@ function mapInvoiceRow(raw: Record<string, unknown>): PatientInvoiceRow {
     clinicianCostTier: String(raw.clinicianCostTier || 'Derived'),
     contributionTier: String(raw.contributionTier || 'Derived'),
     confidenceScore: raw.confidenceScore == null ? null : num(raw.confidenceScore),
+    dentallyPatientUuid:
+      raw.dentallyPatientUuid != null ? String(raw.dentallyPatientUuid) : null,
+    invoiceUuid: raw.invoiceUuid != null ? String(raw.invoiceUuid) : null,
+    accountUuid: raw.accountUuid != null ? String(raw.accountUuid) : null,
+    dentallyInvoiceUrl:
+      raw.dentallyInvoiceUrl != null ? String(raw.dentallyInvoiceUrl) : null,
   };
 }
 
@@ -179,58 +185,19 @@ function mapRetention(raw: Record<string, unknown>): RetentionStatus {
 
 export { PE_OPPORTUNITY_WEIGHTED_TIER_NOTE };
 
-async function fetchAllFinancialRecordRows(
-  practiceId: string,
-): Promise<{
-  rows: PatientFinancialRecordRow[];
-  rollupMode: 'location' | 'practice';
-  locations: PeLocationScope[];
-}> {
-  const data = await fetchPatientFinancialRecordList(practiceId);
-  return {
-    rows: data.patients.map((row) => mapFinancialRecordRow(row)),
-    rollupMode: data.rollupMode === 'location' ? 'location' : 'practice',
-    locations: (data.locations ?? []).map((loc) => ({
-      id: String(loc.id),
-      name: String(loc.name || 'Site'),
-    })),
-  };
-}
-
-async function fetchPatientFinancialRecord(
-  practiceId: string,
-  patientId: string,
-): Promise<PatientFinancialRecord | null> {
-  const payload = await fetchPatientFinancialRecordApi(practiceId, patientId);
-  if (!payload?.row) return null;
-
-  const row = mapFinancialRecordRow(payload.row as Record<string, unknown>);
-  row.recommendedAction = parseRecommendedAction(row.recommendedAction);
-  return {
-    row,
-    modelled: mapModelledScores(payload.modelled as Record<string, unknown> | null),
-    retention: mapRetention(payload.retention as Record<string, unknown>),
-    invoices: (payload.invoices ?? []).map((r) =>
-      mapInvoiceRow(r as Record<string, unknown>),
-    ),
-    acquisitionSourceName: payload.acquisitionSourceName ?? null,
-    recallHint: payload.recallHint ?? null,
-  };
-}
-
-export function usePatientFinancialRecordList() {
-  const { organizationId } = useOrganization();
+export function usePatientFinancialRecordList(listParams?: PePatientListParams) {
+  const { organizationId, scopeKey, apiScope, enabled } = usePeScopedRead();
 
   return useQuery({
-    queryKey: ['patient-financial-records', organizationId],
-    enabled: !!organizationId,
-    queryFn: () => fetchAllFinancialRecordRows(organizationId!),
+    queryKey: ['patient-financial-records', organizationId, scopeKey, listParams],
+    enabled,
+    queryFn: () => fetchPatientFinancialRecordList(organizationId!, apiScope, listParams),
     staleTime: 60 * 1000,
+    placeholderData: keepPreviousData,
   });
 }
 
 export function usePatientFinancialRecordListTable() {
-  const query = usePatientFinancialRecordList();
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<PatientListSortKey>('contribution');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -238,48 +205,38 @@ export function usePatientFinancialRecordListTable() {
   const [pageSize, setPageSize] = useState(5);
   const [retentionFilter, setRetentionFilter] = useState<PatientListRetentionFilter>('all');
   const [typeFilter, setTypeFilter] = useState<PatientListTypeFilter>('all');
-  const [locationFilter, setLocationFilter] = useState<string>('all');
 
-  const rollupMode = query.data?.rollupMode ?? 'practice';
-
-  const locationOptions = useMemo(
-    () => buildLocationOptions(query.data?.locations ?? [], query.data?.rows ?? []),
-    [query.data?.locations, query.data?.rows],
-  );
-
-  const filtered = useMemo(() => {
-    const allRows = query.data?.rows ?? [];
-    const searched = filterPatientRows(allRows, search);
-    const byLocation =
-      rollupMode === 'location'
-        ? filterPatientRowsByLocation(searched, locationFilter)
-        : searched;
-    return filterPatientRowsByChips(byLocation, retentionFilter, typeFilter);
-  }, [
-    query.data?.rows,
+  const listParams: PePatientListParams = {
+    page,
+    pageSize,
+    sort: sortKey,
+    sortDir,
     search,
     retentionFilter,
     typeFilter,
-    locationFilter,
-    rollupMode,
-  ]);
+  };
 
-  const sorted = useMemo(
-    () => sortPatientRows(filtered, sortKey, sortDir),
-    [filtered, sortKey, sortDir],
-  );
+  const query = usePatientFinancialRecordList(listParams);
 
-  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
-  const effectivePage = Math.min(page, totalPages);
+  const rollupMode =
+    query.data?.rollupMode === 'location' ? 'location' : 'practice';
+
+  const totalRows = query.data?.total ?? 0;
+  const totalUnfiltered = query.data?.totalUnfiltered ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
 
   useEffect(() => {
+    if (query.data == null || query.isPlaceholderData) return;
     if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
+  }, [page, totalPages, query.data, query.isPlaceholderData]);
 
-  const pageRows = useMemo(() => {
-    const start = (effectivePage - 1) * pageSize;
-    return sorted.slice(start, start + pageSize) as PatientFinancialRecordRow[];
-  }, [sorted, effectivePage, pageSize]);
+  const pageRows = useMemo(
+    () =>
+      (query.data?.patients ?? []).map((row) =>
+        mapFinancialRecordRow(row as Record<string, unknown>),
+      ),
+    [query.data?.patients],
+  );
 
   const onSearchChange = (value: string) => {
     setSearch(value);
@@ -311,11 +268,6 @@ export function usePatientFinancialRecordListTable() {
     setPage(1);
   };
 
-  const onLocationFilterChange = (value: string) => {
-    setLocationFilter(value);
-    setPage(1);
-  };
-
   return {
     ...query,
     search,
@@ -324,22 +276,40 @@ export function usePatientFinancialRecordListTable() {
     onRetentionFilterChange,
     typeFilter,
     onTypeFilterChange,
-    locationFilter,
-    onLocationFilterChange,
-    locationOptions,
     sortKey,
     sortDir,
     toggleSort,
-    page: effectivePage,
+    page,
     setPage,
     pageSize,
     onPageSizeChange,
     totalPages,
-    totalRows: sorted.length,
-    totalUnfiltered: query.data?.rows?.length ?? 0,
+    totalRows,
+    totalUnfiltered,
     pageRows,
     rollupMode,
-    hasSyncedPatients: (query.data?.rows?.length ?? 0) > 0,
+    hasSyncedPatients: totalUnfiltered > 0,
+  };
+}
+
+async function fetchPatientFinancialRecord(
+  practiceId: string,
+  patientId: string,
+): Promise<PatientFinancialRecord | null> {
+  const payload = await fetchPatientFinancialRecordApi(practiceId, patientId);
+  if (!payload?.row) return null;
+
+  const row = mapFinancialRecordRow(payload.row as Record<string, unknown>);
+  row.recommendedAction = parseRecommendedAction(row.recommendedAction);
+  return {
+    row,
+    modelled: mapModelledScores(payload.modelled as Record<string, unknown> | null),
+    retention: mapRetention(payload.retention as Record<string, unknown>),
+    invoices: (payload.invoices ?? []).map((r) =>
+      mapInvoiceRow(r as Record<string, unknown>),
+    ),
+    acquisitionSourceName: payload.acquisitionSourceName ?? null,
+    recallHint: payload.recallHint ?? null,
   };
 }
 

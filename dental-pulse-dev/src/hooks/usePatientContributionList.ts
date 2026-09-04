@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { useOrganization } from '@/hooks/useOrganization';
-import { fetchPatientContributionList } from '@/services/integrations/patientEconomicsService';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
+import {
+  fetchPatientContributionList,
+  type PePatientListParams,
+  type PePatientListSummary,
+} from '@/services/integrations/patientEconomicsService';
 import type { PeRetentionStatus, PeRetentionStatusTier } from '@/lib/peRetentionConstants';
 import {
   parseRetentionStatus,
@@ -168,23 +172,20 @@ export function mapPatientContributionRow(raw: Record<string, unknown>): Patient
   };
 }
 
-async function fetchAllPatientRows(
-  practiceId: string,
-): Promise<{
-  rows: PatientContributionRow[];
-  rollupMode: 'location' | 'practice';
-  locations: PeLocationScope[];
-}> {
-  const data = await fetchPatientContributionList(practiceId);
-  return {
-    rows: data.patients.map((row) => mapPatientContributionRow(row)),
-    rollupMode: data.rollupMode === 'location' ? 'location' : 'practice',
-    locations: (data.locations ?? []).map((loc) => ({
-      id: String(loc.id),
-      name: String(loc.name || 'Site'),
-    })),
-  };
-}
+const EMPTY_PATIENT_LIST_SUMMARY: PePatientListSummary = {
+  totalPatients: 0,
+  activePatients: 0,
+  retentionActiveCount: 0,
+  retentionDriftingCount: 0,
+  retentionLapsedCount: 0,
+  retentionEffectivelyLostCount: 0,
+  privatePlanPatients: 0,
+  memberPatients: 0,
+  privateTypePatients: 0,
+  nhsTypePatients: 0,
+  averageContribution: 0,
+  averageProjectedLtv: 0,
+};
 
 export type PeRollupMode = 'location' | 'practice';
 
@@ -521,15 +522,128 @@ export function exportPatientListCsv(
   URL.revokeObjectURL(url);
 }
 
-export function usePatientContributionList() {
-  const { organizationId } = useOrganization();
+export function usePatientContributionList(listParams?: PePatientListParams) {
+  const { organizationId, scopeKey, apiScope, enabled } = usePeScopedRead();
 
   return useQuery({
-    queryKey: ['patient-contribution-list', organizationId],
-    enabled: !!organizationId,
-    queryFn: () => fetchAllPatientRows(organizationId!),
+    queryKey: ['patient-contribution-list', organizationId, scopeKey, listParams],
+    enabled,
+    queryFn: () => fetchPatientContributionList(organizationId!, apiScope, listParams),
     staleTime: 60 * 1000,
+    placeholderData: keepPreviousData,
   });
+}
+
+export function usePatientContributionListTable() {
+  const { organizationId, apiScope } = usePeScopedRead();
+  const [search, setSearch] = useState('');
+  const [sortKey, setSortKey] = useState<PatientListSortKey>('contribution');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(5);
+  const [retentionFilter, setRetentionFilter] = useState<PatientListRetentionFilter>('all');
+  const [typeFilter, setTypeFilter] = useState<PatientListTypeFilter>('all');
+
+  const listParams: PePatientListParams = {
+    page,
+    pageSize,
+    sort: sortKey,
+    sortDir,
+    search,
+    retentionFilter,
+    typeFilter,
+  };
+
+  const query = usePatientContributionList(listParams);
+
+  const rollupMode =
+    query.data?.rollupMode === 'location' ? 'location' : 'practice';
+
+  const totalRows = query.data?.total ?? 0;
+  const totalUnfiltered = query.data?.totalUnfiltered ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+
+  useEffect(() => {
+    // While a new page is loading, `data` is empty (or still the previous page).
+    // Treating that as total=0 used to clamp page back to 1.
+    if (query.data == null || query.isPlaceholderData) return;
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages, query.data, query.isPlaceholderData]);
+
+  const pageRows = useMemo(
+    () => (query.data?.patients ?? []).map((row) => mapPatientContributionRow(row)),
+    [query.data?.patients],
+  );
+
+  const summary = query.data?.summary ?? EMPTY_PATIENT_LIST_SUMMARY;
+  const baselineSummary = query.data?.baselineSummary ?? EMPTY_PATIENT_LIST_SUMMARY;
+
+  const toggleSort = (key: PatientListSortKey) => {
+    if (key === sortKey) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir(key === 'patientName' ? 'asc' : 'desc');
+    }
+    setPage(1);
+  };
+
+  const onSearchChange = (value: string) => {
+    setSearch(value);
+    setPage(1);
+  };
+
+  const onPageSizeChange = (size: number) => {
+    setPageSize(size);
+    setPage(1);
+  };
+
+  const onRetentionFilterChange = (value: PatientListRetentionFilter) => {
+    setRetentionFilter(value);
+    setPage(1);
+  };
+
+  const onTypeFilterChange = (value: PatientListTypeFilter) => {
+    setTypeFilter(value);
+    setPage(1);
+  };
+
+  const exportCsv = async () => {
+    if (!organizationId) return;
+    const data = await fetchPatientContributionList(organizationId, apiScope, {
+      ...listParams,
+      page: 1,
+      listAll: true,
+    });
+    const rows = data.patients.map((row) => mapPatientContributionRow(row));
+    exportPatientListCsv(rows, rollupMode);
+  };
+
+  return {
+    ...query,
+    search,
+    onSearchChange,
+    retentionFilter,
+    onRetentionFilterChange,
+    typeFilter,
+    onTypeFilterChange,
+    rollupMode,
+    sortKey,
+    sortDir,
+    toggleSort,
+    page,
+    setPage,
+    pageSize,
+    onPageSizeChange,
+    totalPages,
+    totalRows,
+    totalUnfiltered,
+    pageRows,
+    summary,
+    baselineSummary,
+    hasSyncedPatients: totalUnfiltered > 0,
+    exportCsv,
+  };
 }
 
 export function filterPatientRows(
@@ -600,130 +714,4 @@ export function sortPatientRows(
     if (an === bn) return mul * a.patientName.localeCompare(b.patientName, 'en-GB');
     return mul * (an - bn);
   });
-}
-
-export function usePatientContributionListTable() {
-  const query = usePatientContributionList();
-  const [search, setSearch] = useState('');
-  const [sortKey, setSortKey] = useState<PatientListSortKey>('contribution');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(5);
-  const [retentionFilter, setRetentionFilter] = useState<PatientListRetentionFilter>('all');
-  const [typeFilter, setTypeFilter] = useState<PatientListTypeFilter>('all');
-  const [locationFilter, setLocationFilter] = useState<string>('all');
-
-  const rollupMode = query.data?.rollupMode ?? 'practice';
-
-  const locationOptions = useMemo(
-    () => buildLocationOptions(query.data?.locations ?? [], query.data?.rows ?? []),
-    [query.data?.locations, query.data?.rows],
-  );
-
-  const filtered = useMemo(() => {
-    const allRows = query.data?.rows ?? [];
-    const searched = filterPatientRows(allRows, search);
-    const byLocation =
-      rollupMode === 'location'
-        ? filterPatientRowsByLocation(searched, locationFilter)
-        : searched;
-    return filterPatientRowsByChips(byLocation, retentionFilter, typeFilter);
-  }, [
-    query.data?.rows,
-    search,
-    retentionFilter,
-    typeFilter,
-    locationFilter,
-    rollupMode,
-  ]);
-
-  const sorted = useMemo(
-    () => sortPatientRows(filtered, sortKey, sortDir),
-    [filtered, sortKey, sortDir],
-  );
-
-  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
-
-  const effectivePage = Math.min(page, totalPages);
-
-  useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
-
-  const pageRows = useMemo(() => {
-    const start = (effectivePage - 1) * pageSize;
-    return sorted.slice(start, start + pageSize);
-  }, [sorted, effectivePage, pageSize]);
-
-  const summary = useMemo(() => computePatientListSummary(sorted), [sorted]);
-
-  const baselineSummary = useMemo(
-    () => computePatientListSummary(query.data?.rows ?? []),
-    [query.data?.rows],
-  );
-
-  const toggleSort = (key: PatientListSortKey) => {
-    if (key === sortKey) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortKey(key);
-      setSortDir(key === 'patientName' ? 'asc' : 'desc');
-    }
-    setPage(1);
-  };
-
-  const onSearchChange = (value: string) => {
-    setSearch(value);
-    setPage(1);
-  };
-
-  const onPageSizeChange = (size: number) => {
-    setPageSize(size);
-    setPage(1);
-  };
-
-  const onRetentionFilterChange = (value: PatientListRetentionFilter) => {
-    setRetentionFilter(value);
-    setPage(1);
-  };
-
-  const onTypeFilterChange = (value: PatientListTypeFilter) => {
-    setTypeFilter(value);
-    setPage(1);
-  };
-
-  const onLocationFilterChange = (value: string) => {
-    setLocationFilter(value);
-    setPage(1);
-  };
-
-  return {
-    ...query,
-    search,
-    onSearchChange,
-    retentionFilter,
-    onRetentionFilterChange,
-    typeFilter,
-    onTypeFilterChange,
-    locationFilter,
-    onLocationFilterChange,
-    locationOptions,
-    rollupMode,
-    sortKey,
-    sortDir,
-    toggleSort,
-    page: effectivePage,
-    setPage,
-    pageSize,
-    onPageSizeChange,
-    totalPages,
-    totalRows: sorted.length,
-    totalUnfiltered: query.data?.rows?.length ?? 0,
-    sorted,
-    pageRows,
-    summary,
-    baselineSummary,
-    hasSyncedPatients: (query.data?.rows?.length ?? 0) > 0,
-    exportCsv: () => exportPatientListCsv(sorted, rollupMode),
-  };
 }

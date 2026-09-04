@@ -31,6 +31,15 @@ export function computePracticeEconomicValueGbp(row: GrowthLeversPracticeRow): n
   );
 }
 
+/** Admin / non-clinical locations: no visit revenue → headroom ranks are not meaningful. */
+export function hasGrowthLeverClinicalData(row: {
+  visitFrequency: number | null;
+  valuePerVisit: number | null;
+}): boolean {
+  if (row.visitFrequency == null || row.valuePerVisit == null) return false;
+  return row.visitFrequency > 0 && Number.isFinite(row.valuePerVisit);
+}
+
 export type LeverYoYMetrics = {
   visitFrequencyDelta: number | null;
   valuePerVisitPctChange: number | null;

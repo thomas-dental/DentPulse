@@ -22,12 +22,16 @@ const { syncPayments } = require('../services/patientEconomics/sync/syncPayments
 const {
   kickoffIncremental,
   kickoffFull,
+  kickoffPeriod,
   runIncrementalKickoffTick,
   runFullKickoffTick,
 } = require('../services/patientEconomics/sync/peScheduleKickoff');
+const { parseReadScope } = require('../services/patientEconomics/peReadScope');
+const { getPeriodCoverage } = require('../services/patientEconomics/sync/periodCoverage');
 const { getSyncStatusByPractice } = require('../services/patientEconomics/sync/cursorStore');
 const { getDevOverview, getDevCounts, browseDevRows } = require('../services/patientEconomics/sync/peDevOverview');
 const { backfillPracticeEventLedger } = require('../services/patientEconomics/sync/eventLedgerBackfill');
+const { backfillEventLedgerLocation } = require('../services/patientEconomics/sync/eventLedgerLocationBackfill');
 const { listTicks } = require('../services/patientEconomics/sync/peTickHistory');
 const {
   listPractitionerRates,
@@ -86,6 +90,13 @@ const {
 const {
   getConversionProbabilitiesSummary,
 } = require('../services/patientEconomics/conversionProbabilities');
+const {
+  getInvoicesSummaryCached,
+  getInvoicesHeroCached,
+  getInvoicesAgedDebtCached,
+  getInvoicesCollectionByLocationCached,
+  getInvoicesListCached,
+} = require('../services/patientEconomics/invoicesSummary');
 
 const router = express.Router();
 
@@ -721,6 +732,74 @@ router.get('/sync/status', syncAuthMiddleware, async (req, res) => {
 });
 
 /**
+ * GET /api/economics-engine/sync/period-coverage?practiceId=&startDate=&endDate=&locationId=
+ */
+router.get('/sync/period-coverage', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    const startDate = req.query?.startDate;
+    const endDate = req.query?.endDate;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        error: 'startDate and endDate (YYYY-MM-DD) are required',
+      });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const scope = parseReadScope(req.query);
+    const coverage = await getPeriodCoverage(practiceId, {
+      startDate: scope.startDate || startDate,
+      endDate: scope.endDate || endDate,
+      locationId: scope.locationId,
+    });
+    return res.json({ success: true, ...coverage });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /sync/period-coverage error:', err.message);
+    return res.status(500).json({ success: false, error: err.message || 'Internal error' });
+  }
+});
+
+/**
+ * POST /api/economics-engine/sync/kickoff-period
+ * Body: { practiceId, startDate, endDate }
+ */
+router.post('/sync/kickoff-period', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.body?.practiceId || req.query?.practiceId;
+    const startDate = req.body?.startDate;
+    const endDate = req.body?.endDate;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        error: 'startDate and endDate (YYYY-MM-DD) are required',
+      });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const result = await kickoffPeriod(practiceId, startDate, endDate);
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[EconomicsEngine] POST /sync/kickoff-period error:', err.message);
+    return res.status(500).json({ success: false, error: err.message || 'Internal error' });
+  }
+});
+
+/**
  * GET /api/economics-engine/sync/dev/counts?practiceId=
  * Row counts only — fast first paint for the inspector.
  */
@@ -840,7 +919,8 @@ router.post('/sync/dev/backfill-ledger', syncAuthMiddleware, async (req, res) =>
       : undefined;
 
     const result = await backfillPracticeEventLedger(practiceId, { entities });
-    return res.json({ success: true, ...result });
+    const location = await backfillEventLedgerLocation(practiceId);
+    return res.json({ success: true, ...result, location });
   } catch (err) {
     console.error('[EconomicsEngine] POST /sync/dev/backfill-ledger error:', err.message);
     return res.status(500).json({ success: false, error: err.message || 'Internal error' });
@@ -1018,7 +1098,7 @@ router.get('/journey/treatment-economic', syncAuthMiddleware, async (req, res) =
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const journey = await getTreatmentEconomicJourney(practiceId);
+    const journey = await getTreatmentEconomicJourney(practiceId, parseReadScope(req.query));
     return res.json({ success: true, practiceId, ...journey });
   } catch (err) {
     console.error('[EconomicsEngine] GET /journey/treatment-economic error:', err.message);
@@ -1041,7 +1121,8 @@ router.get('/read/patient-contribution-list', syncAuthMiddleware, async (req, re
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const payload = await getPatientContributionList(practiceId);
+    const scope = parseReadScope(req.query);
+    const payload = await getPatientContributionList(practiceId, scope, req.query);
     return res.json({ success: true, ...payload });
   } catch (err) {
     console.error('[EconomicsEngine] GET /read/patient-contribution-list error:', err.message);
@@ -1064,7 +1145,8 @@ router.get('/read/patient-financial-records', syncAuthMiddleware, async (req, re
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const payload = await getPatientFinancialRecordList(practiceId);
+    const scope = parseReadScope(req.query);
+    const payload = await getPatientFinancialRecordList(practiceId, scope, req.query);
     return res.json({ success: true, ...payload });
   } catch (err) {
     console.error('[EconomicsEngine] GET /read/patient-financial-records error:', err.message);
@@ -1165,6 +1247,121 @@ router.get('/read/patient-invoices', syncAuthMiddleware, async (req, res) => {
 });
 
 /**
+ * GET /api/economics-engine/read/invoices-summary?practiceId=
+ * Aged debt, collection rate, paginated invoice worklist (server-side filters).
+ */
+router.get('/read/invoices-summary', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const scope = parseReadScope(req.query);
+    const payload = await getInvoicesSummaryCached(practiceId, req.user.id, scope, req.query);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/invoices-summary error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load invoices summary' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/invoices-hero?practiceId=
+ * Five invoice KPI cards.
+ */
+router.get('/read/invoices-hero', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+    const scope = parseReadScope(req.query);
+    const payload = await getInvoicesHeroCached(practiceId, req.user.id, scope);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/invoices-hero error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load invoices hero' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/invoices-aged-debt?practiceId=
+ */
+router.get('/read/invoices-aged-debt', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+    const scope = parseReadScope(req.query);
+    const payload = await getInvoicesAgedDebtCached(practiceId, req.user.id, scope);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/invoices-aged-debt error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load aged debt' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/invoices-collection-by-location?practiceId=
+ */
+router.get('/read/invoices-collection-by-location', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+    const scope = parseReadScope(req.query);
+    const payload = await getInvoicesCollectionByLocationCached(practiceId, req.user.id, scope);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/invoices-collection-by-location error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load collection by location' });
+  }
+});
+
+/**
+ * GET /api/economics-engine/read/invoices-list?practiceId=
+ * Paginated invoice worklist.
+ */
+router.get('/read/invoices-list', syncAuthMiddleware, async (req, res) => {
+  try {
+    const practiceId = req.query?.practiceId;
+    if (!practiceId || !isUuid(practiceId)) {
+      return res.status(400).json({ success: false, error: 'practiceId (UUID) is required' });
+    }
+    const access = await verifyPracticeAccess(req.user.id, practiceId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+    const scope = parseReadScope(req.query);
+    const payload = await getInvoicesListCached(practiceId, req.user.id, scope, req.query);
+    return res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[EconomicsEngine] GET /read/invoices-list error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to load invoices list' });
+  }
+});
+
+/**
  * GET /api/economics-engine/read/invoice-contribution-summary?practiceId=
  */
 router.get('/read/invoice-contribution-summary', syncAuthMiddleware, async (req, res) => {
@@ -1179,7 +1376,8 @@ router.get('/read/invoice-contribution-summary', syncAuthMiddleware, async (req,
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const summary = await getInvoiceContributionSummary(practiceId);
+    const scope = parseReadScope(req.query);
+    const summary = await getInvoiceContributionSummary(practiceId, scope);
     return res.json({ success: true, practiceId, summary });
   } catch (err) {
     console.error('[EconomicsEngine] GET /read/invoice-contribution-summary error:', err.message);
@@ -1189,7 +1387,8 @@ router.get('/read/invoice-contribution-summary', syncAuthMiddleware, async (req,
 
 /**
  * GET /api/economics-engine/read/economic-pulse-hero?practiceId=
- * Combined hero-row metrics (invoice, leakage, retention at-risk, growth LTV inputs).
+ * Fast Existing Patient Value + revenue mix (invoice summary only).
+ * Cards 2–5 use value-leakage-summary, retention-contribution-at-risk, growth-levers-summary.
  */
 router.get('/read/economic-pulse-hero', syncAuthMiddleware, async (req, res) => {
   try {
@@ -1203,7 +1402,8 @@ router.get('/read/economic-pulse-hero', syncAuthMiddleware, async (req, res) => 
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const hero = await getEconomicPulseHero(practiceId);
+    const scope = parseReadScope(req.query);
+    const hero = await getEconomicPulseHero(practiceId, scope);
     return res.json({ success: true, practiceId, ...hero });
   } catch (err) {
     console.error('[EconomicsEngine] GET /read/economic-pulse-hero error:', err.message);
@@ -1217,7 +1417,8 @@ router.get('/read/economic-pulse-hero', syncAuthMiddleware, async (req, res) => 
  */
 router.get('/read/practice-contribution-rollup', syncAuthMiddleware, async (req, res) => {
   try {
-    const payload = await getPracticeContributionRollup(req.user.id);
+    const scope = parseReadScope(req.query);
+    const payload = await getPracticeContributionRollup(req.user.id, scope);
     return res.json({ success: true, ...payload });
   } catch (err) {
     console.error('[EconomicsEngine] GET /read/practice-contribution-rollup error:', err.message);
@@ -1241,7 +1442,8 @@ router.get('/read/planned-unscheduled-leakage', syncAuthMiddleware, async (req, 
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const payload = await getPlannedUnscheduledLeakage(practiceId);
+    const scope = parseReadScope(req.query);
+    const payload = await getPlannedUnscheduledLeakage(practiceId, scope);
     return res.json({ success: true, ...payload });
   } catch (err) {
     console.error('[EconomicsEngine] GET /read/planned-unscheduled-leakage error:', err.message);
@@ -1268,7 +1470,8 @@ router.get('/read/value-leakage-summary', syncAuthMiddleware, async (req, res) =
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const summary = await getValueLeakageSummary(practiceId);
+    const scope = parseReadScope(req.query);
+    const summary = await getValueLeakageSummary(practiceId, scope);
     return res.json({ success: true, ...summary });
   } catch (err) {
     console.error('[EconomicsEngine] GET /read/value-leakage-summary error:', err.message);
@@ -1295,7 +1498,8 @@ router.get('/read/growth-levers-summary', syncAuthMiddleware, async (req, res) =
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const summary = await getGrowthLeversSummary(practiceId);
+    const scope = parseReadScope(req.query);
+    const summary = await getGrowthLeversSummary(practiceId, scope);
     return res.json({ success: true, ...summary });
   } catch (err) {
     console.error('[EconomicsEngine] GET /read/growth-levers-summary error:', err.message);
@@ -1322,7 +1526,8 @@ router.get('/read/growth-levers-by-practice', syncAuthMiddleware, async (req, re
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const payload = await getGrowthLeversByPractice(req.user.id, practiceId);
+    const scope = parseReadScope(req.query);
+    const payload = await getGrowthLeversByPractice(req.user.id, practiceId, scope);
     return res.json({ success: true, ...payload });
   } catch (err) {
     console.error('[EconomicsEngine] GET /read/growth-levers-by-practice error:', err.message);
@@ -1349,7 +1554,8 @@ router.get('/read/retention-contribution-at-risk', syncAuthMiddleware, async (re
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const payload = await getRetentionContributionAtRisk(req.user.id, practiceId);
+    const scope = parseReadScope(req.query);
+    const payload = await getRetentionContributionAtRisk(req.user.id, practiceId, scope);
     return res.json({ success: true, ...payload });
   } catch (err) {
     console.error(
@@ -1379,7 +1585,8 @@ router.get('/read/retention-recovery-loop', syncAuthMiddleware, async (req, res)
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const payload = await getRetentionRecoveryLoop(req.user.id, practiceId);
+    const scope = parseReadScope(req.query);
+    const payload = await getRetentionRecoveryLoop(req.user.id, practiceId, scope);
     return res.json({ success: true, ...payload });
   } catch (err) {
     console.error('[EconomicsEngine] GET /read/retention-recovery-loop error:', err.message);
@@ -1406,7 +1613,8 @@ router.get('/read/cltv-by-acquisition-source', syncAuthMiddleware, async (req, r
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const payload = await getCltvByAcquisitionSource(practiceId);
+    const scope = parseReadScope(req.query);
+    const payload = await getCltvByAcquisitionSource(practiceId, scope);
     return res.json({ success: true, ...payload });
   } catch (err) {
     console.error('[EconomicsEngine] GET /read/cltv-by-acquisition-source error:', err.message);
@@ -1433,7 +1641,8 @@ router.get('/read/goal-settings', syncAuthMiddleware, async (req, res) => {
       return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    const payload = await getGoalSettingsSummary(req.user.id, practiceId);
+    const scope = parseReadScope(req.query);
+    const payload = await getGoalSettingsSummary(req.user.id, practiceId, scope);
     return res.json({ success: true, ...payload });
   } catch (err) {
     console.error('[EconomicsEngine] GET /read/goal-settings error:', err.message);

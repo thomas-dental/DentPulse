@@ -2,7 +2,9 @@
  * Retention & Reactivation — contribution at risk charts.
  */
 
-import { Link } from 'react-router-dom';
+import { ChevronDown, ChevronUp } from 'lucide-react';
+
+import { DentallyPatientLink } from '@/components/patient-economics/DentallyLinks';
 
 import type {
   ReactivationFlagRow,
@@ -184,9 +186,9 @@ export function ContributionAtRiskBySegmentChart({
   );
 }
 
-/** Recovery Loop™ funnel — flagged → recovered contribution £ at each stage. */
+/** Recovery Loop™ funnel — always five stages (mockup v5.1), even when £ is zero. */
 export function RecoveryLoopFunnelChart({ funnel }: { funnel: RecoveryFunnel }) {
-  const stages = funnel.stages.filter((s) => s.valueGbp > 0 || s.key === 'flagged');
+  const stages = funnel.stages;
   if (stages.length === 0 || funnel.flaggedAtRiskGbp <= 0) {
     return (
       <p className="py-8 text-center text-sm text-muted-foreground">
@@ -204,6 +206,7 @@ export function RecoveryLoopFunnelChart({ funnel }: { funnel: RecoveryFunnel }) 
   const bw = W - pl - pr;
   const grid = 'hsl(var(--border))';
   const labelColor = 'hsl(246 79% 25%)';
+  const muted = 'hsl(var(--muted-foreground))';
 
   return (
     <svg
@@ -230,8 +233,16 @@ export function RecoveryLoopFunnelChart({ funnel }: { funnel: RecoveryFunnel }) 
               {stage.label}
             </text>
             <rect x={pl} y={yy + 4} width={bw} height={21} rx={4} fill={grid} opacity={0.45} />
-            <rect x={pl} y={yy + 4} width={w} height={21} rx={4} fill={col} />
-            <text x={pl + w + 6} y={yy + 20} fontSize={PE_CHART_VALUE_PX} fontWeight={700} fill={col}>
+            {w > 0 && (
+              <rect x={pl} y={yy + 4} width={w} height={21} rx={4} fill={col} />
+            )}
+            <text
+              x={pl + (w > 0 ? w + 6 : 6)}
+              y={yy + 20}
+              fontSize={PE_CHART_VALUE_PX}
+              fontWeight={700}
+              fill={stage.valueGbp > 0 ? col : muted}
+            >
               {formatGbpCompact(stage.valueGbp)}
             </text>
           </g>
@@ -511,15 +522,68 @@ function WorkflowStatusPill({ status }: { status: ReactivationWorklistRow['workf
   );
 }
 
+export type WorklistSortKey =
+  | 'patientName'
+  | 'practiceName'
+  | 'lastVisitAt'
+  | 'daysOverdue'
+  | 'histContributionYr'
+  | 'contributionAtRiskAtFlagTime'
+  | 'ownerName'
+  | 'workflowStatus';
+
+function WorklistSortHeader({
+  label,
+  sortKey,
+  activeKey,
+  sortDir,
+  onSort,
+  alignRight = false,
+}: {
+  label: string;
+  sortKey: WorklistSortKey;
+  activeKey: WorklistSortKey;
+  sortDir: 'asc' | 'desc';
+  onSort: (key: WorklistSortKey) => void;
+  alignRight?: boolean;
+}) {
+  const active = activeKey === sortKey;
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(sortKey)}
+      className={cn(
+        'inline-flex items-center gap-0.5 text-[12px] font-semibold hover:text-foreground',
+        active ? 'text-foreground' : 'text-muted-foreground',
+        alignRight && 'ml-auto',
+      )}
+    >
+      {label}
+      {active &&
+        (sortDir === 'asc' ? (
+          <ChevronUp className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+        ))}
+    </button>
+  );
+}
+
 /** Financially-prioritised reactivation worklist — mockup v5.1 columns. */
 export function ReactivationWorklistTable({
   rows,
   showPractice = true,
   isFiltered = false,
+  sortKey,
+  sortDir,
+  onSort,
 }: {
   rows: ReactivationWorklistRow[];
   showPractice?: boolean;
   isFiltered?: boolean;
+  sortKey: WorklistSortKey;
+  sortDir: 'asc' | 'desc';
+  onSort: (key: WorklistSortKey) => void;
 }) {
   if (rows.length === 0) {
     if (isFiltered) {
@@ -543,17 +607,84 @@ export function ReactivationWorklistTable({
     <div className="overflow-x-auto">
       <table className="w-full min-w-[960px] border-collapse text-[13px]">
         <thead>
-          <tr className="border-b border-border text-left text-[12px] font-semibold text-muted-foreground">
-            <th className="whitespace-nowrap px-3 py-2.5">Patient</th>
+          <tr className="border-b border-border text-left">
+            <th className="whitespace-nowrap px-3 py-2.5">
+              <WorklistSortHeader
+                label="Patient"
+                sortKey="patientName"
+                activeKey={sortKey}
+                sortDir={sortDir}
+                onSort={onSort}
+              />
+            </th>
             {showPractice && (
-              <th className="whitespace-nowrap px-3 py-2.5">Practice</th>
+              <th className="whitespace-nowrap px-3 py-2.5">
+                <WorklistSortHeader
+                  label="Practice"
+                  sortKey="practiceName"
+                  activeKey={sortKey}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                />
+              </th>
             )}
-            <th className="whitespace-nowrap px-3 py-2.5">Last visit</th>
-            <th className="whitespace-nowrap px-3 py-2.5 text-right">Days overdue</th>
-            <th className="whitespace-nowrap px-3 py-2.5 text-right">Hist. contribution/yr</th>
-            <th className="whitespace-nowrap px-3 py-2.5 text-right">Contribution at risk</th>
-            <th className="whitespace-nowrap px-3 py-2.5">Owner</th>
-            <th className="whitespace-nowrap px-3 py-2.5">Status</th>
+            <th className="whitespace-nowrap px-3 py-2.5">
+              <WorklistSortHeader
+                label="Last visit"
+                sortKey="lastVisitAt"
+                activeKey={sortKey}
+                sortDir={sortDir}
+                onSort={onSort}
+              />
+            </th>
+            <th className="whitespace-nowrap px-3 py-2.5 text-right">
+              <WorklistSortHeader
+                label="Days overdue"
+                sortKey="daysOverdue"
+                activeKey={sortKey}
+                sortDir={sortDir}
+                onSort={onSort}
+                alignRight
+              />
+            </th>
+            <th className="whitespace-nowrap px-3 py-2.5 text-right">
+              <WorklistSortHeader
+                label="Hist. contribution/yr"
+                sortKey="histContributionYr"
+                activeKey={sortKey}
+                sortDir={sortDir}
+                onSort={onSort}
+                alignRight
+              />
+            </th>
+            <th className="whitespace-nowrap px-3 py-2.5 text-right">
+              <WorklistSortHeader
+                label="Contribution at risk"
+                sortKey="contributionAtRiskAtFlagTime"
+                activeKey={sortKey}
+                sortDir={sortDir}
+                onSort={onSort}
+                alignRight
+              />
+            </th>
+            <th className="whitespace-nowrap px-3 py-2.5">
+              <WorklistSortHeader
+                label="Owner"
+                sortKey="ownerName"
+                activeKey={sortKey}
+                sortDir={sortDir}
+                onSort={onSort}
+              />
+            </th>
+            <th className="whitespace-nowrap px-3 py-2.5">
+              <WorklistSortHeader
+                label="Status"
+                sortKey="workflowStatus"
+                activeKey={sortKey}
+                sortDir={sortDir}
+                onSort={onSort}
+              />
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -572,12 +703,9 @@ export function ReactivationWorklistTable({
                 className="border-b border-border/60 last:border-b-0 hover:bg-primary/[0.04]"
               >
                 <td className="px-3 py-3">
-                  <Link
-                    to={`/patients?tab=patient-records&patientId=${encodeURIComponent(row.patientId)}`}
-                    className="font-semibold text-primary hover:underline"
-                  >
+                  <DentallyPatientLink dentallyPatientUuid={row.dentallyPatientUuid}>
                     {row.patientName}
-                  </Link>
+                  </DentallyPatientLink>
                 </td>
                 {showPractice && (
                   <td className="px-3 py-3 text-foreground">{row.practiceName ?? '—'}</td>
@@ -642,7 +770,11 @@ export function RecoveryLoopPatientTable({ flags }: { flags: ReactivationFlagRow
         <tbody>
           {rows.map((row) => (
             <tr key={row.flagId} className={PE_TABLE_ROW_CLASS}>
-              <td className={cn(PE_TABLE_BODY_CELL_CLASS, 'font-medium text-foreground')}>{row.patientName}</td>
+              <td className={cn(PE_TABLE_BODY_CELL_CLASS, 'font-medium text-foreground')}>
+                <DentallyPatientLink dentallyPatientUuid={row.dentallyPatientUuid}>
+                  {row.patientName}
+                </DentallyPatientLink>
+              </td>
               <td className={cn(PE_TABLE_BODY_CELL_CLASS, 'capitalize')}>
                 {row.segmentAtFlagTime.replace('_', ' ')}
               </td>

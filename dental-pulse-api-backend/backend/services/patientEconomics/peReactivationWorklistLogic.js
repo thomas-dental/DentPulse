@@ -138,10 +138,10 @@ function buildRecoveryFunnel(flagRows, openWorklist = []) {
     bankedPct,
     stages: [
       { key: 'flagged', label: 'Flagged at risk', valueGbp: flaggedAtRiskGbp },
-      { key: 'assigned', label: 'In recovery loop', valueGbp: assignedGbp },
+      { key: 'assigned', label: 'Assigned', valueGbp: assignedGbp },
       { key: 'contacted', label: 'Contacted', valueGbp: contactedGbp },
       { key: 'booked', label: 'Booked', valueGbp: bookedGbp },
-      { key: 'recovered', label: 'At-risk recovered', valueGbp: recoveredAtRiskGbp },
+      { key: 'recovered', label: 'Recovered', valueGbp: recoveredAtRiskGbp },
     ],
   };
 }

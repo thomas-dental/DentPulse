@@ -367,35 +367,20 @@ export type TreatmentEconomicJourneyResponse = {
 /** Aggregated Treatment Economic Journey™ from backend (event_ledger rollup). */
 export async function fetchTreatmentEconomicJourney(
   practiceId: string,
+  scope?: PeApiScope,
 ): Promise<TreatmentEconomicJourneyResponse> {
-  const headers = await getAuthHeaders();
-  const params = new URLSearchParams({ practiceId });
-  const res = await fetch(
-    `${getBackendUrl()}/api/economics-engine/journey/treatment-economic?${params}`,
-    { method: 'GET', headers },
-  );
-  const body = await res.json().catch(
-    () =>
-      ({} as {
-        success?: boolean;
-        error?: string;
-        stages?: TreatmentEconomicJourneyStage[];
-        totalEvents?: number;
-        plannedEventCount?: number;
-        isBackfilling?: boolean;
-      }),
-  );
-
-  if (!res.ok || !body.success) {
-    throw new Error(body.error || `Failed to load treatment economic journey (${res.status})`);
-  }
-
-  return {
+  return economicsReadGet<{
+    success: true;
+    stages: TreatmentEconomicJourneyStage[];
+    totalEvents: number;
+    plannedEventCount: number;
+    isBackfilling: boolean;
+  }>('/journey/treatment-economic', scopeToParams(practiceId, scope)).then((body) => ({
     stages: body.stages || [],
     totalEvents: body.totalEvents ?? 0,
     plannedEventCount: body.plannedEventCount ?? 0,
     isBackfilling: body.isBackfilling === true,
-  };
+  }));
 }
 
 async function economicsReadGet<T>(
@@ -415,8 +400,118 @@ async function economicsReadGet<T>(
   return body;
 }
 
-/** Patient List rows — server aggregates v_patient_contribution + 12mo metrics. */
-export async function fetchPatientContributionList(practiceId: string) {
+/** Optional TopBar scope for PE read APIs. */
+export type PeApiScope = {
+  locationId?: string | null;
+  startDate?: string;
+  endDate?: string;
+};
+
+function scopeToParams(practiceId: string, scope?: PeApiScope): Record<string, string> {
+  const params: Record<string, string> = { practiceId };
+  if (scope?.locationId) params.locationId = scope.locationId;
+  if (scope?.startDate) params.startDate = scope.startDate;
+  if (scope?.endDate) params.endDate = scope.endDate;
+  return params;
+}
+
+export type PePeriodCoverage = {
+  practiceId: string;
+  startDate: string;
+  endDate: string;
+  locationId: string | null;
+  configuredStart: string;
+  hasData: boolean;
+  needsSync: boolean;
+  beforeConfiguredStart: boolean;
+  syncInProgress: boolean;
+  invoiceCount: number;
+  ledgerCount: number;
+};
+
+export async function fetchPePeriodCoverage(
+  practiceId: string,
+  scope: { startDate: string; endDate: string; locationId?: string | null },
+): Promise<PePeriodCoverage> {
+  const params: Record<string, string> = {
+    practiceId,
+    startDate: scope.startDate,
+    endDate: scope.endDate,
+  };
+  if (scope.locationId) params.locationId = scope.locationId;
+  return economicsReadGet<PePeriodCoverage & { success: true }>(
+    '/sync/period-coverage',
+    params,
+  );
+}
+
+export async function kickoffPePeriodSync(
+  practiceId: string,
+  scope: { startDate: string; endDate: string },
+): Promise<{ success: true; action: string; mode: string }> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${getBackendUrl()}/api/economics-engine/sync/kickoff-period`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      practiceId,
+      startDate: scope.startDate,
+      endDate: scope.endDate,
+    }),
+  });
+  const body = await res.json().catch(() => ({} as { success?: boolean; error?: string }));
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Kickoff failed (${res.status})`);
+  }
+  return body as { success: true; action: string; mode: string };
+}
+
+/** Patient List rows — server paginated contribution roster. */
+export type PePatientListParams = {
+  page?: number;
+  pageSize?: number;
+  sort?: string;
+  sortDir?: 'asc' | 'desc';
+  search?: string;
+  retentionFilter?: string;
+  typeFilter?: string;
+  listAll?: boolean;
+};
+
+export type PePatientListSummary = {
+  totalPatients: number;
+  activePatients: number;
+  retentionActiveCount: number;
+  retentionDriftingCount: number;
+  retentionLapsedCount: number;
+  retentionEffectivelyLostCount: number;
+  privatePlanPatients: number;
+  memberPatients: number;
+  privateTypePatients: number;
+  nhsTypePatients: number;
+  averageContribution: number;
+  averageProjectedLtv: number;
+};
+
+function listParamsToQuery(params?: PePatientListParams): Record<string, string> {
+  if (!params) return {};
+  const out: Record<string, string> = {};
+  if (params.page != null) out.page = String(params.page);
+  if (params.pageSize != null) out.pageSize = String(params.pageSize);
+  if (params.sort) out.sort = params.sort;
+  if (params.sortDir) out.sortDir = params.sortDir;
+  if (params.search) out.search = params.search;
+  if (params.retentionFilter) out.retentionFilter = params.retentionFilter;
+  if (params.typeFilter) out.typeFilter = params.typeFilter;
+  if (params.listAll) out.listAll = 'true';
+  return out;
+}
+
+export async function fetchPatientContributionList(
+  practiceId: string,
+  scope?: PeApiScope,
+  listParams?: PePatientListParams,
+) {
   return economicsReadGet<{
     success: true;
     practiceId: string;
@@ -424,11 +519,26 @@ export async function fetchPatientContributionList(practiceId: string) {
     rollupMode: 'location' | 'practice';
     locations: Array<{ id: string; name: string }>;
     patients: Array<Record<string, unknown>>;
-  }>('/read/patient-contribution-list', { practiceId });
+    total: number;
+    totalUnfiltered: number;
+    page: number;
+    pageSize: number;
+    sort: string;
+    sortDir: 'asc' | 'desc';
+    summary: PePatientListSummary;
+    baselineSummary: PePatientListSummary;
+  }>('/read/patient-contribution-list', {
+    ...scopeToParams(practiceId, scope),
+    ...listParamsToQuery(listParams),
+  });
 }
 
 /** Patient Financial Records roster rows. */
-export async function fetchPatientFinancialRecordList(practiceId: string) {
+export async function fetchPatientFinancialRecordList(
+  practiceId: string,
+  scope?: PeApiScope,
+  listParams?: PePatientListParams,
+) {
   return economicsReadGet<{
     success: true;
     practiceId: string;
@@ -436,7 +546,18 @@ export async function fetchPatientFinancialRecordList(practiceId: string) {
     rollupMode: 'location' | 'practice';
     locations: Array<{ id: string; name: string }>;
     patients: Array<Record<string, unknown>>;
-  }>('/read/patient-financial-records', { practiceId });
+    total: number;
+    totalUnfiltered: number;
+    page: number;
+    pageSize: number;
+    sort: string;
+    sortDir: 'asc' | 'desc';
+    summary: PePatientListSummary;
+    baselineSummary: PePatientListSummary;
+  }>('/read/patient-financial-records', {
+    ...scopeToParams(practiceId, scope),
+    ...listParamsToQuery(listParams),
+  });
 }
 
 /** Single patient financial record detail. Returns null when patient not in PE data. */
@@ -494,44 +615,186 @@ export async function fetchPatientInvoicesApi(practiceId: string, patientId: str
 }
 
 /** Economic Pulse practice rollup from v_invoice_contribution. */
-export async function fetchInvoiceContributionSummaryApi(practiceId: string) {
+export async function fetchInvoiceContributionSummaryApi(practiceId: string, scope?: PeApiScope) {
   return economicsReadGet<{
     success: true;
     practiceId: string;
     summary: Record<string, unknown>;
-  }>('/read/invoice-contribution-summary', { practiceId });
+  }>('/read/invoice-contribution-summary', scopeToParams(practiceId, scope));
 }
 
-/** Economic Pulse hero row — combined invoice, leakage, retention, growth metrics. */
-export async function fetchEconomicPulseHeroApi(practiceId: string) {
+/** PE Invoices tab — aged debt, collection rate, server-paginated worklist. */
+export async function fetchInvoicesSummaryApi(
+  practiceId: string,
+  scope?: PeApiScope,
+  listParams?: import('@/services/integrations/peInvoicesTypes').PeInvoicesListParams,
+) {
+  const params: Record<string, string> = scopeToParams(practiceId, scope);
+  if (listParams?.page != null) params.page = String(listParams.page);
+  if (listParams?.pageSize != null) params.pageSize = String(listParams.pageSize);
+  if (listParams?.sort) params.sort = listParams.sort;
+  if (listParams?.sortDir) params.sortDir = listParams.sortDir;
+  if (listParams?.search) params.search = listParams.search;
+  if (listParams?.statusFilter) params.statusFilter = listParams.statusFilter;
+  if (listParams?.cashLeakageOnly) params.cashLeakageOnly = 'true';
+
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    trailingMonths: number;
+    trailingSince: string;
+    cashLeakageWindowDays: number;
+    cashLeakageCount: number;
+    cashLeakageGbp: number;
+    totalOutstandingGbp: number;
+    overdue60PlusGbp: number;
+    collectedTrailingGbp: number;
+    invoicedTrailingGbp: number;
+    collectionRate: number | null;
+    onPaymentPlanOutstandingGbp: number;
+    onPaymentPlanArrangementCount: number;
+    agedBuckets: Array<{
+      bucket: string;
+      label: string;
+      outstandingGbp: number;
+      invoiceCount: number;
+    }>;
+    invoiceListRows: Array<Record<string, unknown>>;
+    collectionByPractice: Array<{
+      practiceId: string;
+      practiceName: string;
+      invoicedGbp: number;
+      collectedGbp: number;
+      collectionRate: number | null;
+    }>;
+    rollupMode: 'location' | 'practice';
+    total: number;
+    page: number;
+    pageSize: number;
+    sort: string;
+    sortDir: 'asc' | 'desc';
+  }>('/read/invoices-summary', params);
+}
+
+function invoicesScopeParams(
+  practiceId: string,
+  scope?: PeApiScope,
+  listParams?: import('@/services/integrations/peInvoicesTypes').PeInvoicesListParams,
+) {
+  const params: Record<string, string> = scopeToParams(practiceId, scope);
+  if (listParams?.page != null) params.page = String(listParams.page);
+  if (listParams?.pageSize != null) params.pageSize = String(listParams.pageSize);
+  if (listParams?.sort) params.sort = listParams.sort;
+  if (listParams?.sortDir) params.sortDir = listParams.sortDir;
+  if (listParams?.search) params.search = listParams.search;
+  if (listParams?.statusFilter) params.statusFilter = listParams.statusFilter;
+  if (listParams?.cashLeakageOnly) params.cashLeakageOnly = 'true';
+  return params;
+}
+
+/** Invoice tab — five KPI cards. */
+export async function fetchInvoicesHeroApi(practiceId: string, scope?: PeApiScope) {
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    trailingMonths: number;
+    trailingSince: string;
+    rollupMode: 'location' | 'practice';
+    invoicedTrailingGbp: number;
+    collectedTrailingGbp: number;
+    collectionRate: number | null;
+    totalOutstandingGbp: number;
+    overdue60PlusGbp: number;
+    onPaymentPlanOutstandingGbp: number;
+    onPaymentPlanArrangementCount: number;
+  }>('/read/invoices-hero', scopeToParams(practiceId, scope));
+}
+
+/** Invoice tab — aged debt buckets. */
+export async function fetchInvoicesAgedDebtApi(practiceId: string, scope?: PeApiScope) {
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    trailingMonths: number;
+    rollupMode: 'location' | 'practice';
+    totalOutstandingGbp: number;
+    agedBuckets: Array<{
+      bucket: string;
+      label: string;
+      outstandingGbp: number;
+      invoiceCount: number;
+    }>;
+  }>('/read/invoices-aged-debt', scopeToParams(practiceId, scope));
+}
+
+/** Invoice tab — collection rate by location/practice. */
+export async function fetchInvoicesCollectionByLocationApi(
+  practiceId: string,
+  scope?: PeApiScope,
+) {
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    trailingMonths: number;
+    rollupMode: 'location' | 'practice';
+    collectionByPractice: Array<{
+      practiceId: string;
+      practiceName: string;
+      invoicedGbp: number;
+      collectedGbp: number;
+      collectionRate: number | null;
+    }>;
+  }>('/read/invoices-collection-by-location', scopeToParams(practiceId, scope));
+}
+
+/** Invoice tab — paginated worklist. */
+export async function fetchInvoicesListApi(
+  practiceId: string,
+  scope?: PeApiScope,
+  listParams?: import('@/services/integrations/peInvoicesTypes').PeInvoicesListParams,
+) {
+  return economicsReadGet<{
+    success: true;
+    practiceId: string;
+    trailingMonths: number;
+    trailingSince: string;
+    cashLeakageWindowDays: number;
+    cashLeakageCount: number;
+    cashLeakageGbp: number;
+    rollupMode: 'location' | 'practice';
+    invoiceListRows: Array<Record<string, unknown>>;
+    total: number;
+    page: number;
+    pageSize: number;
+    sort: string;
+    sortDir: 'asc' | 'desc';
+  }>('/read/invoices-list', invoicesScopeParams(practiceId, scope, listParams));
+}
+
+/** Economic Pulse hero — invoice contribution + UDA lens only (cards 2–5 load separately). */
+export async function fetchEconomicPulseHeroApi(practiceId: string, scope?: PeApiScope) {
   return economicsReadGet<{
     success: true;
     practiceId: string;
     invoiceSummary: Record<string, unknown>;
-    opportunityWeighted: number;
-    opportunityGross: number;
-    opportunityWeightedTier: string;
-    atRiskContributionGbp: number;
-    retentionTier: string;
-    commitmentRate30d: number;
-    commitmentRate30dTier: string;
-    avgAnnualContribution: number | null;
-    projectedLtv: number | null;
-    projectedLtvTier: string;
-  }>('/read/economic-pulse-hero', { practiceId });
+  }>('/read/economic-pulse-hero', scopeToParams(practiceId, scope));
 }
 
 /** Cost Impact / multi-site practice contribution rollup (backend RPCs). */
-export async function fetchPracticeContributionRollupApi() {
+export async function fetchPracticeContributionRollupApi(scope?: PeApiScope) {
+  const params: Record<string, string> = {};
+  if (scope?.locationId) params.locationId = scope.locationId;
+  if (scope?.startDate) params.startDate = scope.startDate;
+  if (scope?.endDate) params.endDate = scope.endDate;
   return economicsReadGet<{
     success: true;
     rollupMode: 'location' | 'practice';
     rows: Array<Record<string, unknown>>;
-  }>('/read/practice-contribution-rollup', {});
+  }>('/read/practice-contribution-rollup', params);
 }
 
 /** Value & Leakage — planned private items unscheduled beyond threshold days. */
-export async function fetchPlannedUnscheduledLeakageApi(practiceId: string) {
+export async function fetchPlannedUnscheduledLeakageApi(practiceId: string, scope?: PeApiScope) {
   return economicsReadGet<{
     success: true;
     practiceId: string;
@@ -547,15 +810,16 @@ export async function fetchPlannedUnscheduledLeakageApi(practiceId: string) {
       tpiId: string | null;
       patientId: string;
       patientName: string;
+      dentallyPatientUuid?: string | null;
       treatmentValue: number;
       daysUnscheduled: number;
       planCreatedAt: string;
     }>;
-  }>('/read/planned-unscheduled-leakage', { practiceId });
+  }>('/read/planned-unscheduled-leakage', scopeToParams(practiceId, scope));
 }
 
 /** Value & Leakage — opportunity + commitment breakdowns. */
-export async function fetchValueLeakageSummaryApi(practiceId: string) {
+export async function fetchValueLeakageSummaryApi(practiceId: string, scope?: PeApiScope) {
   return economicsReadGet<{
     success: true;
     practiceId: string;
@@ -609,11 +873,11 @@ export async function fetchValueLeakageSummaryApi(practiceId: string) {
     unattributedEligibleValue: number;
     tier: string;
     tierNote: string;
-  }>('/read/value-leakage-summary', { practiceId });
+  }>('/read/value-leakage-summary', scopeToParams(practiceId, scope));
 }
 
 /** Growth Levers — visit frequency and value per visit (Derived tier). */
-export async function fetchGrowthLeversSummaryApi(practiceId: string) {
+export async function fetchGrowthLeversSummaryApi(practiceId: string, scope?: PeApiScope) {
   return economicsReadGet<{
     success: true;
     practiceId: string;
@@ -647,13 +911,14 @@ export async function fetchGrowthLeversSummaryApi(practiceId: string) {
     projectedLifetimePatientCount: number;
     hasTenureData: boolean;
     hasProjectedLifetimeData: boolean;
+    marginPct: number | null;
     tier: string;
     tierNote: string;
-  }>('/read/growth-levers-summary', { practiceId });
+  }>('/read/growth-levers-summary', scopeToParams(practiceId, scope));
 }
 
 /** Multi-practice growth levers with headroom vs benchmark. */
-export async function fetchGrowthLeversByPracticeApi(practiceId: string) {
+export async function fetchGrowthLeversByPracticeApi(practiceId: string, scope?: PeApiScope) {
   return economicsReadGet<{
     success: true;
     contextPracticeId: string;
@@ -687,7 +952,7 @@ export async function fetchGrowthLeversByPracticeApi(practiceId: string) {
       topLeverToPull: string | null;
     }>;
     hasData: boolean;
-  }>('/read/growth-levers-by-practice', { practiceId });
+  }>('/read/growth-levers-by-practice', scopeToParams(practiceId, scope));
 }
 
 export type RetentionContributionSegmentRow = {
@@ -710,7 +975,7 @@ export type RetentionContributionRollup = {
 };
 
 /** Retention & Reactivation — contribution by 4-tier segment (practice + group). */
-export async function fetchRetentionContributionAtRiskApi(practiceId: string) {
+export async function fetchRetentionContributionAtRiskApi(practiceId: string, scope?: PeApiScope) {
   return economicsReadGet<{
     success: true;
     practiceId: string;
@@ -721,13 +986,14 @@ export async function fetchRetentionContributionAtRiskApi(practiceId: string) {
       practices: RetentionContributionRollup[];
     };
     hasData: boolean;
-  }>('/read/retention-contribution-at-risk', { practiceId });
+  }>('/read/retention-contribution-at-risk', scopeToParams(practiceId, scope));
 }
 
 export type ReactivationFlagRow = {
   flagId: string;
   patientId: string;
   patientName: string;
+  dentallyPatientUuid: string | null;
   segmentAtFlagTime: string;
   /** Live retention_status on v_patient_contribution — matches Patient Records. */
   currentRetentionStatus: string;
@@ -804,7 +1070,7 @@ export type ReactivationValueByPracticeRow = {
 };
 
 /** Retention & Reactivation — flags, recovery loop, reactivation value by practice. */
-export async function fetchRetentionRecoveryLoopApi(practiceId: string) {
+export async function fetchRetentionRecoveryLoopApi(practiceId: string, scope?: PeApiScope) {
   return economicsReadGet<{
     success: true;
     contextPracticeId: string;
@@ -816,11 +1082,11 @@ export async function fetchRetentionRecoveryLoopApi(practiceId: string) {
       flags: ReactivationFlagRow[];
     };
     hasData: boolean;
-  }>('/read/retention-recovery-loop', { practiceId });
+  }>('/read/retention-recovery-loop', scopeToParams(practiceId, scope));
 }
 
 /** Day 3 modelled CLTV rollup by acquisition source. */
-export async function fetchCltvByAcquisitionSourceApi(practiceId: string) {
+export async function fetchCltvByAcquisitionSourceApi(practiceId: string, scope?: PeApiScope) {
   return economicsReadGet<{
     success: true;
     practiceId: string;
@@ -838,11 +1104,11 @@ export async function fetchCltvByAcquisitionSourceApi(practiceId: string) {
     hasData: boolean;
     tier: string;
     tierNote: string;
-  }>('/read/cltv-by-acquisition-source', { practiceId });
+  }>('/read/cltv-by-acquisition-source', scopeToParams(practiceId, scope));
 }
 
 /** Goal Settings — group defaults + per-practice overrides with actuals. */
-export async function fetchGoalSettingsApi(practiceId: string) {
+export async function fetchGoalSettingsApi(practiceId: string, scope?: PeApiScope) {
   return economicsReadGet<{
     success: true;
     contextPracticeId: string;
@@ -889,7 +1155,7 @@ export async function fetchGoalSettingsApi(practiceId: string) {
       };
     }>;
     hasData: boolean;
-  }>('/read/goal-settings', { practiceId });
+  }>('/read/goal-settings', scopeToParams(practiceId, scope));
 }
 
 export async function saveGoalSettingsApi(

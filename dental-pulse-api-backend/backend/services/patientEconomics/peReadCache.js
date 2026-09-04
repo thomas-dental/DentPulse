@@ -40,7 +40,23 @@ async function withPeReadCache(endpoint, practiceId, loader, options = {}) {
   return value;
 }
 
+/**
+ * Drop cached PE read entries for a practice. Pass endpointPrefix to limit scope
+ * (e.g. 'invoices-mapped' or 'invoices-' to clear all invoice reads).
+ * @param {string} practiceId
+ * @param {string} [endpointPrefix]
+ */
+function invalidatePeReadCache(practiceId, endpointPrefix) {
+  const practiceNeedle = `:${practiceId}:`;
+  for (const key of store.keys()) {
+    if (!key.includes(practiceNeedle)) continue;
+    if (endpointPrefix && !key.startsWith(endpointPrefix)) continue;
+    store.delete(key);
+  }
+}
+
 module.exports = {
   withPeReadCache,
+  invalidatePeReadCache,
   cacheKey,
 };

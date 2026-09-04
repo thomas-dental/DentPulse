@@ -142,6 +142,7 @@ app.use('/api/ai-key', require('./routes/aiKey'));     // Resolve per-user/tenan
 app.use('/api/plaid', require('./routes/plaid'));          // Plaid open banking (onboarding, connections, statements)
 app.use('/api/module-access', require('./routes/moduleAccess')); // Module access (default + per-org module enable/disable)
 app.use('/api/economics-engine', require('./routes/economicsEngine')); // Patient Economics Engine (PAT credentials)
+app.use('/api/dentally-webhook', require('./routes/dentallyWebhook')); // Inbound Dentally webhooks (HMAC-signed)
 
 // Serve AP-Invoices folder for PDF files
 app.use('/AP-Invoices', express.static(path.join(__dirname, 'AP-Invoices')));

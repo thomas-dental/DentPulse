@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { useOrganization } from '@/hooks/useOrganization';
 import {
   fetchRetentionContributionAtRiskApi,
   type RetentionContributionRollup,
   type RetentionContributionSegmentRow,
 } from '@/services/integrations/patientEconomicsService';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
 import { parseRetentionStatus } from '@/lib/peRetentionSegmentation';
 import type { PeRetentionStatus } from '@/lib/peRetentionConstants';
 import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
@@ -43,15 +43,15 @@ function mapRollup(raw: Record<string, unknown>): RetentionContributionRollup {
   };
 }
 
-export function useRetentionContributionAtRisk() {
-  const { organizationId } = useOrganization();
+export function useRetentionContributionAtRisk(options?: { enabled?: boolean }) {
+  const { organizationId, scopeKey, apiScope, enabled: scopeEnabled } = usePeScopedRead();
 
   return useQuery({
-    queryKey: ['retention-contribution-at-risk', organizationId],
-    enabled: !!organizationId,
+    queryKey: ['retention-contribution-at-risk', organizationId, scopeKey],
+    enabled: scopeEnabled && (options?.enabled ?? true),
     staleTime: PE_READ_STALE_MS,
     queryFn: async (): Promise<RetentionContributionAtRisk> => {
-      const body = await fetchRetentionContributionAtRiskApi(organizationId!);
+      const body = await fetchRetentionContributionAtRiskApi(organizationId!, apiScope);
       const groupRaw = body.group as Record<string, unknown>;
       return {
         practiceId: String(body.practiceId),

@@ -180,7 +180,63 @@ That script syncs the catalog, resets the `patients` cursor, and re-pages patien
 - `treatment_plans` → `public.treatment_plans` (`GET /v1/treatment_plans`; `tp_patient_id` ↔ `patients.pt_id`). Monthly `created_after`/`created_before` windows. Raw Dentally completion fields synced as-is (Economic Journey derivation is M3).
 - `treatment_items` → `public.treatment_plan_items` (`GET /v1/treatment_plan_items`; cursor slug `treatment_items`). Links: `tpi_treatment_plan_id` ↔ `tp_id`, `tpi_patient_id` ↔ `pt_id`. Monthly `updated_after`/`updated_before`. Raw `tpi_price` / charged / completed synced as-is (Contribution Engine is M4).
 - `invoices` → `platform_integration_invoices` + nested items → `platform_integration_invoice_line_items` (`GET /v1/invoices` + per-id detail). Monthly `dated_on_*` windows. Links: `patient_id`↔`pt_id`, `account_id`↔`da_id`, `treatment_plan_item_id`↔`tpi_id`. Raw fields as-is (leakage = M6). No separate `invoice_items` cursor — `/sync/invoice-items` aliases `/sync/invoices`.
-- `payments` → `dentally_payments` + explanations → `dentally_payment_explanations` (`GET /v1/payments`). Monthly `dated_after`/`dated_before`. Invoice link: `dpe_invoice_id` ↔ `platform_invoice_id`. Raw fields as-is (collection/aged debt = M7).
+- `payments` → `dentally_payments` + explanations → `dentally_payment_explanations` (`GET /v1/payments`). Monthly `dated_after`/`dated_before`. Invoice link: `dpe_invoice_id` ↔ `platform_integration_invoices.platform_invoice_id`. Raw fields as-is (collection/aged debt = M7).
+
+## Payment webhooks (real-time Paid/Unpaid worklist)
+
+Poll sync for payments does **not** update `platform_integration_invoices.is_paid` / `amount_outstanding`. Post-sync payments therefore leave the PE Invoices worklist stale until invoices are re-synced. Payment webhooks close that gap.
+
+**Endpoint (configure in Dentally → Settings → Developer → Webhooks):**
+
+```
+POST https://{API_HOST}/api/dentally-webhook/payments?practice_id={organization_uuid}
+```
+
+**Events:** `payment.created`, `payment.updated`, `payment.deleted`
+
+**Signing:** HMAC-SHA256 hex digest of the raw POST body in header `X-Dentally-Signature`. Store the webhook secret in `integrations.webhook_secret` for the Dentally row (or set env `DENTALLY_WEBHOOK_SECRET` as fallback).
+
+**Processing flow:**
+
+1. Verify signature → append `dentally_webhook_logs` row
+2. Re-fetch full payment from `GET /v1/payments/{id}` (webhook payload may omit nested `explanations`)
+3. Upsert via `upsertPaymentsWithExplanations` + event ledger (`PAYMENT_ALLOCATED`)
+4. For each `explanations[].invoice_id` (and prior links on delete): `GET /v1/invoices/{id}` → `upsertInvoicesWithLineItems`
+5. **Incremental** facts refresh via RPC `pe_webhook_refresh_contribution_facts(practice_id, platform_invoice_ids[])` — upserts touched invoice facts, re-aggregates affected patient grains, refreshes practice rollup (not full-practice delete/rescan)
+6. Invalidate PE invoice read cache
+
+Prior invoice ids on delete: single-query RPC `pe_webhook_payment_invoice_ids(practice_id, dp_id)`.
+
+**Related files:** `routes/dentallyWebhook.js`, `services/patientEconomics/webhooks/*`
+
+## Appointment webhooks (real-time diary + Treatment_* link alignment)
+
+Poll sync for appointments and treatment_appointments runs on a ~15 min incremental schedule. Post-sync diary changes (state, cancelled, DNA, booking) and `ta_appointment_id` link transitions therefore leave `appointments`, `treatment_appointments`, and `event_ledger` stale until the next chunk. Appointment webhooks close that gap.
+
+**Endpoint (configure in Dentally → Settings → Developer → Webhooks):**
+
+```
+POST https://{API_HOST}/api/dentally-webhook/appointments?practice_id={organization_uuid}
+```
+
+**Events:** `appointment.created`, `appointment.updated`, `appointment.deleted`
+
+**Signing:** same HMAC-SHA256 on raw body (`X-Dentally-Signature`) using `integrations.webhook_secret`.
+
+**Processing flow:**
+
+1. Verify signature → append `dentally_webhook_logs` row
+2. Re-fetch full appointment from `GET /v1/appointments/{id}?cancelled=true` (webhook payload may omit fields or contain defaults)
+3. Upsert via `upsertAppointments` (UUID-aware split upsert)
+4. Discover linked `treatment_appointments` candidates via RPC `pe_webhook_discover_ta_ids` (single indexed query) plus recent API lookback scan
+5. Batch-fetch TA details from Dentally (concurrency `APPOINTMENT_WEBHOOK_TA_CONCURRENCY`, default 3)
+6. RPC `pe_webhook_ta_ledger_prefetch` + one batch upsert + one ledger write for all touched TAs
+7. On delete + API 404: soft-delete local `appointments` row (`deleted_at`)
+8. Invalidate PE journey/leakage read caches Dentally does not expose webhooks for `treatment_plans`, `treatment_plan_items`, or direct `treatment_appointments` changes — those remain poll-synced.
+
+**Related files:** `routes/dentallyWebhook.js`, `services/patientEconomics/webhooks/processAppointmentWebhook.js`, `services/patientEconomics/webhooks/webhookAppointmentRefresh.js`
+
+**Migrations:** `20260904140001_pe_webhook_appointment_ta_rpcs.sql` (`pe_webhook_discover_ta_ids`, `pe_webhook_ta_ledger_prefetch`)
 
 Use lowercase slugs in `sync_cursors.resource_type`.
 

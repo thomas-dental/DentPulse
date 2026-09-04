@@ -1,12 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
-import { useOrganization } from '@/hooks/useOrganization';
 import { fetchPlannedUnscheduledLeakageApi } from '@/services/integrations/patientEconomicsService';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
 
 export type PlannedUnscheduledLeakageRow = {
   planId: string;
   tpiId: string | null;
   patientId: string;
   patientName: string;
+  dentallyPatientUuid: string | null;
   treatmentValue: number;
   daysUnscheduled: number;
   planCreatedAt: string;
@@ -23,14 +24,14 @@ export type PlannedUnscheduledLeakageResult = {
   rows: PlannedUnscheduledLeakageRow[];
 };
 
-export function usePlannedUnscheduledLeakage() {
-  const { organizationId } = useOrganization();
+export function usePlannedUnscheduledLeakage(options?: { enabled?: boolean }) {
+  const { organizationId, scopeKey, apiScope, enabled: scopeEnabled } = usePeScopedRead();
 
   return useQuery({
-    queryKey: ['planned-unscheduled-leakage', organizationId],
-    enabled: !!organizationId,
+    queryKey: ['planned-unscheduled-leakage', organizationId, scopeKey],
+    enabled: scopeEnabled && (options?.enabled ?? true),
     queryFn: async (): Promise<PlannedUnscheduledLeakageResult> => {
-      const body = await fetchPlannedUnscheduledLeakageApi(organizationId!);
+      const body = await fetchPlannedUnscheduledLeakageApi(organizationId!, apiScope);
       return {
         thresholdDays: Number(body.thresholdDays) || 60,
         tier: String(body.tier || 'Derived'),
@@ -45,6 +46,8 @@ export function usePlannedUnscheduledLeakage() {
           tpiId: r.tpiId != null ? String(r.tpiId) : null,
           patientId: String(r.patientId),
           patientName: String(r.patientName || 'Unknown patient'),
+          dentallyPatientUuid:
+            r.dentallyPatientUuid != null ? String(r.dentallyPatientUuid) : null,
           treatmentValue: Number(r.treatmentValue) || 0,
           daysUnscheduled: Number(r.daysUnscheduled) || 0,
           planCreatedAt: String(r.planCreatedAt),

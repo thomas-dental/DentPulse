@@ -6,6 +6,17 @@ const { supabaseAdmin } = require('../../config/supabase');
 const { round2, DEFAULT_CLTV_MIN_SAMPLE } = require('./growthLeversBenchmarkLogic');
 
 const PAGE_SIZE = 1000;
+
+async function loadPatientIdsForLocation(practiceId, locationId) {
+  const { data, error } = await supabaseAdmin
+    .from('patients')
+    .select('id')
+    .eq('organization_id', practiceId)
+    .eq('location_id', locationId)
+    .is('deleted_at', null);
+  if (error) throw error;
+  return new Set((data ?? []).map((r) => String(r.id)));
+}
 const MODELLED_TIER = 'Modelled';
 
 async function loadCltvMinSample(practiceId) {
@@ -48,9 +59,11 @@ async function loadAcquisitionSourceCatalog(practiceId) {
 /**
  * @param {string} practiceId
  */
-async function getCltvByAcquisitionSource(practiceId) {
+async function getCltvByAcquisitionSource(practiceId, scope = {}) {
   const minSample = await loadCltvMinSample(practiceId);
   const catalog = await loadAcquisitionSourceCatalog(practiceId);
+  const locationPatients =
+    scope.locationId ? await loadPatientIdsForLocation(practiceId, scope.locationId) : null;
 
   const agg = new Map();
   let offset = 0;
@@ -85,7 +98,9 @@ async function getCltvByAcquisitionSource(practiceId) {
     }
 
     for (const row of batch) {
-      const patient = patientMap.get(String(row.patient_id));
+      const pid = String(row.patient_id);
+      if (locationPatients && !locationPatients.has(pid)) continue;
+      const patient = patientMap.get(pid);
       const sourceId =
         patient?.pt_acquisition_source_id != null
           ? String(patient.pt_acquisition_source_id)

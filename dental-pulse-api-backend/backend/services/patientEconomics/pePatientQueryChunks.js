@@ -26,8 +26,25 @@ async function queryInPatientChunks(patientIds, buildQuery, chunkSize = PATIENT_
   return rows;
 }
 
+/**
+ * Run a count query per patient chunk and sum totals.
+ * @param {string[]} patientIds
+ * @param {(chunk: string[]) => Promise<{ count: number | null; error: unknown }>} buildQuery
+ * @param {number} [chunkSize]
+ */
+async function sumCountInPatientChunks(patientIds, buildQuery, chunkSize = PATIENT_CHUNK) {
+  let total = 0;
+  await forEachPatientChunk(patientIds, async (chunk) => {
+    const { count, error } = await buildQuery(chunk);
+    if (error) throw error;
+    total += count ?? 0;
+  }, chunkSize);
+  return total;
+}
+
 module.exports = {
   PATIENT_CHUNK,
   forEachPatientChunk,
   queryInPatientChunks,
+  sumCountInPatientChunks,
 };

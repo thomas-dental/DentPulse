@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
 import { fetchPracticeContributionRollupApi } from '@/services/integrations/patientEconomicsService';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
 
 export type PracticeProvenanceStatus =
   | 'complete'
@@ -87,8 +88,10 @@ function mapRow(raw: Record<string, unknown>): PracticeContributionRow {
   };
 }
 
-async function fetchPracticeContributionRollup(): Promise<PracticeContributionRollupResult> {
-  const body = await fetchPracticeContributionRollupApi();
+async function fetchPracticeContributionRollup(
+  scope?: import('@/services/integrations/patientEconomicsService').PeApiScope,
+): Promise<PracticeContributionRollupResult> {
+  const body = await fetchPracticeContributionRollupApi(scope);
   return {
     rollupMode: body.rollupMode,
     rows: (body.rows ?? []).map((row) => mapRow(row as Record<string, unknown>)),
@@ -97,11 +100,12 @@ async function fetchPracticeContributionRollup(): Promise<PracticeContributionRo
 
 export function usePracticeContributionRollup() {
   const { user } = useAuth();
+  const { scopeKey, apiScope, enabled } = usePeScopedRead();
 
   return useQuery({
-    queryKey: ['practice-contribution-rollup', user?.id],
-    enabled: !!user?.id,
-    queryFn: () => fetchPracticeContributionRollup(),
+    queryKey: ['practice-contribution-rollup', user?.id, scopeKey],
+    enabled: !!user?.id && enabled,
+    queryFn: () => fetchPracticeContributionRollup(apiScope),
   });
 }
 

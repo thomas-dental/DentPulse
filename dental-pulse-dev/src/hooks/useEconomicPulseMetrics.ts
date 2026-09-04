@@ -55,15 +55,16 @@ function avgAnnualFromGrowth(
   return Math.round(annualized / growth.activePatientCount);
 }
 
-export function useEconomicPulseMetrics() {
-  const leakageQuery = useValueLeakageSummary();
-  const retentionQuery = useRetentionContributionAtRisk();
-  const recoveryQuery = useRetentionRecoveryLoop();
-  const growthQuery = useGrowthLeversSummary();
-  const plannedQuery = usePlannedUnscheduledLeakage();
-  const goalsQuery = useGoalSettings();
-  const journeyQuery = useTreatmentEconomicJourney();
-  const assumptionsQuery = useEconomicAssumptions();
+export function useEconomicPulseMetrics(options?: { enabled?: boolean }) {
+  const enabled = options?.enabled ?? true;
+  const leakageQuery = useValueLeakageSummary({ enabled });
+  const retentionQuery = useRetentionContributionAtRisk({ enabled });
+  const recoveryQuery = useRetentionRecoveryLoop({ enabled });
+  const growthQuery = useGrowthLeversSummary({ enabled });
+  const plannedQuery = usePlannedUnscheduledLeakage({ enabled });
+  const goalsQuery = useGoalSettings({ enabled });
+  const journeyQuery = useTreatmentEconomicJourney({ enabled });
+  const assumptionsQuery = useEconomicAssumptions({ enabled });
 
   const heroMetrics = useMemo((): EconomicPulseMetrics | null => {
     if (!leakageQuery.data || !retentionQuery.data) return null;

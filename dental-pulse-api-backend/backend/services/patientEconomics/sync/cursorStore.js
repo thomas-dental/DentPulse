@@ -13,18 +13,20 @@ const RESOURCE_INVOICES = 'invoices';
 const RESOURCE_PAYMENTS = 'payments';
 
 /** Resources the PE scheduler may resume today (membership still pending). */
+// Drain/kickoff order: period-scoped money + clinical first; accounts last
+// (full catalog re-fetch burns Dentally rate limit before Jul–Aug windows finish).
 const SCHEDULED_RESOURCE_TYPES = [
   RESOURCE_ACQUISITION_SOURCES,
   RESOURCE_PRACTITIONERS,
   RESOURCE_PATIENTS,
-  RESOURCE_ACCOUNTS,
   RESOURCE_RECALLS,
+  RESOURCE_PAYMENTS,
+  RESOURCE_INVOICES,
   RESOURCE_APPOINTMENTS,
   RESOURCE_TREATMENT_APPOINTMENTS,
   RESOURCE_TREATMENT_PLANS,
   RESOURCE_TREATMENT_ITEMS,
-  RESOURCE_INVOICES,
-  RESOURCE_PAYMENTS,
+  RESOURCE_ACCOUNTS,
 ];
 
 const PAGE_BASED_RESOURCES = new Set(SCHEDULED_RESOURCE_TYPES);
@@ -36,9 +38,10 @@ const PAGE_BASED_RESOURCES = new Set(SCHEDULED_RESOURCE_TYPES);
  *   syncRunId: string|null,
  *   chunkStart: string|null,
  *   chunkEnd: string|null,
- *   kickoffMode: 'incremental'|'full'|null,
+ *   kickoffMode: 'incremental'|'full'|'period'|null,
  *   lastIncrementalCompletedAt: string|null,
  *   lastFullCompletedAt: string|null,
+ *   periodSyncEnd: string|null,
  * }}
  */
 function emptyCursorParse(page = 1) {
@@ -50,6 +53,7 @@ function emptyCursorParse(page = 1) {
     kickoffMode: null,
     lastIncrementalCompletedAt: null,
     lastFullCompletedAt: null,
+    periodSyncEnd: null,
   };
 }
 
@@ -60,12 +64,14 @@ function parsePageCursor(cursorStr) {
     const parsed = JSON.parse(cursorStr);
     if (parsed && Number.isFinite(parsed.page) && parsed.page >= 1) {
       const mode = parsed.kickoffMode;
+      const kickoffMode =
+        mode === 'incremental' || mode === 'full' || mode === 'period' ? mode : null;
       return {
         page: parsed.page,
         syncRunId: typeof parsed.syncRunId === 'string' ? parsed.syncRunId : null,
         chunkStart: typeof parsed.chunkStart === 'string' ? parsed.chunkStart : null,
         chunkEnd: typeof parsed.chunkEnd === 'string' ? parsed.chunkEnd : null,
-        kickoffMode: mode === 'incremental' || mode === 'full' ? mode : null,
+        kickoffMode,
         lastIncrementalCompletedAt:
           typeof parsed.lastIncrementalCompletedAt === 'string'
             ? parsed.lastIncrementalCompletedAt
@@ -74,6 +80,8 @@ function parsePageCursor(cursorStr) {
           typeof parsed.lastFullCompletedAt === 'string'
             ? parsed.lastFullCompletedAt
             : null,
+        periodSyncEnd:
+          typeof parsed.periodSyncEnd === 'string' ? parsed.periodSyncEnd : null,
       };
     }
   } catch {
@@ -99,8 +107,11 @@ function serializePageCursor(page, syncRunId, dateWindow = null, meta = null) {
   if (syncRunId) payload.syncRunId = syncRunId;
   if (dateWindow?.chunkStart) payload.chunkStart = dateWindow.chunkStart;
   if (dateWindow?.chunkEnd) payload.chunkEnd = dateWindow.chunkEnd;
-  if (meta?.kickoffMode === 'incremental' || meta?.kickoffMode === 'full') {
+  if (meta?.kickoffMode === 'incremental' || meta?.kickoffMode === 'full' || meta?.kickoffMode === 'period') {
     payload.kickoffMode = meta.kickoffMode;
+  }
+  if (meta?.periodSyncEnd) {
+    payload.periodSyncEnd = meta.periodSyncEnd;
   }
   if (meta?.lastIncrementalCompletedAt) {
     payload.lastIncrementalCompletedAt = meta.lastIncrementalCompletedAt;
@@ -124,6 +135,10 @@ function cursorMetaFromParsed(parsed, overrides = {}) {
       overrides.lastFullCompletedAt !== undefined
         ? overrides.lastFullCompletedAt
         : parsed?.lastFullCompletedAt,
+    periodSyncEnd:
+      overrides.periodSyncEnd !== undefined
+        ? overrides.periodSyncEnd
+        : parsed?.periodSyncEnd,
   };
 }
 
@@ -245,7 +260,8 @@ async function updateCursor(practiceId, resourceType, fields = {}) {
  * @param {string} resourceType
  * @param {{
  *   dateWindow?: { chunkStart: string, chunkEnd: string }|null,
- *   kickoffMode?: 'incremental'|'full'|null,
+ *   kickoffMode?: 'incremental'|'full'|'period'|null,
+ *   periodSyncEnd?: string|null,
  * }} [opts]
  */
 async function resetCursor(practiceId, resourceType, opts = {}) {
@@ -264,7 +280,10 @@ async function resetCursor(practiceId, resourceType, opts = {}) {
   }
 
   const prev = existing ? parsePageCursor(existing.cursor) : emptyCursorParse(1);
-  const meta = cursorMetaFromParsed(prev, { kickoffMode: kickoffMode || prev.kickoffMode });
+  const meta = cursorMetaFromParsed(prev, {
+    kickoffMode: kickoffMode || prev.kickoffMode,
+    periodSyncEnd: opts.periodSyncEnd ?? prev.periodSyncEnd ?? null,
+  });
   const initialCursor = PAGE_BASED_RESOURCES.has(resourceType)
     ? serializePageCursor(1, null, dateWindow, meta)
     : '1';

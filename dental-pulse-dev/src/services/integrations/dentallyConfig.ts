@@ -119,7 +119,7 @@ export const DENTALLY_SYNC_ENTITIES: DentallySyncEntity[] = [
     label: 'Payments',
     description: 'Sync payment transactions from Dentally',
     is_sync: 1, // Enabled by default
-    isAvailable: false, // Implemented
+    isAvailable: true,
   },
   {
     alias: 'sundries',

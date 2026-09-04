@@ -152,10 +152,13 @@ function rollupFromSegmentRpc(segments) {
   };
 }
 
-async function loadSegmentRollupFromRpc(practiceId, locationId = null) {
+async function loadSegmentRollupFromRpc(practiceId, scope = {}) {
+  const locationId = scope.locationId || null;
   const { data, error } = await supabaseAdmin.rpc('pe_retention_segment_rollup', {
     p_practice_id: practiceId,
     p_location_id: locationId,
+    p_start_date: scope.startDate || null,
+    p_end_date: scope.endDate || null,
   });
   if (error) throw new Error(`pe_retention_segment_rollup: ${error.message}`);
   return rollupFromSegmentRpc(data);
@@ -218,12 +221,13 @@ async function loadContributionRowsForPractice(practiceId, locationId = null) {
   return rows;
 }
 
-async function rollupPractice(practiceId, locationId = null) {
+async function rollupPractice(practiceId, scope = {}) {
+  const { scopeCacheExtra } = require('./peReadScope');
   return withPeReadCache(
     'retention-segment-rollup',
     practiceId,
-    () => loadSegmentRollupFromRpc(practiceId, locationId),
-    { extra: locationId ?? 'all' },
+    () => loadSegmentRollupFromRpc(practiceId, scope),
+    { extra: scopeCacheExtra(scope) },
   );
 }
 
@@ -275,13 +279,24 @@ function rollupGroupFromPracticeRollups(practiceRollups) {
  * @param {string} userId
  * @param {string} practiceId — context practice (must be in user's orgs)
  */
-async function getRetentionContributionAtRisk(userId, practiceId) {
-  const { rollupMode, units } = await resolvePeRollupUnits(userId, practiceId);
+async function getRetentionContributionAtRisk(userId, practiceId, scope = {}) {
+  const { rollupMode, units: allUnits } = await resolvePeRollupUnits(userId, practiceId);
+
+  let units = allUnits;
+  if (scope.locationId) {
+    units = allUnits.filter(
+      (u) => u.locationId === scope.locationId || u.unitId === scope.locationId,
+    );
+  }
 
   const practiceRollups = await Promise.all(
     units.map(async (unit) => {
       try {
-        const rollup = await rollupPractice(unit.organizationId, unit.locationId);
+        const unitScope = {
+          ...scope,
+          locationId: scope.locationId || unit.locationId || null,
+        };
+        const rollup = await rollupPractice(unit.organizationId, unitScope);
         return {
           unitId: unit.unitId,
           unitName: unit.unitName,
@@ -304,6 +319,7 @@ async function getRetentionContributionAtRisk(userId, practiceId) {
 
   const contextUnit =
     practiceRollups.find((p) => p.unitId === practiceId) ??
+    practiceRollups.find((p) => p.unitId === scope.locationId) ??
     practiceRollups.find((p) => p.organizationId === practiceId) ??
     practiceRollups[0];
 

@@ -5,47 +5,61 @@
 const { supabaseAdmin } = require('../../config/supabase');
 const {
   DEFAULT_COMMITMENT_RATE_WINDOW_DAYS,
-  aggregatePlansFromLedger,
   computePracticeCommitmentRate,
   weightOpenPlansByCommitmentRate,
 } = require('./commitmentRateLogic');
 
 const PAGE_SIZE = 1000;
 
-const LEDGER_EVENT_TYPES = [
-  'PLAN_CREATED',
-  'APPOINTMENT_LINKED',
-  'APPOINTMENT_UNLINKED',
-  'PLAN_COMPLETED',
-];
+function plansMapFromRpcRows(rows) {
+  const plans = new Map();
+
+  for (const row of rows ?? []) {
+    if (!row?.planId) continue;
+    plans.set(String(row.planId), {
+      planId: String(row.planId),
+      patientId: row.patientId != null ? String(row.patientId) : '',
+      plannedValue: Number(row.plannedValue) || 0,
+      planCreatedAt: row.planCreatedAt ?? null,
+      firstLinkedAt: row.firstLinkedAt ?? null,
+      lastLinkedAt: row.lastLinkedAt ?? null,
+      lastUnlinkedAt: row.lastUnlinkedAt ?? null,
+      isCompleted: Boolean(row.isCompleted),
+    });
+  }
+
+  return plans;
+}
+
+async function loadAggregatedPlans(practiceId, scope = {}) {
+  const locationId = scope.locationId || null;
+  const startDate = scope.startDate || null;
+  const endDate = scope.endDate || null;
+
+  const { data, error } = await supabaseAdmin.rpc('pe_ledger_plan_states', {
+    p_practice_id: practiceId,
+    p_location_id: locationId,
+    p_start_date: startDate,
+    p_end_date: endDate,
+  });
+
+  if (error) {
+    throw new Error(`pe_ledger_plan_states: ${error.message}`);
+  }
+
+  return plansMapFromRpcRows(Array.isArray(data) ? data : []);
+}
+
+/** @deprecated Use loadAggregatedPlans — kept for callers migrating off raw ledger rows. */
+async function loadLedgerPlanEvents(practiceId, scope = {}) {
+  const plans = await loadAggregatedPlans(practiceId, scope);
+  return [...plans.values()];
+}
 
 async function loadCommitmentWindowDays(practiceId) {
   const { loadPeEconomicAssumptions } = require('./peEconomicAssumptions');
   const assumptions = await loadPeEconomicAssumptions(practiceId);
   return assumptions.commitmentRateWindowDays || DEFAULT_COMMITMENT_RATE_WINDOW_DAYS;
-}
-
-async function loadLedgerPlanEvents(practiceId) {
-  const rows = [];
-  let offset = 0;
-
-  for (let page = 0; page < 500; page++) {
-    const { data, error } = await supabaseAdmin
-      .from('event_ledger')
-      .select('patient_id, event_type, created_at, payload')
-      .eq('practice_id', practiceId)
-      .in('event_type', LEDGER_EVENT_TYPES)
-      .range(offset, offset + PAGE_SIZE - 1);
-
-    if (error) throw new Error(`event_ledger: ${error.message}`);
-
-    const batch = data ?? [];
-    rows.push(...batch);
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
-  }
-
-  return rows;
 }
 
 async function loadEligiblePlanItems(practiceId, planIds) {
@@ -141,8 +155,7 @@ async function loadEligiblePlanItems(practiceId, planIds) {
  */
 async function computePracticeCommitmentRateForPractice(practiceId) {
   const windowDays = await loadCommitmentWindowDays(practiceId);
-  const ledgerRows = await loadLedgerPlanEvents(practiceId);
-  const plans = aggregatePlansFromLedger(ledgerRows);
+  const plans = await loadAggregatedPlans(practiceId);
   const planIds = [...plans.keys()];
   const items = await loadEligiblePlanItems(practiceId, planIds);
   const commitmentResult = computePracticeCommitmentRate(plans, items, windowDays);
@@ -180,8 +193,10 @@ async function buildOpportunityWeightingForPractice(practiceId) {
 module.exports = {
   DEFAULT_COMMITMENT_RATE_WINDOW_DAYS,
   loadCommitmentWindowDays,
+  loadAggregatedPlans,
   loadLedgerPlanEvents,
   loadEligiblePlanItems,
   computePracticeCommitmentRateForPractice,
   buildOpportunityWeightingForPractice,
+  plansMapFromRpcRows,
 };

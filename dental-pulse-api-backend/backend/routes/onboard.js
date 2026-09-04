@@ -47,7 +47,7 @@ const DEFAULT_SYNC_ENTITIES = [
   { alias: 'appointments',           label: 'Appointments',           description: 'Sync appointment records from Dentally',          is_sync: true, is_available: true },
   { alias: 'invoices',               label: 'Invoices',               description: 'Sync invoices and billing data from Dentally',    is_sync: true, is_available: true },
   { alias: 'nhs_claims',             label: 'NHS Claims',             description: 'Sync NHS claim records from Dentally',            is_sync: true, is_available: true },
-  { alias: 'payments',               label: 'Payments',               description: 'Sync payment transactions from Dentally',         is_sync: false, is_available: false },
+  { alias: 'payments',               label: 'Payments',               description: 'Sync payment transactions from Dentally',         is_sync: true, is_available: true },
   { alias: 'accounts',               label: 'Accounts',               description: 'Sync chart of accounts from Dentally',            is_sync: false, is_available: false },
   { alias: 'users',                  label: 'Users',                  description: 'Sync staff and user accounts from Dentally',      is_sync: false, is_available: false },
 ];
@@ -342,6 +342,20 @@ router.post('/dentally', syncAuthMiddleware, async (req, res) => {
           .insert(missingRows);
         if (missErr) console.error(`[Onboard] Failed to add missing sync entities:`, missErr.message);
         else console.log(`[Onboard] Added ${missingRows.length} new sync entities:`, missingRows.map(e => e.entity_alias).join(', '));
+      }
+
+      // Enable payments if an older onboard left it disabled.
+      if (existingAliases.has('payments')) {
+        const { error: payErr } = await supabaseAdmin
+          .from('integration_sync_entities')
+          .update({ is_sync: true, is_available: true })
+          .eq('integration_id', integrationId)
+          .eq('entity_alias', 'payments');
+        if (payErr) {
+          console.error(`[Onboard] Failed to enable payments entity:`, payErr.message);
+        } else {
+          console.log(`[Onboard] Enabled payments sync entity`);
+        }
       }
     }
 

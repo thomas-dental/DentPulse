@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { useOrganization } from '@/hooks/useOrganization';
 import {
   fetchRetentionRecoveryLoopApi,
   type ReactivationFlagRow,
@@ -8,6 +7,7 @@ import {
   type RecoveryFunnel,
   type RetentionRecoveryPracticePayload,
 } from '@/services/integrations/patientEconomicsService';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
 import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
 
 export type RetentionRecoveryLoop = {
@@ -28,6 +28,8 @@ function mapFlag(raw: Record<string, unknown>): ReactivationFlagRow {
     flagId: String(raw.flagId || ''),
     patientId: String(raw.patientId || ''),
     patientName: String(raw.patientName || 'Unknown patient'),
+    dentallyPatientUuid:
+      raw.dentallyPatientUuid != null ? String(raw.dentallyPatientUuid) : null,
     segmentAtFlagTime: String(raw.segmentAtFlagTime || ''),
     currentRetentionStatus: String(
       raw.currentRetentionStatus || raw.segmentAtFlagTime || '',
@@ -113,15 +115,15 @@ function mapPracticePayload(raw: Record<string, unknown>): RetentionRecoveryPrac
   };
 }
 
-export function useRetentionRecoveryLoop() {
-  const { organizationId } = useOrganization();
+export function useRetentionRecoveryLoop(options?: { enabled?: boolean }) {
+  const { organizationId, scopeKey, apiScope, enabled: scopeEnabled } = usePeScopedRead();
 
   return useQuery({
-    queryKey: ['retention-recovery-loop', organizationId],
-    enabled: !!organizationId,
+    queryKey: ['retention-recovery-loop', organizationId, scopeKey],
+    enabled: scopeEnabled && (options?.enabled ?? true),
     staleTime: PE_READ_STALE_MS,
     queryFn: async (): Promise<RetentionRecoveryLoop> => {
-      const body = await fetchRetentionRecoveryLoopApi(organizationId!);
+      const body = await fetchRetentionRecoveryLoopApi(organizationId!, apiScope);
       const groupRaw = body.group as Record<string, unknown>;
       return {
         contextPracticeId: String(body.contextPracticeId),

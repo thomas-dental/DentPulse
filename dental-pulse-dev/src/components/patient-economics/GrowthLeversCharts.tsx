@@ -9,6 +9,7 @@ import {
   PE_CHART_LABEL_PX,
   PE_CHART_VALUE_PX,
 } from '@/lib/peVisualTokens';
+import { hasGrowthLeverClinicalData } from '@/lib/peGrowthLeversDisplay';
 
 export function formatGbp(value: number): string {
   return new Intl.NumberFormat('en-GB', {
@@ -182,10 +183,9 @@ export function MonthlyValuePerVisitChart({ rows }: { rows: GrowthLeversMonthlyR
 }
 
 export function LeverHeadroomByPracticeChart({ rows }: { rows: GrowthLeversPracticeRow[] }) {
-  /** Show every location/practice — including 0% headroom (at/above benchmark). */
-  const chartRows = [...rows].sort(
-    (a, b) => (b.combinedHeadroomPct ?? -1) - (a.combinedHeadroomPct ?? -1),
-  );
+  const chartRows = rows
+    .filter((row) => hasGrowthLeverClinicalData(row) && row.combinedHeadroomPct != null)
+    .sort((a, b) => (b.combinedHeadroomPct ?? -1) - (a.combinedHeadroomPct ?? -1));
 
   if (chartRows.length === 0) {
     return (

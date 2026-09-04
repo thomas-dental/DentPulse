@@ -697,6 +697,97 @@ async function fetchAccountDetailsBatch(apiKey, apiEndpoint, accounts, cancelChe
 }
 
 /**
+ * Fetch a single appointment's detail.
+ * @returns {Promise<object|null>} appointment object, or null if not found
+ */
+async function fetchAppointmentDetail(apiKey, apiEndpoint, appointmentId) {
+  const baseUrl = apiEndpoint.replace(/\/$/, '');
+  const params = new URLSearchParams({ cancelled: 'true' });
+  const url = `${baseUrl}/v1/appointments/${appointmentId}?${params.toString()}`;
+
+  const response = await fetchWithRetry(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'User-Agent': 'DentPulse/1.0',
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Dentally appointment detail API error (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data.appointment || data;
+}
+
+/**
+ * Fetch a single treatment appointment's detail.
+ * @returns {Promise<object|null>} treatment appointment object, or null if not found
+ */
+async function fetchTreatmentAppointmentDetail(apiKey, apiEndpoint, taId) {
+  const baseUrl = apiEndpoint.replace(/\/$/, '');
+  const url = `${baseUrl}/v1/treatment_appointments/${taId}`;
+
+  const response = await fetchWithRetry(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'User-Agent': 'DentPulse/1.0',
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Dentally treatment appointment detail API error (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data.treatment_appointment || data;
+}
+
+/**
+ * Fetch a single payment's detail (includes explanations).
+ * @returns {Promise<object|null>} payment object, or null if not found
+ */
+async function fetchPaymentDetail(apiKey, apiEndpoint, paymentId) {
+  const baseUrl = apiEndpoint.replace(/\/$/, '');
+  const url = `${baseUrl}/v1/payments/${paymentId}`;
+
+  const response = await fetchWithRetry(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'User-Agent': 'DentPulse/1.0',
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Dentally payment detail API error (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data.payment || data;
+}
+
+/**
  * Fetch a single patient by Dentally patient ID.
  * Returns the patient object or null if not found.
  */
@@ -723,4 +814,17 @@ async function fetchPatientById(apiKey, apiEndpoint, patientId) {
   return data.patient || data;
 }
 
-module.exports = { fetchDentallyPage, fetchInvoiceDetail, fetchInvoiceDetailsBatch, fetchAccountDetail, fetchAccountDetailsBatch, fetchPatientById, extractRecords, PER_PAGE, getInvoiceBatchConcurrency };
+module.exports = {
+  fetchDentallyPage,
+  fetchInvoiceDetail,
+  fetchInvoiceDetailsBatch,
+  fetchAppointmentDetail,
+  fetchTreatmentAppointmentDetail,
+  fetchPaymentDetail,
+  fetchAccountDetail,
+  fetchAccountDetailsBatch,
+  fetchPatientById,
+  extractRecords,
+  PER_PAGE,
+  getInvoiceBatchConcurrency,
+};

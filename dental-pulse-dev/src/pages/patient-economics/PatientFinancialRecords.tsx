@@ -5,6 +5,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
+  DentallyInvoiceLink,
+  DentallyPatientLink,
+} from '@/components/patient-economics/DentallyLinks';
+import {
   patientOpportunityMetrics,
   patientScopeLabel,
   patientTypeLabel,
@@ -312,6 +316,7 @@ function ExpandedInvoiceBreakdown({
     return invoices.reduce(
       (acc, inv) => ({
         revenuePrivatePlan: acc.revenuePrivatePlan + inv.revenuePrivatePlan,
+        revenueNhs: acc.revenueNhs + inv.revenueNhs,
         clinicianCost: acc.clinicianCost + inv.clinicianCost,
         labCost: acc.labCost + inv.labCost,
         materialsCost: acc.materialsCost + inv.materialsCost,
@@ -320,6 +325,7 @@ function ExpandedInvoiceBreakdown({
       }),
       {
         revenuePrivatePlan: 0,
+        revenueNhs: 0,
         clinicianCost: 0,
         labCost: 0,
         materialsCost: 0,
@@ -349,6 +355,7 @@ function ExpandedInvoiceBreakdown({
           <table className="w-full min-w-[960px] border-collapse text-[13px]">
             <thead>
               <tr className="border-b border-border text-left text-[12px] font-semibold text-muted-foreground">
+                <th className="whitespace-nowrap px-3 py-2.5">Invoice</th>
                 <th className="whitespace-nowrap px-3 py-2.5">Date</th>
                 <th className="whitespace-nowrap px-3 py-2.5 text-right">Revenue</th>
                 <th className="whitespace-nowrap px-3 py-2.5 text-right">NHS</th>
@@ -367,6 +374,14 @@ function ExpandedInvoiceBreakdown({
                   key={inv.invoiceId}
                   className="border-b border-border/60 last:border-b-0 hover:bg-primary/[0.04]"
                 >
+                  <td className="px-3 py-3 font-semibold text-foreground">
+                    <DentallyInvoiceLink
+                      label={inv.platformInvoiceId ?? inv.invoiceId}
+                      dentallyPatientUuid={inv.dentallyPatientUuid}
+                      accountUuid={inv.accountUuid}
+                      invoiceUuid={inv.invoiceUuid}
+                    />
+                  </td>
                   <td className="px-3 py-3 text-muted-foreground">
                     {formatDate(inv.invoiceDate)}
                   </td>
@@ -401,20 +416,27 @@ function ExpandedInvoiceBreakdown({
               ))}
               <tr className="border-t border-border">
                 <td className="px-3 py-3 font-bold text-foreground">Total</td>
+                <td className="px-3 py-3" />
                 <td className="px-3 py-3 text-right font-bold tabular-nums">
-                  {formatGbpCompact(invoiceTotals?.revenuePrivatePlan ?? 0)}
+                  {formatGbp(invoiceTotals?.revenuePrivatePlan ?? 0)}
                 </td>
-                <td className="px-3 py-3" />
-                <td className="px-3 py-3 text-right font-bold tabular-nums text-danger">
-                  {formatGbpCompact(invoiceTotals?.clinicianCost ?? 0)}
+                <td className="px-3 py-3 text-right font-bold tabular-nums">
+                  {formatGbp(invoiceTotals?.revenueNhs ?? 0)}
                 </td>
-                <td className="px-3 py-3" />
-                <td className="px-3 py-3" />
                 <td className="px-3 py-3 text-right font-bold tabular-nums text-danger">
-                  {formatGbpCompact(invoiceTotals?.directCost ?? 0)}
+                  {formatGbp(invoiceTotals?.clinicianCost ?? 0)}
+                </td>
+                <td className="px-3 py-3 text-right font-bold tabular-nums">
+                  {formatGbp(invoiceTotals?.labCost ?? 0)}
+                </td>
+                <td className="px-3 py-3 text-right font-bold tabular-nums">
+                  {formatGbp(invoiceTotals?.materialsCost ?? 0)}
+                </td>
+                <td className="px-3 py-3 text-right font-bold tabular-nums text-danger">
+                  {formatGbp(invoiceTotals?.directCost ?? 0)}
                 </td>
                 <td className="px-3 py-3 text-right font-bold tabular-nums text-success">
-                  {formatGbpCompact(invoiceTotals?.contribution ?? 0)}
+                  {formatGbp(invoiceTotals?.contribution ?? 0)}
                 </td>
                 <td className="px-3 py-3" />
                 <td className="px-3 py-3" />
@@ -442,6 +464,7 @@ function RecordsRoster({
 }) {
   const {
     isLoading,
+    isPlaceholderData,
     isError,
     error,
     refetch,
@@ -451,9 +474,6 @@ function RecordsRoster({
     onRetentionFilterChange,
     typeFilter,
     onTypeFilterChange,
-    locationFilter,
-    onLocationFilterChange,
-    locationOptions,
     pageRows,
     totalRows,
     totalUnfiltered,
@@ -469,6 +489,8 @@ function RecordsRoster({
     rollupMode,
     isFetching,
   } = usePatientFinancialRecordListTable();
+
+  const tablePending = isLoading || isPlaceholderData;
 
   useEffect(() => {
     if (
@@ -494,21 +516,6 @@ function RecordsRoster({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {rollupMode === 'location' && locationOptions.length > 1 && (
-            <Select value={locationFilter} onValueChange={onLocationFilterChange} disabled={isLoading}>
-              <SelectTrigger className="h-9 w-[200px] max-w-full">
-                <SelectValue placeholder="All locations" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All locations</SelectItem>
-                {locationOptions.map(([id, name]) => (
-                  <SelectItem key={id} value={id}>
-                    {name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
           <div className="relative w-[220px] max-w-full">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -652,7 +659,7 @@ function RecordsRoster({
             </tr>
           </thead>
           <tbody>
-            {isLoading &&
+            {tablePending &&
               Array.from({ length: pageSize }).map((_, i) => (
                 <tr key={i} className="border-b border-border/60">
                   {Array.from({ length: 11 }).map((_, j) => (
@@ -663,7 +670,7 @@ function RecordsRoster({
                 </tr>
               ))}
 
-            {!isLoading && !isError && !hasSyncedPatients && (
+            {!tablePending && !isError && !hasSyncedPatients && (
               <tr>
                 <td colSpan={11} className="px-3 py-12 text-center text-[13px] text-muted-foreground">
                   <div className="font-semibold text-foreground">No patients synced yet</div>
@@ -675,7 +682,7 @@ function RecordsRoster({
               </tr>
             )}
 
-            {!isLoading && !isError && hasSyncedPatients && totalRows === 0 && (
+            {!tablePending && !isError && hasSyncedPatients && totalRows === 0 && (
               <tr>
                 <td colSpan={11} className="px-3 py-10 text-center text-[13px] text-muted-foreground">
                   No patients match your search.
@@ -683,7 +690,7 @@ function RecordsRoster({
               </tr>
             )}
 
-            {!isLoading &&
+            {!tablePending &&
               !isError &&
               pageRows.map((row) => {
                 const selected = selectedPatientId === row.patientId;
@@ -717,7 +724,9 @@ function RecordsRoster({
                         </button>
                       </td>
                       <td className="px-3 py-3">
-                        <span className="font-semibold text-primary">{row.patientName}</span>
+                        <DentallyPatientLink dentallyPatientUuid={row.patientUuid}>
+                          {row.patientName}
+                        </DentallyPatientLink>
                       </td>
                       <td className="px-3 py-3 text-foreground">
                         {patientScopeLabel(row, rollupMode)}
@@ -761,7 +770,7 @@ function RecordsRoster({
         </table>
       </div>
 
-      {!isLoading && !isError && hasSyncedPatients && totalRows > 0 && (
+      {!isError && hasSyncedPatients && totalRows > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3 text-[12px] text-muted-foreground">
           <span>
             Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalRows)} of{' '}

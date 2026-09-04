@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { useOrganization } from '@/hooks/useOrganization';
 import {
   fetchTreatmentEconomicJourney,
   type JourneyEventType,
@@ -8,6 +7,7 @@ import {
   type TreatmentEconomicJourneyStage,
 } from '@/services/integrations/patientEconomicsService';
 import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
 
 /** Funnel stages mapped 1:1 to ledger event_types (display contract). */
 export const JOURNEY_STAGES = [
@@ -23,13 +23,13 @@ export type { JourneyStageKey, JourneyEventType };
 export type JourneyStage = TreatmentEconomicJourneyStage;
 export type TreatmentEconomicJourney = TreatmentEconomicJourneyResponse;
 
-export function useTreatmentEconomicJourney() {
-  const { organizationId } = useOrganization();
+export function useTreatmentEconomicJourney(options?: { enabled?: boolean }) {
+  const { organizationId, scopeKey, apiScope, enabled: scopeEnabled } = usePeScopedRead();
 
   return useQuery({
-    queryKey: ['treatment-economic-journey', 'api', organizationId],
-    enabled: !!organizationId,
+    queryKey: ['treatment-economic-journey', 'api', organizationId, scopeKey],
+    enabled: scopeEnabled && (options?.enabled ?? true),
     staleTime: PE_READ_STALE_MS,
-    queryFn: () => fetchTreatmentEconomicJourney(organizationId!),
+    queryFn: () => fetchTreatmentEconomicJourney(organizationId!, apiScope),
   });
 }

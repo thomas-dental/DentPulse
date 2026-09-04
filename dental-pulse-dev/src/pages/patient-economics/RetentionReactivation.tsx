@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { PeChartSkeleton, PeHeroCard } from '@/components/patient-economics/PeHeroCard';
 import type { ReactivationWorklistRow } from '@/services/integrations/patientEconomicsService';
 import {
   ContributionAtRiskBySegmentChart,
@@ -24,6 +25,7 @@ import {
   ReactivationWorklistTable,
   formatGbp,
   formatGbpCompact,
+  type WorklistSortKey,
 } from '@/components/patient-economics/RetentionReactivationCharts';
 import {
   segmentContributionByStatus,
@@ -31,7 +33,9 @@ import {
   type RetentionContributionAtRisk,
 } from '@/hooks/useRetentionContributionAtRisk';
 import { useRetentionRecoveryLoop } from '@/hooks/useRetentionRecoveryLoop';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
 import { useEconomicAssumptions } from '@/hooks/useEconomicAssumptions';
+import { peReadPending } from '@/lib/peReadLoading';
 import {
   PE_RETENTION_SEGMENT_ORDER,
   retentionStatusLabel,
@@ -56,46 +60,14 @@ const RETENTION_HERO_TONES: Record<PeRetentionStatus, RetentionHeroTone> = {
   effectively_lost: 'default',
 };
 
-function RetentionHeroCard({
-  tone = 'default',
-  question,
-  value,
-  subtitle,
-}: {
-  tone?: RetentionHeroTone;
-  question: string;
-  value: string;
-  subtitle: ReactNode;
-}) {
-  const bar =
-    tone === 'risk' ? 'bg-danger' : tone === 'conv' ? 'bg-warning' : 'bg-primary';
-  const valueCls =
-    tone === 'risk'
-      ? 'text-danger-strong'
-      : tone === 'conv'
-        ? 'text-warning'
-        : question === retentionStatusLabel('effectively_lost')
-          ? 'text-muted-foreground'
-          : 'text-foreground';
-
-  return (
-    <div className="relative overflow-hidden rounded-[14px] border border-border bg-card px-4 py-4 pb-[15px] shadow-sm">
-      <div className={cn('absolute inset-x-0 top-0 h-[3px]', bar)} />
-      <div className="mb-[9px] min-h-[26px] text-[11px] font-semibold uppercase tracking-[0.04em] text-muted-foreground">
-        {question}
-      </div>
-      <div className={cn('text-[28px] font-extrabold tracking-tight', valueCls)}>{value}</div>
-      <div className="mt-2 text-[11.5px] leading-relaxed text-muted-foreground">{subtitle}</div>
-    </div>
-  );
-}
-
 function RetentionHeroGrid({
   data,
   multiPractice,
+  pending = false,
 }: {
   data: RetentionContributionAtRisk;
   multiPractice: boolean;
+  pending?: boolean;
 }) {
   const rollup = multiPractice ? data.group : data.practice;
   const byStatus = segmentContributionByStatus(rollup);
@@ -111,9 +83,10 @@ function RetentionHeroGrid({
             : RETENTION_HERO_SUBTITLES[status];
 
         return (
-          <RetentionHeroCard
+          <PeHeroCard
             key={status}
             tone={RETENTION_HERO_TONES[status]}
+            pending={pending}
             question={retentionStatusLabel(status)}
             value={count.toLocaleString('en-GB')}
             subtitle={subtitle}
@@ -167,6 +140,62 @@ const WORKLIST_OWNER_FILTERS: { key: WorklistOwnerFilter; label: string }[] = [
 
 const WORKLIST_PAGE_SIZE_OPTIONS = [5, 10, 25, 50, 100];
 
+const WORKLIST_STATUS_SORT_ORDER: Record<ReactivationWorklistRow['workflowStatus'], number> = {
+  new: 0,
+  contacted: 1,
+  booked: 2,
+  recovered: 3,
+};
+
+function sortWorklistRows(
+  rows: ReactivationWorklistRow[],
+  key: WorklistSortKey,
+  dir: 'asc' | 'desc',
+): ReactivationWorklistRow[] {
+  const mul = dir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    let cmp = 0;
+    switch (key) {
+      case 'patientName':
+        cmp = a.patientName.localeCompare(b.patientName, 'en-GB');
+        break;
+      case 'practiceName':
+        cmp = (a.practiceName ?? '').localeCompare(b.practiceName ?? '', 'en-GB');
+        break;
+      case 'lastVisitAt': {
+        const at = a.lastVisitAt ? Date.parse(a.lastVisitAt) : Number.NEGATIVE_INFINITY;
+        const bt = b.lastVisitAt ? Date.parse(b.lastVisitAt) : Number.NEGATIVE_INFINITY;
+        cmp = at - bt;
+        break;
+      }
+      case 'daysOverdue':
+        cmp = a.daysOverdue - b.daysOverdue;
+        break;
+      case 'histContributionYr':
+        cmp = a.histContributionYr - b.histContributionYr;
+        break;
+      case 'contributionAtRiskAtFlagTime':
+        cmp = a.contributionAtRiskAtFlagTime - b.contributionAtRiskAtFlagTime;
+        break;
+      case 'ownerName': {
+        const ao = a.ownerName?.trim() || 'Unassigned';
+        const bo = b.ownerName?.trim() || 'Unassigned';
+        cmp = ao.localeCompare(bo, 'en-GB');
+        break;
+      }
+      case 'workflowStatus':
+        cmp =
+          WORKLIST_STATUS_SORT_ORDER[a.workflowStatus] -
+          WORKLIST_STATUS_SORT_ORDER[b.workflowStatus];
+        break;
+    }
+    if (cmp === 0 && key !== 'contributionAtRiskAtFlagTime') {
+      cmp = b.contributionAtRiskAtFlagTime - a.contributionAtRiskAtFlagTime;
+    }
+    return mul * cmp;
+  });
+}
+
 function SimpleChartCard({
   title,
   subtitle,
@@ -188,19 +217,24 @@ function SimpleChartCard({
 }
 
 export function RetentionReactivation() {
+  const { scopeKey } = usePeScopedRead();
   const [worklistSearch, setWorklistSearch] = useState('');
-  const [worklistLocationFilter, setWorklistLocationFilter] = useState('all');
   const [worklistStatusFilter, setWorklistStatusFilter] = useState<WorklistStatusFilter>('all');
   const [worklistOwnerFilter, setWorklistOwnerFilter] = useState<WorklistOwnerFilter>('all');
   const [worklistHighValueOnly, setWorklistHighValueOnly] = useState(false);
   const [worklistPage, setWorklistPage] = useState(1);
   const [worklistPageSize, setWorklistPageSize] = useState(5);
+  const [worklistSortKey, setWorklistSortKey] =
+    useState<WorklistSortKey>('contributionAtRiskAtFlagTime');
+  const [worklistSortDir, setWorklistSortDir] = useState<'asc' | 'desc'>('desc');
 
   const atRiskQuery = useRetentionContributionAtRisk();
   const recoveryQuery = useRetentionRecoveryLoop();
   const assumptionsQuery = useEconomicAssumptions();
 
-  const { data, isLoading, isError, error, refetch, isFetching } = atRiskQuery;
+  const { data, isError, error, refetch, isFetching } = atRiskQuery;
+  const atRiskPending = peReadPending(atRiskQuery);
+  const recoveryPending = peReadPending(recoveryQuery);
   const multiPractice = (data?.group.practiceCount ?? 0) > 1;
   const segmentRollup = data ? (multiPractice ? data.group : data.practice) : null;
 
@@ -223,19 +257,8 @@ export function RetentionReactivation() {
     (r) => r.histContributionYr >= highValueThreshold,
   ).length;
 
-  const worklistLocationOptions = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const row of worklistRows) {
-      if (row.practiceId && row.practiceName) {
-        map.set(row.practiceId, row.practiceName);
-      }
-    }
-    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [worklistRows]);
-
   const worklistHasActiveFilters =
     worklistSearch.trim() !== '' ||
-    worklistLocationFilter !== 'all' ||
     worklistStatusFilter !== 'all' ||
     worklistOwnerFilter !== 'all' ||
     worklistHighValueOnly;
@@ -243,9 +266,6 @@ export function RetentionReactivation() {
   const filteredWorklistRows = useMemo(() => {
     const q = worklistSearch.trim().toLowerCase();
     return worklistRows.filter((row) => {
-      if (worklistLocationFilter !== 'all' && row.practiceId !== worklistLocationFilter) {
-        return false;
-      }
       if (worklistStatusFilter !== 'all' && row.workflowStatus !== worklistStatusFilter) {
         return false;
       }
@@ -262,22 +282,38 @@ export function RetentionReactivation() {
   }, [
     worklistRows,
     worklistSearch,
-    worklistLocationFilter,
     worklistStatusFilter,
     worklistOwnerFilter,
     worklistHighValueOnly,
     highValueThreshold,
   ]);
 
-  const worklistTotalRows = filteredWorklistRows.length;
+  const sortedWorklistRows = useMemo(
+    () => sortWorklistRows(filteredWorklistRows, worklistSortKey, worklistSortDir),
+    [filteredWorklistRows, worklistSortKey, worklistSortDir],
+  );
+
+  const worklistTotalRows = sortedWorklistRows.length;
   const worklistTotalPages = Math.max(1, Math.ceil(worklistTotalRows / worklistPageSize));
   const worklistEffectivePage = Math.min(worklistPage, worklistTotalPages);
+
+  const onWorklistSort = (key: WorklistSortKey) => {
+    if (worklistSortKey === key) {
+      setWorklistSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setWorklistSortKey(key);
+      setWorklistSortDir(
+        key === 'patientName' || key === 'ownerName' || key === 'practiceName' ? 'asc' : 'desc',
+      );
+    }
+    setWorklistPage(1);
+  };
 
   useEffect(() => {
     setWorklistPage(1);
   }, [
+    scopeKey,
     worklistSearch,
-    worklistLocationFilter,
     worklistStatusFilter,
     worklistOwnerFilter,
     worklistHighValueOnly,
@@ -289,12 +325,17 @@ export function RetentionReactivation() {
 
   const worklistPageRows = useMemo(() => {
     const start = (worklistEffectivePage - 1) * worklistPageSize;
-    return filteredWorklistRows.slice(start, start + worklistPageSize);
-  }, [filteredWorklistRows, worklistEffectivePage, worklistPageSize]);
+    return sortedWorklistRows.slice(start, start + worklistPageSize);
+  }, [sortedWorklistRows, worklistEffectivePage, worklistPageSize]);
 
   const onWorklistPageSizeChange = (size: number) => {
     setWorklistPageSize(size);
     setWorklistPage(1);
+  };
+
+  const refetchAll = () => {
+    void refetch();
+    void recoveryQuery.refetch();
   };
 
   const reactivationPractices = recoveryGroup?.practices ?? [];
@@ -312,19 +353,26 @@ export function RetentionReactivation() {
           ]
         : [];
 
-  const isPageLoading = isLoading || recoveryQuery.isLoading;
-
   return (
     <div className="space-y-5">
-      {isPageLoading && (
+      {data && data.hasData && segmentRollup ? (
+        <RetentionHeroGrid data={data} multiPractice={multiPractice} pending={atRiskPending} />
+      ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-[120px] rounded-[14px]" />
+          {PE_RETENTION_SEGMENT_ORDER.map((status) => (
+            <PeHeroCard
+              key={status}
+              tone={RETENTION_HERO_TONES[status]}
+              pending={atRiskPending}
+              question={retentionStatusLabel(status)}
+              value="—"
+              subtitle={RETENTION_HERO_SUBTITLES[status]}
+            />
           ))}
         </div>
       )}
 
-      {isError && (
+      {isError && !data && (
         <div className="rounded-[14px] border border-destructive/30 bg-destructive/5 px-4 py-4">
           <div className="flex items-start gap-3">
             <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
@@ -340,8 +388,8 @@ export function RetentionReactivation() {
                 variant="outline"
                 size="sm"
                 className="mt-3"
-                onClick={() => refetch()}
-                disabled={isFetching}
+                onClick={refetchAll}
+                disabled={isFetching || recoveryPending}
               >
                 Retry
               </Button>
@@ -350,7 +398,7 @@ export function RetentionReactivation() {
         </div>
       )}
 
-      {!isPageLoading && !isError && data && !data.hasData && (
+      {!atRiskPending && !isError && data && !data.hasData && (
         <div className={cn(PE_CTX_BANNER_CLASS, 'flex-wrap justify-between')}>
           <div>
             <div className="font-semibold text-foreground">No patient contribution data yet</div>
@@ -368,54 +416,53 @@ export function RetentionReactivation() {
         </div>
       )}
 
-      {!isPageLoading && !isError && data && data.hasData && segmentRollup && (
-        <>
-          <RetentionHeroGrid data={data} multiPractice={multiPractice} />
+      {data && data.hasData && segmentRollup && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <SimpleChartCard
+            title="Contribution at Risk by segment"
+            subtitle="Patient counts turned into £, value, not volume"
+          >
+            {atRiskPending ? (
+              <PeChartSkeleton className="h-[180px]" />
+            ) : (
+              <ContributionAtRiskBySegmentChart key={scopeKey} rollup={segmentRollup} />
+            )}
+          </SimpleChartCard>
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            <SimpleChartCard
-              title="Contribution at Risk by segment"
-              subtitle="Patient counts turned into £, value, not volume"
-            >
-              <ContributionAtRiskBySegmentChart rollup={segmentRollup} />
-            </SimpleChartCard>
-
-            <SimpleChartCard
-              title={`Reactivation value by ${rollupUnitLabel}`}
-              subtitle="Recoverable contribution from lapsed patients"
-            >
-              {recoveryQuery.isLoading ? (
-                <Skeleton className="h-[180px] w-full" />
-              ) : recoveryQuery.isError ? (
-                <p className="py-6 text-sm text-danger-strong">Could not load reactivation value.</p>
-              ) : reactivationChartPractices.length > 0 ? (
-                <ReactivationValueByPracticeChart practices={reactivationChartPractices} />
-              ) : recoveryPractice && recoveryPractice.openFlagCount > 0 ? (
-                <p className="py-4 text-center text-sm text-muted-foreground">
-                  {recoveryPractice.openFlagCount} open flag(s) ·{' '}
-                  {formatGbpCompact(recoveryPractice.reactivationValueGbp)} recoverable
-                </p>
-              ) : (
-                <p className="py-8 text-center text-sm text-muted-foreground">
-                  No open reactivation flags yet.
-                </p>
-              )}
-            </SimpleChartCard>
-          </div>
-        </>
+          <SimpleChartCard
+            title={`Reactivation value by ${rollupUnitLabel}`}
+            subtitle="Recoverable contribution from lapsed patients"
+          >
+            {recoveryPending ? (
+              <PeChartSkeleton className="h-[180px]" />
+            ) : recoveryQuery.isError ? (
+              <p className="py-6 text-sm text-danger-strong">Could not load reactivation value.</p>
+            ) : reactivationChartPractices.length > 0 ? (
+              <ReactivationValueByPracticeChart
+                key={scopeKey}
+                practices={reactivationChartPractices}
+              />
+            ) : recoveryPractice && recoveryPractice.openFlagCount > 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                {recoveryPractice.openFlagCount} open flag(s) ·{' '}
+                {formatGbpCompact(recoveryPractice.reactivationValueGbp)} recoverable
+              </p>
+            ) : (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                No open reactivation flags yet.
+              </p>
+            )}
+          </SimpleChartCard>
+        </div>
       )}
 
-      {recoveryQuery.isLoading && (
-        <Skeleton className="h-[280px] rounded-[14px]" />
-      )}
-
-      {recoveryQuery.isError && (
+      {recoveryQuery.isError && !recoveryData && (
         <div className="rounded-[14px] border border-destructive/30 bg-destructive/5 px-4 py-4 text-sm text-danger-strong">
           Could not load Recovery Loop data.
         </div>
       )}
 
-      {!recoveryQuery.isLoading && !recoveryQuery.isError && recoveryRollup && (
+      {(recoveryRollup || recoveryPending) && (
         <div className="rounded-[14px] border border-border bg-card shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border px-5 py-4">
             <div>
@@ -427,61 +474,74 @@ export function RetentionReactivation() {
                 outcome.
               </p>
             </div>
-            <div className="flex gap-6">
-              <div className="text-right">
-                <div className="text-[11px] text-muted-foreground">
-                  Recovered this quarter
-                  <span className="block text-[10px] font-normal">contribution booked</span>
+            {recoveryPending ? (
+              <div className="flex gap-6">
+                <Skeleton className="h-12 w-24" />
+                <Skeleton className="h-12 w-24" />
+              </div>
+            ) : recoveryRollup ? (
+              <div className="flex gap-6">
+                <div className="text-right">
+                  <div className="text-[11px] text-muted-foreground">
+                    Recovered this quarter
+                    <span className="block text-[10px] font-normal">contribution booked</span>
+                  </div>
+                  <div className="text-[22px] font-extrabold tracking-tight text-success">
+                    {formatGbp(recoveryRollup.recoveredThisQuarterGbp)}
+                  </div>
                 </div>
-                <div className="text-[22px] font-extrabold tracking-tight text-success">
-                  {formatGbp(recoveryRollup.recoveredThisQuarterGbp)}
+                <div className="text-right">
+                  <div className="text-[11px] text-muted-foreground">
+                    In progress
+                    <span className="block text-[10px] font-normal">open flags at risk</span>
+                  </div>
+                  <div className="text-[22px] font-extrabold tracking-tight text-primary">
+                    {formatGbp(recoveryRollup.inProgressGbp)}
+                  </div>
                 </div>
               </div>
-              <div className="text-right">
-                <div className="text-[11px] text-muted-foreground">
-                  In progress
-                  <span className="block text-[10px] font-normal">open flags at risk</span>
-                </div>
-                <div className="text-[22px] font-extrabold tracking-tight text-primary">
-                  {formatGbp(recoveryRollup.inProgressGbp)}
-                </div>
-              </div>
-            </div>
+            ) : null}
           </div>
           <div className="px-5 py-4">
-            <RecoveryLoopFunnelChart funnel={recoveryRollup.recoveryFunnel} />
-            <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
-              Funnel £ follows worklist workflow status (new → contacted → booked). The{' '}
-              <strong className="font-semibold text-foreground">At-risk recovered</strong> bar is
-              contribution at risk on closed flags — not the same as{' '}
-              <strong className="font-semibold text-foreground">Recovered this quarter</strong>{' '}
-              (invoice contribution in the last 90 days).
-              {recoveryRollup.recoveryFunnel.bankedPct != null && (
-                <>
-                  {' '}
-                  Cohort recovery rate:{' '}
-                  <strong className="font-bold text-foreground">
-                    {Math.round(recoveryRollup.recoveryFunnel.bankedPct * 100)}%
-                  </strong>{' '}
-                  of flagged at-risk £.
-                </>
-              )}
-              {recoveryRollup.recoveryFunnel.recoveredValueGbp > 0 && (
-                <>
-                  {' '}
-                  Lifetime contribution on recovered flags:{' '}
-                  <strong className="font-semibold text-foreground">
-                    {formatGbp(recoveryRollup.recoveryFunnel.recoveredValueGbp)}
-                  </strong>
-                  .
-                </>
-              )}
-            </p>
+            {recoveryPending ? (
+              <PeChartSkeleton className="h-[200px]" />
+            ) : recoveryRollup ? (
+              <>
+                <RecoveryLoopFunnelChart key={scopeKey} funnel={recoveryRollup.recoveryFunnel} />
+                <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
+                  Funnel £ follows worklist workflow status (new → contacted → booked). The{' '}
+                  <strong className="font-semibold text-foreground">Recovered</strong> bar is
+                  contribution at risk on closed flags — not the same as{' '}
+                  <strong className="font-semibold text-foreground">Recovered this quarter</strong>{' '}
+                  (invoice contribution in the last 90 days).
+                  {recoveryRollup.recoveryFunnel.bankedPct != null && (
+                    <>
+                      {' '}
+                      Cohort recovery rate:{' '}
+                      <strong className="font-bold text-foreground">
+                        {Math.round(recoveryRollup.recoveryFunnel.bankedPct * 100)}%
+                      </strong>{' '}
+                      of flagged at-risk £.
+                    </>
+                  )}
+                  {recoveryRollup.recoveryFunnel.recoveredValueGbp > 0 && (
+                    <>
+                      {' '}
+                      Lifetime contribution on recovered flags:{' '}
+                      <strong className="font-semibold text-foreground">
+                        {formatGbp(recoveryRollup.recoveryFunnel.recoveredValueGbp)}
+                      </strong>
+                      .
+                    </>
+                  )}
+                </p>
+              </>
+            ) : null}
           </div>
         </div>
       )}
 
-      {!recoveryQuery.isLoading && !recoveryQuery.isError && recoveryData && (
+      {(recoveryData || recoveryPending) && !recoveryQuery.isError && (
         <div className="overflow-hidden rounded-[14px] border border-border bg-card shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-border px-5 py-3">
             <div className="min-w-0 flex-1 basis-[240px]">
@@ -493,24 +553,6 @@ export function RetentionReactivation() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              {multiPractice && worklistLocationOptions.length > 1 && (
-                <Select
-                  value={worklistLocationFilter}
-                  onValueChange={setWorklistLocationFilter}
-                >
-                  <SelectTrigger className="h-9 w-[200px] max-w-full">
-                    <SelectValue placeholder="All locations" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All locations</SelectItem>
-                    {worklistLocationOptions.map(([id, name]) => (
-                      <SelectItem key={id} value={id}>
-                        {name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
               <div className="relative w-[220px] max-w-full">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -565,11 +607,22 @@ export function RetentionReactivation() {
           </div>
 
           <div className="overflow-x-auto px-5">
-            <ReactivationWorklistTable
-              rows={worklistPageRows}
-              showPractice={multiPractice}
-              isFiltered={worklistHasActiveFilters && worklistRows.length > 0}
-            />
+            {recoveryPending ? (
+              <div className="space-y-2 py-2">
+                {Array.from({ length: worklistPageSize }).map((_, i) => (
+                  <Skeleton key={i} className="h-10 w-full" />
+                ))}
+              </div>
+            ) : (
+              <ReactivationWorklistTable
+                rows={worklistPageRows}
+                showPractice={multiPractice}
+                isFiltered={worklistHasActiveFilters && worklistRows.length > 0}
+                sortKey={worklistSortKey}
+                sortDir={worklistSortDir}
+                onSort={onWorklistSort}
+              />
+            )}
           </div>
 
           {worklistTotalRows > 0 && (

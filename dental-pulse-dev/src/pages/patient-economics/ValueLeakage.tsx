@@ -4,9 +4,10 @@
 
 import { useState, type ReactNode } from 'react';
 import { AlertCircle, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
-import { Link } from 'react-router-dom';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
+import { DentallyPatientLink } from '@/components/patient-economics/DentallyLinks';
+import { PeChartSkeleton, PeHeroCard } from '@/components/patient-economics/PeHeroCard';
 import {
   ProvenanceChip,
   tierToChip,
@@ -26,14 +27,14 @@ import {
   usePlannedUnscheduledLeakage,
   type PlannedUnscheduledLeakageRow,
 } from '@/hooks/usePlannedUnscheduledLeakage';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
+import { peReadPending } from '@/lib/peReadLoading';
 import { cn } from '@/lib/utils';
 import {
   PE_TABLE_BODY_CELL_CLASS,
   PE_TABLE_HEAD_CELL_CLASS,
   PE_TABLE_ROW_CLASS,
 } from '@/lib/peVisualTokens';
-
-type HeroTone = 'default' | 'opp' | 'risk' | 'conv';
 
 function formatGbp(value: number): string {
   return new Intl.NumberFormat('en-GB', {
@@ -45,64 +46,6 @@ function formatGbp(value: number): string {
 
 function formatPct(rate: number): string {
   return `${Math.round(rate * 100)}%`;
-}
-
-function HeroCard({
-  tone = 'default',
-  valueTone,
-  question,
-  value,
-  subtitle,
-  chip,
-}: {
-  tone?: HeroTone;
-  /** Override value colour — mockup uses primary on probability-weighted hero. */
-  valueTone?: 'default' | 'primary' | 'muted';
-  question: string;
-  value: string;
-  subtitle: ReactNode;
-  chip?: ProvenanceKind;
-}) {
-  const bar =
-    tone === 'opp'
-      ? 'bg-[hsl(var(--chart-5))]'
-      : tone === 'risk'
-        ? 'bg-danger'
-        : tone === 'conv'
-          ? 'bg-warning'
-          : 'bg-primary';
-
-  const valueCls =
-    valueTone === 'primary'
-      ? 'text-primary'
-      : valueTone === 'muted'
-        ? 'text-muted-foreground'
-        : tone === 'opp'
-          ? 'text-foreground'
-          : tone === 'risk'
-            ? 'text-danger-strong'
-            : tone === 'conv'
-              ? 'text-warning'
-              : 'text-foreground';
-
-  return (
-    <div className="relative overflow-hidden rounded-[14px] border border-border bg-card px-4 py-4 pb-[15px] shadow-sm">
-      <div className={cn('absolute inset-x-0 top-0 h-[3px]', bar)} />
-      <div className="mb-[9px] min-h-[26px] text-[11px] font-semibold uppercase tracking-[0.04em] text-muted-foreground">
-        {question}
-      </div>
-      <div className={cn('text-[28px] font-extrabold tracking-tight', valueCls)}>{value}</div>
-      <div className="mt-2 text-[11.5px] leading-relaxed text-muted-foreground">
-        {subtitle}
-        {chip && (
-          <>
-            {' '}
-            <ProvenanceChip kind={chip} />
-          </>
-        )}
-      </div>
-    </div>
-  );
 }
 
 function ChartCard({
@@ -199,12 +142,9 @@ function LeakageTable({
               className={PE_TABLE_ROW_CLASS}
             >
               <td className={cn(PE_TABLE_BODY_CELL_CLASS, 'font-semibold text-foreground')}>
-                <Link
-                  to={`/patients?tab=patient-records&patientId=${encodeURIComponent(row.patientId)}`}
-                  className="text-primary hover:underline"
-                >
+                <DentallyPatientLink dentallyPatientUuid={row.dentallyPatientUuid}>
                   {row.patientName}
-                </Link>
+                </DentallyPatientLink>
               </td>
               <td className={cn(PE_TABLE_BODY_CELL_CLASS, 'text-right font-bold tabular-nums text-danger-strong')}>
                 {formatGbp(row.treatmentValue)}
@@ -240,6 +180,7 @@ const DEFAULT_OPPORTUNITY_CATEGORIES = [
 ];
 
 export function ValueLeakage() {
+  const { scopeKey } = usePeScopedRead();
   const summaryQuery = useValueLeakageSummary();
   const leakageQuery = usePlannedUnscheduledLeakage();
   const journeyQuery = useTreatmentEconomicJourney();
@@ -247,6 +188,19 @@ export function ValueLeakage() {
   const summary = summaryQuery.data;
   const leakage = leakageQuery.data;
   const journey = journeyQuery.data;
+
+  const summaryPending = peReadPending(summaryQuery);
+  const leakagePending = peReadPending(leakageQuery);
+  const journeyPending = peReadPending(journeyQuery);
+
+  const isError = summaryQuery.isError || leakageQuery.isError || journeyQuery.isError;
+  const error = summaryQuery.error || leakageQuery.error || journeyQuery.error;
+
+  const refetch = () => {
+    void summaryQuery.refetch();
+    void leakageQuery.refetch();
+    void journeyQuery.refetch();
+  };
 
   const thresholdDays = leakage?.thresholdDays ?? 60;
   const leakageRows = leakage?.rows ?? [];
@@ -276,7 +230,6 @@ export function ValueLeakage() {
     }
   }
 
-  const heroesLoading = summaryQuery.isLoading || leakageQuery.isLoading;
   const heroesError = summaryQuery.isError && leakageQuery.isError;
 
   const leakageFooter =
@@ -302,44 +255,76 @@ export function ValueLeakage() {
 
   return (
     <div className="space-y-4">
+      {isError && !summary && !leakage && !journey && (
+        <div className="rounded-[14px] border border-destructive/30 bg-destructive/5 px-4 py-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-foreground">Could not load Value & Leakage</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {(error as Error)?.message ?? 'Unknown error'}
+              </p>
+              <Button type="button" variant="outline" size="sm" className="mt-3" onClick={refetch}>
+                Retry
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {heroesLoading ? (
-          Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-[120px] rounded-[14px]" />
-          ))
-        ) : heroesError ? (
+        {heroesError ? (
           <div className="col-span-full rounded-[14px] border border-danger/20 bg-danger-muted/40 px-5 py-4 text-sm text-danger-strong">
             Could not load Value & Leakage summary. Try refreshing the page.
           </div>
         ) : (
           <>
-            <HeroCard
+            <PeHeroCard
               tone="opp"
+              pending={summaryPending}
               question="Gross opportunity"
               value={formatGbpCompact(summary?.opportunityGross ?? 0)}
-              subtitle="Unrealised treatment contribution"
-              chip={tierToChip(summary?.opportunityGrossTier)}
+              subtitle={
+                <>
+                  Unrealised treatment contribution{' '}
+                  <ProvenanceChip kind={tierToChip(summary?.opportunityGrossTier)} />
+                </>
+              }
             />
-            <HeroCard
+            <PeHeroCard
               valueTone="primary"
+              pending={summaryPending}
               question="Probability-weighted"
               value={formatGbpCompact(summary?.opportunityWeighted ?? 0)}
-              subtitle="After conversion probability"
-              chip={tierToChip(summary?.opportunityWeightedTier)}
+              subtitle={
+                <>
+                  After conversion probability{' '}
+                  <ProvenanceChip kind={tierToChip(summary?.opportunityWeightedTier)} />
+                </>
+              }
             />
-            <HeroCard
+            <PeHeroCard
               tone="conv"
+              pending={summaryPending}
               question="Commitment rate · 30d"
               value={formatPct(summary?.commitmentRate30d ?? 0)}
-              subtitle="Planned → future appt scheduled"
-              chip={tierToChip(summary?.commitmentRate30dTier)}
+              subtitle={
+                <>
+                  Planned → future appt scheduled{' '}
+                  <ProvenanceChip kind={tierToChip(summary?.commitmentRate30dTier)} />
+                </>
+              }
             />
-            <HeroCard
+            <PeHeroCard
               tone="risk"
+              pending={leakagePending}
               question={`Planned > ${thresholdDays}d, unscheduled`}
               value={formatGbpCompact(leakage?.totalValueAtRisk ?? 0)}
-              subtitle="No appointment linked yet"
-              chip="derived"
+              subtitle={
+                <>
+                  No appointment linked yet <ProvenanceChip kind="derived" />
+                </>
+              }
             />
           </>
         )}
@@ -351,8 +336,8 @@ export function ValueLeakage() {
           subtitle="£ retained and lost at each stage · Dentally events and transparent derivations"
           chip="derived"
         >
-          {journeyQuery.isLoading ? (
-            <Skeleton className="h-[230px] w-full" />
+          {journeyPending ? (
+            <PeChartSkeleton className="h-[230px]" />
           ) : journeyQuery.isError ? (
             <div className="flex items-start gap-2 py-6 text-sm text-danger-strong">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -375,7 +360,7 @@ export function ValueLeakage() {
             </p>
           ) : journey?.stages?.length ? (
             <>
-              <JourneyWaterfallDetailedChart stages={journey.stages} />
+              <JourneyWaterfallDetailedChart key={scopeKey} stages={journey.stages} />
               <div className="mt-3 flex flex-wrap gap-4 text-[12px] text-muted-foreground">
                 <span className="inline-flex items-center gap-1.5">
                   <span className="inline-block h-2.5 w-2.5 rounded-sm bg-primary" />
@@ -399,14 +384,14 @@ export function ValueLeakage() {
           subtitle="Never collapse the two into one number"
           chip="modelled"
         >
-          {summaryQuery.isLoading ? (
-            <Skeleton className="h-[200px] w-full" />
+          {summaryPending ? (
+            <PeChartSkeleton />
           ) : summaryQuery.isError ? (
             <p className="py-8 text-center text-[13px] text-muted-foreground">
               Opportunity breakdown unavailable.
             </p>
           ) : (
-            <OpportunityGrossVsWeightedChart rows={opportunityCategories} />
+            <OpportunityGrossVsWeightedChart key={scopeKey} rows={opportunityCategories} />
           )}
         </ChartCard>
       </div>
@@ -433,8 +418,8 @@ export function ValueLeakage() {
             subtitle={`Planned → future appointment within ${summary?.clinicianWindowDays ?? 30} days`}
             chip="derived"
           >
-            {summaryQuery.isLoading ? (
-              <Skeleton className="h-[180px] w-full" />
+            {summaryPending ? (
+              <PeChartSkeleton className="h-[180px]" />
             ) : summaryQuery.isError ? (
               <div className="flex items-start gap-2 py-6 text-sm text-danger-strong">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -471,8 +456,8 @@ export function ValueLeakage() {
             chip="derived"
             footer={leakageFooter}
           >
-            {summaryQuery.isLoading ? (
-              <Skeleton className="h-[180px] w-full" />
+            {summaryPending ? (
+              <PeChartSkeleton className="h-[180px]" />
             ) : summaryQuery.isError ? (
               <p className="py-8 text-center text-[13px] text-muted-foreground">
                 Window breakdown unavailable.

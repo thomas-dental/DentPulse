@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { useOrganization } from '@/hooks/useOrganization';
 import { fetchValueLeakageSummaryApi } from '@/services/integrations/patientEconomicsService';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
 
 export type CommitmentWindowRow = {
   windowDays: number;
@@ -61,14 +61,14 @@ export type ValueLeakageSummary = {
   tierNote: string;
 };
 
-export function useValueLeakageSummary() {
-  const { organizationId } = useOrganization();
+export function useValueLeakageSummary(options?: { enabled?: boolean }) {
+  const { organizationId, scopeKey, apiScope, enabled: scopeEnabled } = usePeScopedRead();
 
   return useQuery({
-    queryKey: ['value-leakage-summary', organizationId],
-    enabled: !!organizationId,
+    queryKey: ['value-leakage-summary', organizationId, scopeKey],
+    enabled: scopeEnabled && (options?.enabled ?? true),
     queryFn: async (): Promise<ValueLeakageSummary> => {
-      const body = await fetchValueLeakageSummaryApi(organizationId!);
+      const body = await fetchValueLeakageSummaryApi(organizationId!, apiScope);
       return {
         opportunityGross: Number(body.opportunityGross) || 0,
         opportunityGrossTier: String(body.opportunityGrossTier || 'Derived'),

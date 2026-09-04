@@ -386,6 +386,38 @@ async function syncResourceChunk(practiceId, options) {
   if (isLastPage && dateWindow) {
     const nextStart = dayAfter(dateWindow.chunkEnd);
     const endCap = todayUtc();
+    const periodEnd =
+      parsedCursor.kickoffMode === 'period' && parsedCursor.periodSyncEnd
+        ? parsedCursor.periodSyncEnd
+        : null;
+
+    if (periodEnd && nextStart > periodEnd) {
+      const doneMeta = completionStampsForParsed({ ...parsedCursor, ...cursorMeta });
+      await updateCursor(practiceId, resourceType, {
+        cursor: serializePageCursor(page, syncRunId, dateWindow, doneMeta),
+        status: 'complete',
+        ...successCursorFields,
+      });
+      if (syncRunId) {
+        await completeSyncRun(syncRunId, 'completed');
+      }
+      return {
+        success: true,
+        complete: true,
+        hasMore: false,
+        page,
+        processed: upsertResult.processed,
+        failed: upsertResult.failed,
+        skipped: upsertResult.skipped,
+        syncRunId,
+        cursorStatus: 'complete',
+        resourceType,
+        chunkStart: dateWindow.chunkStart,
+        chunkEnd: dateWindow.chunkEnd,
+        totalPages: pageCount,
+      };
+    }
+
     if (nextStart > endCap) {
       const doneMeta = completionStampsForParsed({ ...parsedCursor, ...cursorMeta });
       await updateCursor(practiceId, resourceType, {

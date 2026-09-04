@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { useOrganization } from '@/hooks/useOrganization';
 import { fetchGrowthLeversByPracticeApi } from '@/services/integrations/patientEconomicsService';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
+import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
 
 export type GrowthLeversPracticeRow = {
   practiceId: string;
@@ -39,13 +40,14 @@ export type GrowthLeversByPractice = {
 };
 
 export function useGrowthLeversByPractice() {
-  const { organizationId } = useOrganization();
+  const { organizationId, scopeKey, apiScope, enabled } = usePeScopedRead();
 
   return useQuery({
-    queryKey: ['growth-levers-by-practice', organizationId],
-    enabled: !!organizationId,
+    queryKey: ['growth-levers-by-practice', organizationId, scopeKey],
+    enabled,
+    staleTime: PE_READ_STALE_MS,
     queryFn: async (): Promise<GrowthLeversByPractice> => {
-      const body = await fetchGrowthLeversByPracticeApi(organizationId!);
+      const body = await fetchGrowthLeversByPracticeApi(organizationId!, apiScope);
       return {
         benchmarkMethod: String(body.benchmarkMethod || 'group_top'),
         benchmarkMethodNote: String(body.benchmarkMethodNote || ''),

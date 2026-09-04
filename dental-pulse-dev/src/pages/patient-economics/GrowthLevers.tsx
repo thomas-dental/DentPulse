@@ -17,67 +17,22 @@ import {
   useGrowthLeversByPractice,
   type GrowthLeversPracticeRow,
 } from '@/hooks/useGrowthLeversByPractice';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
 import { useCltvByAcquisitionSource } from '@/hooks/useCltvByAcquisitionSource';
 import { useEconomicAssumptions } from '@/hooks/useEconomicAssumptions';
 import { GrowthLeversSimulator } from '@/components/patient-economics/GrowthLeversSimulator';
+import { PeChartSkeleton, PeHeroCard } from '@/components/patient-economics/PeHeroCard';
 import { PeSectionLabel } from '@/components/patient-economics/PeSectionLabel';
 import {
   computeLeverYoYMetrics,
   computePatientEconomicValueGbp,
   computePracticeEconomicValueGbp,
   formatLeverDelta,
+  hasGrowthLeverClinicalData,
 } from '@/lib/peGrowthLeversDisplay';
+import { peReadPending } from '@/lib/peReadLoading';
 import { cn } from '@/lib/utils';
 import { PE_CTX_BANNER_CLASS } from '@/lib/peVisualTokens';
-
-type HeroTone = 'conv' | 'opp' | 'qual';
-
-function HeroCard({
-  tone = 'conv',
-  question,
-  value,
-  subtitle,
-  chip,
-}: {
-  tone?: HeroTone;
-  question: string;
-  value: React.ReactNode;
-  subtitle: React.ReactNode;
-  chip?: 'derived' | 'dentally' | 'modelled' | 'external' | 'pending';
-}) {
-  const bar =
-    tone === 'opp'
-      ? 'bg-[hsl(var(--chart-5))]'
-      : tone === 'qual'
-        ? 'bg-success'
-        : 'bg-warning';
-
-  const valueCls =
-    tone === 'opp'
-      ? 'text-[hsl(var(--chart-5))]'
-      : tone === 'qual'
-        ? 'text-success'
-        : 'text-warning';
-
-  return (
-    <div className="relative overflow-hidden rounded-[14px] border border-border bg-card px-4 py-4 pb-[15px] shadow-sm">
-      <div className={cn('absolute inset-x-0 top-0 h-[3px]', bar)} />
-      <div className="mb-[9px] min-h-[26px] text-[11px] font-semibold uppercase tracking-[0.04em] text-muted-foreground">
-        {question}
-      </div>
-      <div className={cn('text-[28px] font-extrabold tracking-tight', valueCls)}>{value}</div>
-      <div className="mt-2 text-[11.5px] leading-relaxed text-muted-foreground">
-        {subtitle}
-        {chip && (
-          <>
-            {' '}
-            <ProvenanceChip kind={chip} />
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
 
 function ChartCard({
   title,
@@ -176,12 +131,22 @@ function SortHeader({
 }
 
 export function GrowthLevers() {
+  const { scopeKey } = usePeScopedRead();
   const summaryQuery = useGrowthLeversSummary();
   const byPracticeQuery = useGrowthLeversByPractice();
   const cltvQuery = useCltvByAcquisitionSource();
   const assumptionsQuery = useEconomicAssumptions();
 
   const { data, isLoading, isError, error, refetch, isFetching } = summaryQuery;
+  const summaryPending = peReadPending(summaryQuery);
+  const byPracticePending = peReadPending(byPracticeQuery);
+  const cltvPending = peReadPending(cltvQuery);
+
+  const refetchAll = () => {
+    void refetch();
+    void byPracticeQuery.refetch();
+    void cltvQuery.refetch();
+  };
 
   const isEmpty =
     !!data &&
@@ -250,7 +215,7 @@ export function GrowthLevers() {
         </span>
       </div>
 
-      {isError && (
+      {isError && !data && (
         <div className="flex flex-wrap items-start gap-3 rounded-[10px] border border-danger/30 bg-danger-muted px-4 py-3 text-sm text-danger-strong">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <div className="flex-1">
@@ -259,7 +224,7 @@ export function GrowthLevers() {
               {error instanceof Error ? error.message : 'Summary query failed.'}
             </div>
           </div>
-          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+          <Button variant="outline" size="sm" onClick={refetchAll} disabled={isFetching}>
             Retry
           </Button>
         </div>
@@ -284,98 +249,89 @@ export function GrowthLevers() {
       )}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {isLoading ? (
-          Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-[120px] rounded-[14px]" />
-          ))
-        ) : isError ? null : (
-          <>
-            <HeroCard
-              tone="conv"
-              question="Lever 1 · Visit Frequency"
-              value={
+        <PeHeroCard
+          tone="conv"
+          pending={summaryPending}
+          question="Lever 1 · Visit Frequency"
+          value={
+            <>
+              {formatVisitFrequency(data?.visitFrequency ?? null)}
+              {data?.visitFrequency != null && (
+                <span className="text-[14px] font-semibold text-muted-foreground">/yr</span>
+              )}
+            </>
+          }
+          subtitle={
+            <>
+              Chargeable visits per active patient
+              <br />
+              {visitFreqDelta && (
+                <span className="font-semibold text-success-strong">{visitFreqDelta}</span>
+              )}
+              {visitFreqDelta ? ' vs prior yr' : 'Prior yr comparison unavailable'}
+              {targetVisitFrequency != null && (
                 <>
-                  {formatVisitFrequency(data?.visitFrequency ?? null)}
-                  {data?.visitFrequency != null && (
-                    <span className="text-[14px] font-semibold text-muted-foreground">/yr</span>
-                  )}
+                  {' · '}
+                  target {targetVisitFrequency.toFixed(1)}
                 </>
-              }
-              subtitle={
+              )}{' '}
+              <ProvenanceChip kind={tierToChip(data?.visitFrequencyTier)} />
+            </>
+          }
+        />
+        <PeHeroCard
+          tone="opp"
+          pending={summaryPending}
+          question="Lever 2 · Value per Visit"
+          value={data?.valuePerVisit != null ? formatGbp(data.valuePerVisit) : '—'}
+          subtitle={
+            <>
+              Avg contribution-bearing value per visit
+              <br />
+              {valuePerVisitDelta && (
+                <span className="font-semibold text-success-strong">{valuePerVisitDelta}</span>
+              )}
+              {valuePerVisitDelta ? '' : 'Prior yr comparison unavailable'}
+              {targetValuePerVisit != null && (
                 <>
-                  Chargeable visits per active patient
-                  <br />
-                  {visitFreqDelta && (
-                    <span className="font-semibold text-success-strong">{visitFreqDelta}</span>
-                  )}
-                  {visitFreqDelta ? ' vs prior yr' : 'Prior yr comparison unavailable'}
-                  {targetVisitFrequency != null && (
-                    <>
-                      {' · '}
-                      target {targetVisitFrequency.toFixed(1)}
-                    </>
-                  )}
-                  {' '}
-                  <ProvenanceChip kind={tierToChip(data?.visitFrequencyTier)} />
+                  {valuePerVisitDelta ? ' · ' : ' · '}
+                  target {formatGbp(targetValuePerVisit)}
                 </>
-              }
-            />
-            <HeroCard
-              tone="opp"
-              question="Lever 2 · Value per Visit"
-              value={data?.valuePerVisit != null ? formatGbp(data.valuePerVisit) : '—'}
-              subtitle={
+              )}{' '}
+              <ProvenanceChip kind={tierToChip(data?.valuePerVisitTier)} />
+            </>
+          }
+        />
+        <PeHeroCard
+          tone="qual"
+          pending={summaryPending}
+          question="Lever 3 · Patient Retention / Lifetime"
+          value={
+            <>
+              {formatYears(data?.tenureYears ?? null)}
+              {data?.tenureYears != null && (
+                <span className="text-[14px] font-semibold text-muted-foreground"> yrs</span>
+              )}
+            </>
+          }
+          subtitle={
+            <>
+              Current avg tenure <ProvenanceChip kind={tierToChip(data?.tenureTier)} />
+              <br />
+              Projected lifetime{' '}
+              {data?.projectedLifetimeYears != null
+                ? `${data.projectedLifetimeYears.toFixed(1)} yrs`
+                : '—'}
+              {heroEconomicValue != null && (
                 <>
-                  Avg contribution-bearing value per visit
-                  <br />
-                  {valuePerVisitDelta && (
-                    <span className="font-semibold text-success-strong">{valuePerVisitDelta}</span>
-                  )}
-                  {valuePerVisitDelta ? '' : 'Prior yr comparison unavailable'}
-                  {targetValuePerVisit != null && (
-                    <>
-                      {valuePerVisitDelta ? ' · ' : ' · '}
-                      target {formatGbp(targetValuePerVisit)}
-                    </>
-                  )}
-                  {' '}
-                  <ProvenanceChip kind={tierToChip(data?.valuePerVisitTier)} />
+                  {' · '}
+                  Economic Value {formatGbp(heroEconomicValue)}
                 </>
-              }
-            />
-            <HeroCard
-              tone="qual"
-              question="Lever 3 · Patient Retention / Lifetime"
-              value={
-                <>
-                  {formatYears(data?.tenureYears ?? null)}
-                  {data?.tenureYears != null && (
-                    <span className="text-[14px] font-semibold text-muted-foreground"> yrs</span>
-                  )}
-                </>
-              }
-              subtitle={
-                <>
-                  Current avg tenure{' '}
-                  <ProvenanceChip kind={tierToChip(data?.tenureTier)} />
-                  <br />
-                  Projected lifetime{' '}
-                  {data?.projectedLifetimeYears != null
-                    ? `${data.projectedLifetimeYears.toFixed(1)} yrs`
-                    : '—'}
-                  {heroEconomicValue != null && (
-                    <>
-                      {' · '}
-                      Economic Value {formatGbp(heroEconomicValue)}
-                    </>
-                  )}
-                  {' '}
-                  <ProvenanceChip kind={tierToChip(data?.projectedLifetimeTier)} />
-                </>
-              }
-            />
-          </>
-        )}
+              )}{' '}
+              <ProvenanceChip kind={tierToChip(data?.projectedLifetimeTier)} />
+            </>
+          }
+        />
       </div>
 
       <GrowthLeversSimulator />
@@ -387,8 +343,8 @@ export function GrowthLevers() {
           title={`Lever headroom by ${rollupUnitLabel}`}
           subtitle="Gap to target on each lever · darker = more room to grow"
         >
-          {byPracticeQuery.isLoading ? (
-            <Skeleton className="h-[180px] w-full" />
+          {byPracticePending ? (
+            <PeChartSkeleton className="h-[180px]" />
           ) : byPracticeQuery.isError ? (
             <div className="flex items-start gap-2 py-6 text-sm text-danger-strong">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -406,7 +362,7 @@ export function GrowthLevers() {
               </div>
             </div>
           ) : (
-            <LeverHeadroomByPracticeChart rows={practiceRows} />
+            <LeverHeadroomByPracticeChart key={scopeKey} rows={practiceRows} />
           )}
         </ChartCard>
 
@@ -414,8 +370,8 @@ export function GrowthLevers() {
           title="CLTV™ by acquisition source"
           subtitle="Not all patients are worth the same over a lifetime"
         >
-          {cltvQuery.isLoading ? (
-            <Skeleton className="h-[180px] w-full" />
+          {cltvPending ? (
+            <PeChartSkeleton className="h-[180px]" />
           ) : cltvQuery.isError ? (
             <div className="flex items-start gap-2 py-6 text-sm text-danger-strong">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -434,7 +390,7 @@ export function GrowthLevers() {
             </div>
           ) : (
             <>
-              <CltvByAcquisitionSourceChart rows={cltvQuery.data?.sources ?? []} />
+              <CltvByAcquisitionSourceChart key={scopeKey} rows={cltvQuery.data?.sources ?? []} />
               <p className="mt-3 text-[12px] leading-relaxed text-muted-foreground">
                 Referred and membership patients carry the highest lifetime contribution.
                 CAC-adjusted view arrives with attribution in the next version.
@@ -460,7 +416,7 @@ export function GrowthLevers() {
           </span>
         </div>
 
-        {byPracticeQuery.isLoading ? (
+        {byPracticePending ? (
           <div className="p-5 space-y-2">
             {Array.from({ length: 4 }).map((_, i) => (
               <Skeleton key={i} className="h-10 w-full" />
@@ -550,7 +506,9 @@ export function GrowthLevers() {
                 </tr>
               </thead>
               <tbody>
-                {practiceRows.map((row) => (
+                {practiceRows.map((row) => {
+                  const hasClinicalData = hasGrowthLeverClinicalData(row);
+                  return (
                   <tr
                     key={row.practiceId}
                     className="border-b border-border/60 last:border-0 hover:bg-primary/[0.04]"
@@ -572,7 +530,9 @@ export function GrowthLevers() {
                       {row.tenureYears != null ? `${row.tenureYears.toFixed(1)} yrs` : '—'}
                     </td>
                     <td className="px-3 py-3 text-right">
-                      {row.combinedHeadroomPct != null ? (
+                      {!hasClinicalData ? (
+                        <span className="text-[11px] text-muted-foreground">Insufficient data</span>
+                      ) : row.combinedHeadroomPct != null ? (
                         <span
                           className={cn(
                             'inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold tabular-nums',
@@ -590,7 +550,7 @@ export function GrowthLevers() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      {row.topLeverToPull ? (
+                      {hasClinicalData && row.topLeverToPull ? (
                         <span className="inline-flex rounded-full bg-primary/12 px-2.5 py-0.5 text-[11px] font-semibold text-primary">
                           {row.topLeverToPull}
                         </span>
@@ -599,7 +559,8 @@ export function GrowthLevers() {
                       )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

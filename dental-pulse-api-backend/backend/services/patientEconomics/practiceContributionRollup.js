@@ -6,6 +6,11 @@
 const { supabaseAdmin } = require('../../config/supabase');
 const { resolvePeRollupUnits } = require('./peRollupUnits');
 const { withPeReadCache } = require('./peReadCache');
+const { scopeCacheExtra, hasAnyScope } = require('./peReadScope');
+const {
+  applyDataQualityMetrics,
+  mapScopedSummaryFacts,
+} = require('./practiceContributionRollupMetrics');
 
 function num(v) {
   const n = Number(v);
@@ -42,35 +47,12 @@ function emptyRow(unit, organizationName) {
 }
 
 function finalizeRow(row) {
-  const withRevenue = row.invoicesWithRevenue;
   row.marginPct =
     row.revenuePrivatePlan > 0
       ? Math.round((row.contribution / row.revenuePrivatePlan) * 1000) / 10
       : null;
-  row.pctComplete =
-    withRevenue > 0 ? Math.round((1000 * row.invoicesComplete) / withRevenue) / 10 : null;
-  row.pctPartialNoPractitioner =
-    withRevenue > 0
-      ? Math.round((1000 * row.invoicesPartialNoPractitioner) / withRevenue) / 10
-      : null;
-  row.pctPartialMissingRate =
-    withRevenue > 0
-      ? Math.round((1000 * row.invoicesPartialMissingRate) / withRevenue) / 10
-      : null;
 
-  if (row.invoicesPartialNoPractitioner > 0) {
-    row.contributionProvenanceStatus = 'partial_no_practitioner';
-  } else if (row.invoicesPartialMissingRate > 0) {
-    row.contributionProvenanceStatus = 'partial_missing_rate';
-  } else {
-    row.contributionProvenanceStatus = 'complete';
-  }
-
-  if (row.invoicesPartialNoPractitioner > 0 || row.invoicesPartialMissingRate > 0) {
-    row.clinicianCostTier = 'External';
-  } else {
-    row.clinicianCostTier = 'Derived';
-  }
+  applyDataQualityMetrics(row);
 
   if (row.confidenceScore != null && row.invoiceCount > 0) {
     row.confidenceScore = Math.round(row.confidenceScore / row.invoiceCount);
@@ -137,10 +119,65 @@ function rowFromLocationFacts(unit, loc) {
   return finalizeRow(row);
 }
 
+function rowFromSummaryFacts(unit, facts) {
+  const row = emptyRow(unit);
+  if (!facts || typeof facts !== 'object') return finalizeRow(row);
+
+  Object.assign(row, mapScopedSummaryFacts(facts));
+
+  return finalizeRow(row);
+}
+
+function indexScopedRollupPayload(payload) {
+  const byLocation = new Map();
+  for (const row of payload?.by_location ?? []) {
+    if (row?.location_id != null) {
+      byLocation.set(String(row.location_id), row);
+    }
+  }
+  return {
+    practiceTotal:
+      payload?.practice_total && typeof payload.practice_total === 'object'
+        ? payload.practice_total
+        : null,
+    byLocation,
+  };
+}
+
+function scopedFactsForUnit(indexed, unit, scope) {
+  const locId = scope.locationId || unit.locationId || null;
+  if (locId) {
+    return indexed.byLocation.get(String(locId)) ?? null;
+  }
+  return indexed.practiceTotal;
+}
+
+async function loadScopedRollupByOrg(orgIds, scope) {
+  const byOrg = new Map();
+
+  await Promise.all(
+    orgIds.map(async (orgId) => {
+      const { data, error } = await supabaseAdmin.rpc('pe_practice_contribution_rollup_scoped', {
+        p_practice_id: orgId,
+        p_location_id: scope.locationId || null,
+        p_start_date: scope.startDate || null,
+        p_end_date: scope.endDate || null,
+      });
+      if (error) {
+        throw new Error(`pe_practice_contribution_rollup_scoped: ${error.message}`);
+      }
+      byOrg.set(orgId, indexScopedRollupPayload(data));
+    }),
+  );
+
+  return byOrg;
+}
+
 /**
  * @param {string} userId
+ * @param {{ locationId?: string | null, startDate?: string | null, endDate?: string | null }} scope
  */
-async function getPracticeContributionRollup(userId) {
+async function getPracticeContributionRollup(userId, scope = {}) {
   const { loadUserPracticeIds } = require('./peRollupUnits');
   const practiceIds = await loadUserPracticeIds(userId);
   const contextPracticeId = practiceIds[0] ?? '';
@@ -149,13 +186,30 @@ async function getPracticeContributionRollup(userId) {
     return { rollupMode: 'practice', rows: [] };
   }
 
-  const cacheKey = units.map((u) => u.unitId).join(',');
+  let filteredUnits = units;
+  if (scope.locationId) {
+    filteredUnits = units.filter(
+      (u) => u.locationId === scope.locationId || u.unitId === scope.locationId,
+    );
+  }
+
+  const cacheKey = `${filteredUnits.map((u) => u.unitId).join(',')}:${scopeCacheExtra(scope)}`;
+  const useScopedSummary = hasAnyScope(scope);
 
   return withPeReadCache('practice-contribution-rollup', userId, async () => {
     const rows = [];
 
-    if (rollupMode === 'practice') {
-      for (const unit of units) {
+    if (useScopedSummary) {
+      const orgIds = [...new Set(filteredUnits.map((u) => u.organizationId))];
+      const scopedByOrg = await loadScopedRollupByOrg(orgIds, scope);
+
+      for (const unit of filteredUnits) {
+        const indexed = scopedByOrg.get(unit.organizationId);
+        const facts = indexed ? scopedFactsForUnit(indexed, unit, scope) : null;
+        rows.push(rowFromSummaryFacts(unit, facts));
+      }
+    } else if (rollupMode === 'practice') {
+      for (const unit of filteredUnits) {
         const { data, error } = await supabaseAdmin.rpc('pe_practice_contribution_row', {
           p_practice_id: unit.organizationId,
         });
@@ -163,22 +217,24 @@ async function getPracticeContributionRollup(userId) {
         rows.push(rowFromPracticeFacts(unit, data));
       }
     } else {
-      const orgIds = [...new Set(units.map((u) => u.organizationId))];
+      const orgIds = [...new Set(filteredUnits.map((u) => u.organizationId))];
       const locationFactsByOrg = new Map();
 
-      for (const orgId of orgIds) {
-        const { data, error } = await supabaseAdmin.rpc('pe_location_contribution_rollup', {
-          p_practice_id: orgId,
-        });
-        if (error) throw new Error(`pe_location_contribution_rollup: ${error.message}`);
-        const byLocation = new Map();
-        for (const loc of data ?? []) {
-          if (loc?.location_id) byLocation.set(String(loc.location_id), loc);
-        }
-        locationFactsByOrg.set(orgId, byLocation);
-      }
+      await Promise.all(
+        orgIds.map(async (orgId) => {
+          const { data, error } = await supabaseAdmin.rpc('pe_location_contribution_rollup', {
+            p_practice_id: orgId,
+          });
+          if (error) throw new Error(`pe_location_contribution_rollup: ${error.message}`);
+          const byLocation = new Map();
+          for (const loc of data ?? []) {
+            if (loc?.location_id) byLocation.set(String(loc.location_id), loc);
+          }
+          locationFactsByOrg.set(orgId, byLocation);
+        }),
+      );
 
-      for (const unit of units) {
+      for (const unit of filteredUnits) {
         const byLocation = locationFactsByOrg.get(unit.organizationId) ?? new Map();
         const locFacts = unit.locationId ? byLocation.get(unit.locationId) : null;
         rows.push(rowFromLocationFacts(unit, locFacts));

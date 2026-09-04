@@ -16,6 +16,7 @@ const {
   topLeverToPull,
   benchmarkMethodNote,
   numOrNull,
+  hasClinicalLeverData,
 } = require('./growthLeversBenchmarkLogic');
 
 async function loadUserPracticeIds(userId) {
@@ -112,9 +113,18 @@ async function loadPerPracticeTargets(practiceIds) {
 /**
  * @param {string} userId
  * @param {string} contextPracticeId — org whose pe_economic_assumptions sets group benchmark method
+ * @param {{ locationId?: string | null, startDate?: string | null, endDate?: string | null }} [scope]
  */
-async function getGrowthLeversByPractice(userId, contextPracticeId) {
-  const { rollupMode, units } = await resolvePeRollupUnits(userId, contextPracticeId);
+async function getGrowthLeversByPractice(userId, contextPracticeId, scope = {}) {
+  const { rollupMode, units: allUnits } = await resolvePeRollupUnits(userId, contextPracticeId);
+
+  let units = allUnits;
+  if (scope.locationId) {
+    units = allUnits.filter(
+      (u) => u.locationId === scope.locationId || u.unitId === scope.locationId,
+    );
+  }
+
   if (units.length === 0) {
     return {
       contextPracticeId,
@@ -138,7 +148,9 @@ async function getGrowthLeversByPractice(userId, contextPracticeId) {
     units.map(async (unit) => {
       try {
         const s = await getGrowthLeversSummary(unit.organizationId, {
-          locationId: unit.locationId,
+          locationId: scope.locationId || unit.locationId || null,
+          startDate: scope.startDate || null,
+          endDate: scope.endDate || null,
         });
         return {
           practiceId: unit.unitId,
@@ -211,13 +223,15 @@ async function getGrowthLeversByPractice(userId, contextPracticeId) {
       valuePerVisitHeadroom,
       tenureHeadroom,
       projectedLifetimeHeadroom,
-      combinedHeadroomPct: combinedHeadroomPct([
-        gapPcts.visitFrequency,
-        gapPcts.valuePerVisit,
-        gapPcts.tenureYears,
-        gapPcts.projectedLifetimeYears,
-      ]),
-      topLeverToPull: topLeverToPull(gapPcts),
+      combinedHeadroomPct: hasClinicalLeverData(row)
+        ? combinedHeadroomPct([
+            gapPcts.visitFrequency,
+            gapPcts.valuePerVisit,
+            gapPcts.tenureYears,
+            gapPcts.projectedLifetimeYears,
+          ])
+        : null,
+      topLeverToPull: hasClinicalLeverData(row) ? topLeverToPull(gapPcts) : null,
     };
   });
 

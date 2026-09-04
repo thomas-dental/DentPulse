@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { useOrganization } from '@/hooks/useOrganization';
 import { fetchGrowthLeversSummaryApi } from '@/services/integrations/patientEconomicsService';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
 import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
 
 export type GrowthLeversMonthlyRow = {
@@ -21,6 +21,7 @@ export type GrowthLeversSummary = {
   valuePerVisitTierNote: string;
   totalCompletedVisits: number;
   totalRevenuePrivatePlan: number;
+  totalContribution: number;
   activePatientCount: number;
   monthly: GrowthLeversMonthlyRow[];
   hasAppointmentData: boolean;
@@ -36,19 +37,20 @@ export type GrowthLeversSummary = {
   projectedLifetimePatientCount: number;
   hasTenureData: boolean;
   hasProjectedLifetimeData: boolean;
+  marginPct: number | null;
   tier: string;
   tierNote: string;
 };
 
-export function useGrowthLeversSummary() {
-  const { organizationId } = useOrganization();
+export function useGrowthLeversSummary(options?: { enabled?: boolean }) {
+  const { organizationId, scopeKey, apiScope, enabled: scopeEnabled } = usePeScopedRead();
 
   return useQuery({
-    queryKey: ['growth-levers-summary', organizationId],
-    enabled: !!organizationId,
+    queryKey: ['growth-levers-summary', organizationId, scopeKey],
+    enabled: scopeEnabled && (options?.enabled ?? true),
     staleTime: PE_READ_STALE_MS,
     queryFn: async (): Promise<GrowthLeversSummary> => {
-      const body = await fetchGrowthLeversSummaryApi(organizationId!);
+      const body = await fetchGrowthLeversSummaryApi(organizationId!, apiScope);
       return {
         trailingMonths: Number(body.trailingMonths) || 12,
         sinceDate: String(body.sinceDate || ''),
@@ -61,6 +63,7 @@ export function useGrowthLeversSummary() {
         valuePerVisitTierNote: String(body.valuePerVisitTierNote || ''),
         totalCompletedVisits: Number(body.totalCompletedVisits) || 0,
         totalRevenuePrivatePlan: Number(body.totalRevenuePrivatePlan) || 0,
+        totalContribution: Number(body.totalContribution) || 0,
         activePatientCount: Number(body.activePatientCount) || 0,
         monthly: (body.monthly ?? []).map((r) => ({
           month: String(r.month || ''),
@@ -82,6 +85,7 @@ export function useGrowthLeversSummary() {
         projectedLifetimePatientCount: Number(body.projectedLifetimePatientCount) || 0,
         hasTenureData: Boolean(body.hasTenureData),
         hasProjectedLifetimeData: Boolean(body.hasProjectedLifetimeData),
+        marginPct: body.marginPct == null ? null : Number(body.marginPct),
         tier: String(body.tier || 'Derived'),
         tierNote: String(body.tierNote || ''),
       };

@@ -15,18 +15,16 @@
 
 const { supabaseAdmin } = require('../../config/supabase');
 const { resolvePeRollupUnits } = require('./peRollupUnits');
-const { loadPatientUuidsForLocation } = require('./peLocationScope');
 const { loadPeEconomicAssumptions } = require('./peEconomicAssumptions');
 const { parseRetentionStatus } = require('./peRetentionSegmentation');
+const { withPeReadCache } = require('./peReadCache');
 const {
   annualizeTrailingContribution,
   buildRecoveryFunnel,
-  pickLatestCompletedVisit,
   resolveWorklistDaysOverdue,
 } = require('./peReactivationWorklistLogic');
 
 const PAGE_SIZE = 1000;
-const { queryInPatientChunks } = require('./pePatientQueryChunks');
 const AT_RISK_STATUSES = new Set(['drifting', 'lapsed', 'effectively_lost']);
 const DERIVED_TIER = 'Derived';
 const RECOVERY_TIER_NOTE =
@@ -109,12 +107,6 @@ function trailingSinceIsoDate(months) {
   return d.toISOString().slice(0, 10);
 }
 
-function addDaysIso(ts, days) {
-  const d = new Date(ts);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
 async function loadUserPracticeIds(userId) {
   const { data, error } = await supabaseAdmin
     .from('user_roles')
@@ -150,95 +142,27 @@ async function loadPracticeNames(practiceIds) {
 }
 
 async function fetchTrailingContributionByPatient(practiceId, trailingMonths) {
+  const { forEachInvoiceGrainPage } = require('./peReadSource');
   const map = new Map();
   const since = trailingSinceIsoDate(trailingMonths);
-  const tables = ['pe_invoice_contribution_facts', 'v_invoice_contribution'];
 
-  for (const table of tables) {
-    map.clear();
-    let offset = 0;
-    let found = false;
-
-    for (let page = 0; page < 100; page++) {
-      const { data, error } = await supabaseAdmin
-        .from(table)
-        .select('patient_id, contribution')
-        .eq('practice_id', practiceId)
-        .gte('invoice_date', since)
-        .range(offset, offset + PAGE_SIZE - 1);
-
-      if (error && error.code === '42P01') break;
-      if (error) throw new Error(`${table} trailing: ${error.message}`);
-
-      const batch = data ?? [];
-      if (batch.length > 0) found = true;
+  await forEachInvoiceGrainPage(
+    practiceId,
+    {
+      select: 'patient_id, contribution',
+      applyFilters: (query) => query.gte('invoice_date', since),
+      maxPages: 100,
+    },
+    async (batch) => {
       for (const row of batch) {
         if (row.patient_id == null) continue;
         const pid = String(row.patient_id);
         map.set(pid, (map.get(pid) ?? 0) + num(row.contribution));
       }
-
-      if (batch.length < PAGE_SIZE) break;
-      offset += PAGE_SIZE;
-    }
-
-    if (found) return map;
-  }
+    },
+  );
 
   return map;
-}
-
-async function sumContributionBetween(practiceId, patientId, fromIsoDate, toIsoDate) {
-  let sum = 0;
-  const tables = ['pe_invoice_contribution_facts', 'v_invoice_contribution'];
-
-  for (const table of tables) {
-    sum = 0;
-    let offset = 0;
-    let found = false;
-
-    for (let page = 0; page < 50; page++) {
-      const { data, error } = await supabaseAdmin
-        .from(table)
-        .select('contribution')
-        .eq('practice_id', practiceId)
-        .eq('patient_id', patientId)
-        .gte('invoice_date', fromIsoDate)
-        .lte('invoice_date', toIsoDate)
-        .range(offset, offset + PAGE_SIZE - 1);
-
-      if (error && error.code === '42P01') break;
-      if (error) throw new Error(`${table} recovery sum: ${error.message}`);
-
-      const batch = data ?? [];
-      if (batch.length > 0) found = true;
-      for (const row of batch) {
-        sum += num(row.contribution);
-      }
-
-      if (batch.length < PAGE_SIZE) break;
-      offset += PAGE_SIZE;
-    }
-
-    if (found) return round2(sum);
-  }
-
-  return round2(sum);
-}
-
-async function findReactivationEventAfter(practiceId, patientId, flaggedAt) {
-  const { data, error } = await supabaseAdmin
-    .from('event_ledger')
-    .select('id, created_at')
-    .eq('practice_id', practiceId)
-    .eq('patient_id', patientId)
-    .eq('event_type', 'PATIENT_REACTIVATED')
-    .gt('created_at', flaggedAt)
-    .order('created_at', { ascending: true })
-    .limit(1);
-
-  if (error) throw new Error(`event_ledger PATIENT_REACTIVATED: ${error.message}`);
-  return data?.[0] ?? null;
 }
 
 async function loadOpenFlags(practiceId) {
@@ -255,64 +179,17 @@ async function loadOpenFlags(practiceId) {
   return data ?? [];
 }
 
-async function loadAllFlags(practiceId) {
-  const rows = [];
-  let offset = 0;
+async function evaluateReactivationRecoveryForPractice(practiceId) {
+  const { data, error } = await supabaseAdmin.rpc('pe_evaluate_reactivation_recovery', {
+    p_practice_id: practiceId,
+  });
 
-  for (let i = 0; i < 100; i++) {
-    const { data, error } = await supabaseAdmin
-      .from('pe_reactivation_flags')
-      .select('*')
-      .eq('practice_id', practiceId)
-      .order('flagged_at', { ascending: false })
-      .range(offset, offset + PAGE_SIZE - 1);
-
-    if (error) {
-      if (error.code === '42P01') return [];
-      throw new Error(`pe_reactivation_flags: ${error.message}`);
-    }
-
-    const batch = data ?? [];
-    rows.push(...batch);
-    if (batch.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+  if (error) {
+    throw new Error(`pe_evaluate_reactivation_recovery: ${error.message}`);
   }
 
-  return rows;
-}
-
-async function evaluateRecoveryForFlag(flag) {
-  const event = await findReactivationEventAfter(
-    flag.practice_id,
-    flag.patient_id,
-    flag.flagged_at,
-  );
-  if (!event) return false;
-
-  const reactivatedAt = event.created_at;
-  const windowDays = num(flag.recovery_window_days) || 365;
-  const windowEnd = addDaysIso(reactivatedAt, windowDays);
-  const recoveredGbp = await sumContributionBetween(
-    flag.practice_id,
-    flag.patient_id,
-    reactivatedAt.slice(0, 10),
-    windowEnd,
-  );
-
-  const { error } = await supabaseAdmin
-    .from('pe_reactivation_flags')
-    .update({
-      status: 'recovered',
-      recovered_at: reactivatedAt,
-      reactivation_event_at: reactivatedAt,
-      contribution_recovered: recoveredGbp,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', flag.id)
-    .eq('status', 'open');
-
-  if (error) throw new Error(`pe_reactivation_flags recover: ${error.message}`);
-  return true;
+  const payload = data && typeof data === 'object' ? data : {};
+  return num(payload.recovered);
 }
 
 async function openFlagsForPractice(practiceId) {
@@ -406,13 +283,9 @@ async function loadAtRiskPatients(practiceId) {
 
 async function syncReactivationFlagsForPractice(practiceId) {
   const opened = await openFlagsForPractice(practiceId);
+  const recovered = await evaluateReactivationRecoveryForPractice(practiceId);
   const openFlags = await loadOpenFlags(practiceId);
-  let recovered = 0;
-  for (const flag of openFlags) {
-    const did = await evaluateRecoveryForFlag(flag);
-    if (did) recovered += 1;
-  }
-  return { opened, recovered, openRemaining: openFlags.length - recovered };
+  return { opened, recovered, openRemaining: openFlags.length };
 }
 
 function buildRecoveryMetrics(flags) {
@@ -450,113 +323,38 @@ function buildRecoveryMetrics(flags) {
   };
 }
 
-async function loadPatientWorklistMeta(practiceId, patientIds) {
-  const names = new Map();
-  const retentionStatuses = new Map();
-  const worklistMeta = new Map();
-  if (patientIds.length === 0) return { names, retentionStatuses, worklistMeta };
-
-  for (let i = 0; i < patientIds.length; i += 300) {
-    const chunk = patientIds.slice(i, i + 300);
-    const { data, error } = await supabaseAdmin
-      .from('patients')
-      .select(
-        'id, pt_first_name, pt_last_name, pt_dentist_recall_date, pt_hygienist_recall_date, pt_id',
-      )
-      .eq('organization_id', practiceId)
-      .in('id', chunk);
-
-    if (error) throw new Error(`patient worklist meta: ${error.message}`);
-
-    for (const row of data ?? []) {
-      if (row.id == null) continue;
-      const pid = String(row.id);
-      names.set(
-        pid,
-        `${String(row.pt_first_name || '').trim()} ${String(row.pt_last_name || '').trim()}`.trim() ||
-          'Unknown patient',
-      );
-      worklistMeta.set(pid, {
-        dentistRecallDate: row.pt_dentist_recall_date,
-        hygienistRecallDate: row.pt_hygienist_recall_date,
-        ptId: row.pt_id,
-        lastVisitAt: null,
-      });
-    }
-  }
-
-  const ptIds = [...worklistMeta.values()]
-    .map((m) => m.ptId)
-    .filter((id) => id != null && String(id).length > 0);
-
-  if (ptIds.length > 0) {
-    for (let i = 0; i < ptIds.length; i += 300) {
-      const chunk = ptIds.slice(i, i + 300);
-      const { data, error } = await supabaseAdmin
-        .from('appointments')
-        .select('apmt_patient_id, apmt_completed_at, apmt_state')
-        .eq('organization_id', practiceId)
-        .in('apmt_patient_id', chunk);
-
-      if (error) throw new Error(`appointment last visit: ${error.message}`);
-
-      const lastByPtId = new Map();
-      const byPtId = new Map();
-      for (const appt of data ?? []) {
-        const ptId = String(appt.apmt_patient_id);
-        if (!byPtId.has(ptId)) byPtId.set(ptId, []);
-        byPtId.get(ptId).push(appt);
-      }
-      for (const [ptId, appts] of byPtId.entries()) {
-        const last = pickLatestCompletedVisit(appts);
-        if (last) lastByPtId.set(ptId, last);
-      }
-
-      for (const [pid, meta] of worklistMeta.entries()) {
-        if (meta.ptId == null) continue;
-        const last = lastByPtId.get(String(meta.ptId));
-        if (last) meta.lastVisitAt = String(last);
-      }
-    }
-  }
-
-  const contribRows = await queryInPatientChunks(patientIds, (chunk) =>
-    supabaseAdmin
-      .from('pe_patient_contribution_facts')
-      .select('patient_id, retention_status')
-      .eq('practice_id', practiceId)
-      .in('patient_id', chunk),
-  );
-
-  if (contribRows.length === 0) {
-    const fallbackRows = await queryInPatientChunks(patientIds, (chunk) =>
-      supabaseAdmin
-        .from('v_patient_contribution')
-        .select('patient_id, retention_status')
-        .eq('practice_id', practiceId)
-        .in('patient_id', chunk),
-    );
-    for (const row of fallbackRows) {
-      if (row.patient_id == null) continue;
-      const pid = String(row.patient_id);
-      if (row.retention_status != null) {
-        retentionStatuses.set(pid, String(row.retention_status));
-      }
-    }
-  } else {
-    for (const row of contribRows) {
-      if (row.patient_id == null) continue;
-      const pid = String(row.patient_id);
-      if (row.retention_status != null) {
-        retentionStatuses.set(pid, String(row.retention_status));
-      }
-    }
-  }
-
-  return { names, retentionStatuses, worklistMeta };
+function rpcRowToDbFlag(row) {
+  return {
+    id: row.id,
+    practice_id: row.practice_id,
+    patient_id: row.patient_id,
+    segment_at_flag_time: row.segment_at_flag_time,
+    contribution_at_risk_at_flag_time: row.contribution_at_risk_at_flag_time,
+    lifetime_contribution_at_flag: row.lifetime_contribution_at_flag,
+    flagged_at: row.flagged_at,
+    status: row.status,
+    recovered_at: row.recovered_at,
+    reactivation_event_at: row.reactivation_event_at,
+    contribution_recovered: row.contribution_recovered,
+    recovery_window_days: row.recovery_window_days,
+    trailing_months: row.trailing_months,
+  };
 }
 
-function mapFlagRow(flag, patientName, currentRetentionStatus) {
+async function fetchRetentionRecoveryLoopRpc(practiceId, locationId = null) {
+  const { data, error } = await supabaseAdmin.rpc('pe_retention_recovery_loop', {
+    p_practice_id: practiceId,
+    p_location_id: locationId,
+  });
+
+  if (error) {
+    throw new Error(`pe_retention_recovery_loop: ${error.message}`);
+  }
+
+  return data && typeof data === 'object' ? data : {};
+}
+
+function mapFlagRow(flag, patientName, currentRetentionStatus, dentallyPatientUuid = null) {
   const preFlag =
     flag.lifetime_contribution_at_flag != null
       ? num(flag.lifetime_contribution_at_flag)
@@ -565,6 +363,7 @@ function mapFlagRow(flag, patientName, currentRetentionStatus) {
     flagId: String(flag.id),
     patientId: String(flag.patient_id),
     patientName: patientName || 'Unknown patient',
+    dentallyPatientUuid: dentallyPatientUuid || null,
     segmentAtFlagTime: String(flag.segment_at_flag_time),
     currentRetentionStatus:
       currentRetentionStatus != null
@@ -591,38 +390,32 @@ async function buildScopedRecoveryPayload(
   unitType,
   locationId = null,
 ) {
-  const allFlags = await loadAllFlags(organizationId);
+  const rpc = await fetchRetentionRecoveryLoopRpc(organizationId, locationId);
+  const enrichedFlags = Array.isArray(rpc.flags) ? rpc.flags : [];
+  const dbFlags = enrichedFlags.map(rpcRowToDbFlag);
+  const metrics = buildRecoveryMetrics(dbFlags);
 
-  let flags = allFlags;
-  if (locationId) {
-    const patientUuids = await loadPatientUuidsForLocation(organizationId, locationId);
-    const patientSet = new Set(patientUuids);
-    flags = allFlags.filter((f) => patientSet.has(String(f.patient_id)));
-  }
-
-  const metrics = buildRecoveryMetrics(flags);
-
-  const patientIds = [...new Set(flags.map((f) => String(f.patient_id)))];
-  const { names, retentionStatuses, worklistMeta } = await loadPatientWorklistMeta(
-    organizationId,
-    patientIds,
-  );
-
-  const openValueGbp = round2(
-    flags
-      .filter((f) => f.status === 'open')
-      .reduce((s, f) => s + num(f.contribution_at_risk_at_flag_time), 0),
-  );
-  const openFlagCount = flags.filter((f) => f.status === 'open').length;
-
-  const flagRows = flags.map((f) => {
-    const pid = String(f.patient_id);
-    return mapFlagRow(f, names.get(pid), retentionStatuses.get(pid));
+  const worklistMeta = new Map();
+  const flagRows = enrichedFlags.map((row) => {
+    const dbFlag = rpcRowToDbFlag(row);
+    const pid = String(row.patient_id);
+    worklistMeta.set(pid, {
+      dentistRecallDate: row.dentist_recall_date ?? null,
+      hygienistRecallDate: row.hygienist_recall_date ?? null,
+      lastVisitAt: row.last_visit_at != null ? String(row.last_visit_at) : null,
+    });
+    return mapFlagRow(
+      dbFlag,
+      row.patient_name,
+      row.current_retention_status,
+      row.dentally_patient_uuid,
+    );
   });
+
+  const openValueGbp = round2(metrics.openValueGbp);
+  const openFlagCount = metrics.openFlagCount;
   const openWorklist = buildOpenWorklist(flagRows, worklistMeta);
   const funnel = buildRecoveryFunnel(flagRows, openWorklist);
-
-  const assumptions = await loadPeEconomicAssumptions(organizationId);
 
   return {
     practiceId: unitId,
@@ -631,9 +424,9 @@ async function buildScopedRecoveryPayload(
     organizationId,
     reactivationValueGbp: openValueGbp,
     openFlagCount,
-    recoveryWindowDays: assumptions.reactivationRecoveryContributionWindowDays,
-    minContributionThresholdGbp: assumptions.reactivationMinContributionAtRiskGbp,
-    trailingMonths: assumptions.reactivationWorklistTrailingMonths,
+    recoveryWindowDays: num(rpc.recoveryWindowDays) || 365,
+    minContributionThresholdGbp: num(rpc.minContributionThresholdGbp) || 100,
+    trailingMonths: num(rpc.trailingMonths) || 12,
     ...metrics,
     flags: flagRows,
     openWorklist,
@@ -652,9 +445,17 @@ async function buildPracticeRecoveryPayload(practiceId, practiceName) {
 /**
  * @param {string} userId
  * @param {string} contextPracticeId
+ * @param {{ locationId?: string | null, startDate?: string | null, endDate?: string | null }} [scope]
  */
-async function getRetentionRecoveryLoop(userId, contextPracticeId) {
-  const { rollupMode, units } = await resolvePeRollupUnits(userId, contextPracticeId);
+async function buildRetentionRecoveryLoop(userId, contextPracticeId, scope = {}) {
+  const { rollupMode, units: allUnits } = await resolvePeRollupUnits(userId, contextPracticeId);
+
+  let units = allUnits;
+  if (scope.locationId) {
+    units = allUnits.filter(
+      (u) => u.locationId === scope.locationId || u.unitId === scope.locationId,
+    );
+  }
 
   if (units.length === 0) {
     return {
@@ -673,13 +474,14 @@ async function getRetentionRecoveryLoop(userId, contextPracticeId) {
         unit.unitId,
         unit.unitName,
         unit.unitType,
-        unit.locationId,
+        scope.locationId || unit.locationId || null,
       ),
     ),
   );
 
   const context =
     practicePayloads.find((p) => p.practiceId === contextPracticeId) ??
+    practicePayloads.find((p) => p.practiceId === scope.locationId) ??
     practicePayloads.find((p) => p.organizationId === contextPracticeId) ??
     practicePayloads[0];
 
@@ -747,6 +549,21 @@ async function getRetentionRecoveryLoop(userId, contextPracticeId) {
     },
     hasData,
   };
+}
+
+/**
+ * @param {string} userId
+ * @param {string} contextPracticeId
+ */
+async function getRetentionRecoveryLoop(userId, contextPracticeId, scope = {}) {
+  const { scopeCacheExtra } = require('./peReadScope');
+
+  return withPeReadCache(
+    'retention-recovery-loop',
+    contextPracticeId,
+    () => buildRetentionRecoveryLoop(userId, contextPracticeId, scope),
+    { extra: `${userId}:${scopeCacheExtra(scope)}`, ttlMs: 120_000 },
+  );
 }
 
 module.exports = {

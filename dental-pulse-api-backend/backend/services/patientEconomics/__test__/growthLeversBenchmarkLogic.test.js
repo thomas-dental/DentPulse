@@ -9,6 +9,7 @@ const {
   deriveStretchTargets,
   headroomPct,
   combinedHeadroomPct,
+  hasClinicalLeverData,
 } = require('../growthLeversBenchmarkLogic');
 
 test('deriveStretchTargets mirrors simulator bumps', () => {
@@ -59,4 +60,11 @@ test('configured targets win over stretch and group top', () => {
   );
   assert.equal(benchmarks.visitFrequency, 2.6);
   assert.equal(benchmarks.valuePerVisit, 205);
+});
+
+test('hasClinicalLeverData requires visits and value per visit', () => {
+  assert.equal(hasClinicalLeverData({ visitFrequency: 0, valuePerVisit: 100 }), false);
+  assert.equal(hasClinicalLeverData({ visitFrequency: 0.4, valuePerVisit: null }), false);
+  assert.equal(hasClinicalLeverData({ visitFrequency: null, valuePerVisit: 100 }), false);
+  assert.equal(hasClinicalLeverData({ visitFrequency: 0.4, valuePerVisit: 240.55 }), true);
 });

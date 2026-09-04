@@ -1,5 +1,5 @@
 import { AlertCircle, ChevronLeft, ChevronRight, Download, Search } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { DentallyPatientLink } from '@/components/patient-economics/DentallyLinks';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -75,13 +75,13 @@ function SummaryKpiCard({
   value,
   subtitle,
   tone = 'default',
-  isLoading,
+  pending = false,
 }: {
   label: string;
   value: string;
   subtitle: string;
   tone?: 'default' | 'qual' | 'opp' | 'warn' | 'danger';
-  isLoading?: boolean;
+  pending?: boolean;
 }) {
   const bar =
     tone === 'qual'
@@ -100,8 +100,11 @@ function SummaryKpiCard({
       <div className="mb-[9px] min-h-[26px] text-[11px] font-semibold uppercase tracking-[0.04em] text-muted-foreground">
         {label}
       </div>
-      {isLoading ? (
-        <Skeleton className="h-7 w-28" />
+      {pending ? (
+        <>
+          <Skeleton className="h-7 w-28" />
+          <Skeleton className="mt-[7px] h-3.5 w-[140px]" />
+        </>
       ) : (
         <div
           className={cn(
@@ -116,7 +119,9 @@ function SummaryKpiCard({
           {value}
         </div>
       )}
-      <div className="mt-[7px] text-[11.5px] leading-[1.5] text-muted-foreground">{subtitle}</div>
+      {!pending && (
+        <div className="mt-[7px] text-[11.5px] leading-[1.5] text-muted-foreground">{subtitle}</div>
+      )}
     </div>
   );
 }
@@ -222,6 +227,7 @@ function QualityScoreBadge({ score }: { score: number }) {
 export function PatientListDirectory() {
   const {
     isLoading,
+    isPlaceholderData,
     isError,
     error,
     refetch,
@@ -245,13 +251,13 @@ export function PatientListDirectory() {
     pageRows,
     summary,
     baselineSummary,
-    locationFilter,
-    onLocationFilterChange,
-    locationOptions,
     rollupMode,
     hasSyncedPatients,
     exportCsv,
   } = usePatientContributionListTable();
+
+  const tablePending = isLoading || isPlaceholderData || isFetching;
+  const kpiPending = tablePending;
 
   const secondaryKpi = patientListSecondaryKpi(
     retentionFilter,
@@ -297,33 +303,32 @@ export function PatientListDirectory() {
           value={summary.totalPatients.toLocaleString('en-GB')}
           subtitle={
             search.trim() ||
-            locationFilter !== 'all' ||
             retentionFilter !== 'all' ||
             typeFilter !== 'all'
               ? `${totalRows.toLocaleString('en-GB')} in current filter`
               : 'Synced invoice economics · this practice'
           }
-          isLoading={isLoading}
+          pending={kpiPending}
         />
         <SummaryKpiCard
           label={secondaryKpi.label}
           value={secondaryKpi.value}
           subtitle={secondaryKpi.subtitle}
           tone={secondaryKpi.tone}
-          isLoading={isLoading}
+          pending={kpiPending}
         />
         <SummaryKpiCard
           label={tertiaryKpi.label}
           value={tertiaryKpi.value}
           subtitle={tertiaryKpi.subtitle}
           tone={tertiaryKpi.tone}
-          isLoading={isLoading}
+          pending={kpiPending}
         />
         <SummaryKpiCard
           label="Avg contribution / patient"
           value={formatGbp(summary.averageContribution)}
           subtitle={`12mo · LTV ${formatGbp(summary.averageProjectedLtv)}`}
-          isLoading={isLoading}
+          pending={kpiPending}
         />
       </div>
 
@@ -337,25 +342,6 @@ export function PatientListDirectory() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            {rollupMode === 'location' && locationOptions.length > 1 && (
-              <Select
-                value={locationFilter}
-                onValueChange={onLocationFilterChange}
-                disabled={isLoading}
-              >
-                <SelectTrigger className="h-9 w-[200px] max-w-full">
-                  <SelectValue placeholder="All locations" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All locations</SelectItem>
-                  {locationOptions.map(([id, name]) => (
-                    <SelectItem key={id} value={id}>
-                      {name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
             <div className="relative w-[220px] max-w-full">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -400,7 +386,7 @@ export function PatientListDirectory() {
           ))}
         </div>
 
-        {isError && (
+        {isError && !hasSyncedPatients && totalRows === 0 && (
           <div className="m-5 flex flex-wrap items-start gap-3 rounded-[10px] border border-danger/30 bg-danger-muted px-3 py-2.5 text-sm text-danger-strong">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <div className="flex-1">
@@ -446,7 +432,7 @@ export function PatientListDirectory() {
               </tr>
             </thead>
             <tbody>
-              {isLoading &&
+              {tablePending &&
                 Array.from({ length: pageSize }).map((_, i) => (
                   <tr key={i} className="border-b border-border/60">
                     {columns.map((col) => (
@@ -457,7 +443,7 @@ export function PatientListDirectory() {
                   </tr>
                 ))}
 
-              {!isLoading && !isError && !hasSyncedPatients && (
+              {!tablePending && !isError && !hasSyncedPatients && (
                 <tr>
                   <td
                     colSpan={columns.length}
@@ -472,7 +458,7 @@ export function PatientListDirectory() {
                 </tr>
               )}
 
-              {!isLoading && !isError && hasSyncedPatients && totalRows === 0 && (
+              {!tablePending && !isError && hasSyncedPatients && totalRows === 0 && (
                 <tr>
                   <td
                     colSpan={columns.length}
@@ -483,19 +469,13 @@ export function PatientListDirectory() {
                 </tr>
               )}
 
-              {!isLoading &&
+              {!tablePending &&
                 !isError &&
                 pageRows.map((row) => {
-                  const recordUrl = `/patients?tab=patient-records&patientId=${encodeURIComponent(
-                    row.patientId,
-                  )}`;
                   const nameCell = (
-                    <Link
-                      to={recordUrl}
-                      className="font-semibold text-primary hover:underline"
-                    >
+                    <DentallyPatientLink dentallyPatientUuid={row.patientUuid}>
                       {row.patientName}
-                    </Link>
+                    </DentallyPatientLink>
                   );
 
                   return (
@@ -544,7 +524,7 @@ export function PatientListDirectory() {
           </table>
         </div>
 
-        {!isLoading && !isError && hasSyncedPatients && totalRows > 0 && (
+        {!isError && hasSyncedPatients && totalRows > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3 text-[12px] text-muted-foreground">
             <span>
               Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalRows)} of{' '}

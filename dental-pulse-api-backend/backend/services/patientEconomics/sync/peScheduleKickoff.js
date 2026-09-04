@@ -15,6 +15,7 @@ const {
   getPracticePatValidity,
   listPracticesWithEncryptedPat,
 } = require('./credentialsStatus');
+const { savePracticeSyncRange, getPracticeSyncRange } = require('./practiceSyncRange');
 const { createSyncRun, completeSyncRun } = require('./syncRunStore');
 const { recordTick } = require('./peTickHistory');
 
@@ -145,6 +146,79 @@ async function kickoffFull(practiceId) {
 }
 
 /**
+ * Sync only a selected calendar period (TopBar date filter modal).
+ * @param {string} practiceId
+ * @param {string} startDate YYYY-MM-DD
+ * @param {string} endDate YYYY-MM-DD
+ */
+async function kickoffPeriod(practiceId, startDate, endDate) {
+  if (!startDate || !endDate || startDate > endDate) {
+    throw new Error('kickoffPeriod requires valid startDate and endDate (YYYY-MM-DD)');
+  }
+
+  const validity = await getPracticePatValidity(practiceId);
+  if (!validity.ok) {
+    const syncRunId = await recordSkipSyncRun(practiceId, validity.reason || 'invalid');
+    return {
+      practiceId,
+      mode: 'period',
+      action: 'skipped',
+      reason: `skipped_no_valid_credential:${validity.reason}`,
+      syncRunId,
+      startDate,
+      endDate,
+    };
+  }
+
+  const staleBeforeIso = new Date(Date.now() - STALE_MS).toISOString();
+  if (await hasActiveInProgress(practiceId, SCHEDULED_RESOURCE_TYPES, staleBeforeIso)) {
+    return {
+      practiceId,
+      mode: 'period',
+      action: 'skipped',
+      reason: 'overlap_in_progress',
+      startDate,
+      endDate,
+    };
+  }
+
+  const syncRange = await getPracticeSyncRange(practiceId);
+  if (startDate < syncRange.startDate) {
+    await savePracticeSyncRange(practiceId, startDate, syncRange.endDate);
+  }
+
+  const dateWindow = { chunkStart: startDate, chunkEnd: endDate };
+  const resourcesReset = [];
+
+  for (const resourceType of SCHEDULED_RESOURCE_TYPES) {
+    const opts = {
+      kickoffMode: 'period',
+      periodSyncEnd: endDate,
+    };
+    if (DATE_WINDOW_RESOURCES.has(resourceType)) {
+      opts.dateWindow = dateWindow;
+    }
+    await resetCursor(practiceId, resourceType, opts);
+    resourcesReset.push(resourceType);
+  }
+
+  console.log(
+    `[PE kickoff] period practice=${practiceId.slice(0, 8)}… window=${startDate}→${endDate} ` +
+      `resources=${resourcesReset.length}`,
+  );
+
+  return {
+    practiceId,
+    mode: 'period',
+    action: 'kicked',
+    resourcesReset,
+    dateWindow,
+    startDate,
+    endDate,
+  };
+}
+
+/**
  * Cron/HTTP: kickoff all candidate practices (encrypted PAT present).
  * Invalid PAT → sync_runs skip row; valid → reset cursors.
  */
@@ -205,6 +279,7 @@ module.exports = {
   incrementalDateWindow,
   kickoffIncremental,
   kickoffFull,
+  kickoffPeriod,
   runIncrementalKickoffTick,
   runFullKickoffTick,
 };

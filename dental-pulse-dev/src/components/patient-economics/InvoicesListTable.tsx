@@ -8,9 +8,9 @@ import {
   ChevronRight,
   Search,
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   Select,
   SelectContent,
@@ -19,7 +19,11 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { formatGbp } from '@/components/patient-economics/InvoicesCharts';
-import type { PeInvoiceListRow } from '@/services/integrations/peInvoicesService';
+import {
+  DentallyInvoiceLink,
+  DentallyPatientLink,
+} from '@/components/patient-economics/DentallyLinks';
+import type { PeInvoiceListRow, PeInvoicesListParams } from '@/services/integrations/peInvoicesTypes';
 import {
   deriveInvoiceDisplayStatus,
   PE_INVOICE_DISPLAY_STATUS_LABELS,
@@ -97,58 +101,18 @@ function ageBadgeClass(days: number): string {
   return 'border-border bg-muted text-muted-foreground';
 }
 
-function compareRows(a: PeInvoiceListRow, b: PeInvoiceListRow, key: InvoiceListSortKey): number {
-  switch (key) {
-    case 'invoice':
-      return (a.invoiceNumber ?? a.platformInvoiceId).localeCompare(
-        b.invoiceNumber ?? b.platformInvoiceId,
-      );
-    case 'patient':
-      return (a.patientName ?? '').localeCompare(b.patientName ?? '');
-    case 'practice':
-      return a.practiceName.localeCompare(b.practiceName);
-    case 'raised':
-      return (a.invoiceDate ?? '').localeCompare(b.invoiceDate ?? '');
-    case 'amount':
-      return a.amountGbp - b.amountGbp;
-    case 'outstanding':
-      return a.outstandingGbp - b.outstandingGbp;
-    case 'age':
-      return a.daysPastDue - b.daysPastDue;
-    case 'status':
-      return deriveInvoiceDisplayStatus(a).localeCompare(deriveInvoiceDisplayStatus(b));
-    default:
-      return 0;
-  }
-}
-
-function sortRows(
-  list: PeInvoiceListRow[],
-  sortBy: InvoiceListSortKey,
-  sortDir: SortDir,
-): PeInvoiceListRow[] {
-  const sorted = [...list].sort((a, b) => {
-    const cmp = compareRows(a, b, sortBy);
-    if (cmp !== 0) return sortDir === 'asc' ? cmp : -cmp;
-
-    if (sortBy === 'outstanding' && sortDir === 'desc') {
-      return (a.invoiceDate ?? '').localeCompare(b.invoiceDate ?? '');
-    }
-    return 0;
-  });
-  return sorted;
-}
-
 type InvoicesListTableProps = {
   rows: PeInvoiceListRow[];
+  total: number;
+  listParams: PeInvoicesListParams;
+  onListParamsChange: (patch: Partial<PeInvoicesListParams>) => void;
+  isFetching?: boolean;
   contextPracticeId: string | null | undefined;
   cashLeakageWindowDays: number;
   trailingMonths: number;
   cashLeakageCount: number;
   cashLeakageGbp: number;
-  /** When location, show/filter by Dentally sites instead of organisation. */
   rollupMode?: 'location' | 'practice';
-  /** All locations/practices in scope (so filter lists sites with £0 invoices too). */
   knownScopes?: Array<{ id: string; name: string }>;
 };
 
@@ -165,6 +129,10 @@ function rowLocationLabel(row: PeInvoiceListRow): string {
 
 export function InvoicesListTable({
   rows,
+  total,
+  listParams,
+  onListParamsChange,
+  isFetching = false,
   contextPracticeId,
   cashLeakageWindowDays,
   trailingMonths,
@@ -173,24 +141,29 @@ export function InvoicesListTable({
   rollupMode = 'practice',
   knownScopes = [],
 }: InvoicesListTableProps) {
-  const [searchInput, setSearchInput] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [scopeFilter, setScopeFilter] = useState<string>('all');
-  const [statusFilter, setStatusFilter] = useState<InvoiceStatusFilter>('all');
-  const [leakageOnly, setLeakageOnly] = useState(false);
-  const [sortBy, setSortBy] = useState<InvoiceListSortKey>('outstanding');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(5);
+  const page = listParams.page ?? 1;
+  const pageSize = listParams.pageSize ?? 5;
+  const sortBy = (listParams.sort ?? 'outstanding') as InvoiceListSortKey;
+  const sortDir = listParams.sortDir ?? 'desc';
+  const statusFilter = (listParams.statusFilter ?? 'all') as InvoiceStatusFilter;
+  const leakageOnly = listParams.cashLeakageOnly ?? false;
+  const searchInput = listParams.search ?? '';
+
+  const [localSearch, setLocalSearch] = useState(searchInput);
 
   useEffect(() => {
-    const t = window.setTimeout(() => setDebouncedSearch(searchInput.trim().toLowerCase()), 250);
-    return () => window.clearTimeout(t);
+    setLocalSearch(searchInput);
   }, [searchInput]);
 
   useEffect(() => {
-    setPage(1);
-  }, [debouncedSearch, scopeFilter, statusFilter, leakageOnly, sortBy, sortDir, pageSize]);
+    const t = window.setTimeout(() => {
+      const trimmed = localSearch.trim();
+      if (trimmed !== (listParams.search ?? '')) {
+        onListParamsChange({ search: trimmed, page: 1 });
+      }
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [localSearch, listParams.search, onListParamsChange]);
 
   const locationOptions = useMemo(() => {
     const map = new Map<string, string>();
@@ -215,83 +188,28 @@ export function InvoicesListTable({
   }, [rows, knownScopes]);
 
   const useLocationScope = rollupMode === 'location' || locationOptions.length > 1;
-  const scopeOptions = useLocationScope ? locationOptions : practiceOptions;
   const scopeNoun = useLocationScope ? 'location' : 'practice';
   const scopeNounPlural = useLocationScope ? 'locations' : 'practices';
 
-  const filtered = useMemo(() => {
-    let list = rows;
-
-    if (scopeFilter !== 'all') {
-      list = useLocationScope
-        ? list.filter((r) => rowLocationId(r) === scopeFilter)
-        : list.filter((r) => r.practiceId === scopeFilter);
-    } else if (!useLocationScope && contextPracticeId && practiceOptions.length <= 1) {
-      list = list.filter((r) => r.practiceId === contextPracticeId);
-    }
-    // Location mode + "all": keep every invoice across all sites (no org collapse).
-
-    if (leakageOnly) {
-      list = list.filter((r) => r.isCashLeakage);
-    }
-
-    if (statusFilter !== 'all') {
-      list = list.filter((r) => deriveInvoiceDisplayStatus(r) === statusFilter);
-    }
-
-    if (debouncedSearch) {
-      list = list.filter((r) => {
-        const hay = [
-          r.invoiceNumber,
-          r.platformInvoiceId,
-          r.patientName,
-          r.practiceName,
-          r.locationName,
-          r.patientId != null ? String(r.patientId) : '',
-          r.status,
-        ]
-          .filter(Boolean)
-          .join(' ')
-          .toLowerCase();
-        return hay.includes(debouncedSearch);
-      });
-    }
-
-    if (useLocationScope && sortBy === 'practice') {
-      const mul = sortDir === 'asc' ? 1 : -1;
-      return [...list].sort(
-        (a, b) => mul * rowLocationLabel(a).localeCompare(rowLocationLabel(b)),
-      );
-    }
-
-    return sortRows(list, sortBy, sortDir);
-  }, [
-    rows,
-    scopeFilter,
-    statusFilter,
-    useLocationScope,
-    contextPracticeId,
-    practiceOptions.length,
-    leakageOnly,
-    debouncedSearch,
-    sortBy,
-    sortDir,
-  ]);
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(page, totalPages);
-  const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   const toggleSort = (key: InvoiceListSortKey) => {
     if (sortBy === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+      onListParamsChange({
+        sortDir: sortDir === 'asc' ? 'desc' : 'asc',
+        page: 1,
+      });
     } else {
-      setSortBy(key);
-      setSortDir(key === 'patient' || key === 'practice' || key === 'invoice' ? 'asc' : 'desc');
+      onListParamsChange({
+        sort: key,
+        sortDir: key === 'patient' || key === 'practice' || key === 'invoice' ? 'asc' : 'desc',
+        page: 1,
+      });
     }
   };
 
-  if (rows.length === 0) {
+  if (total === 0 && !isFetching && rows.length === 0) {
     return (
       <div className="rounded-[14px] border border-dashed border-border px-5 py-10 text-center">
         <p className="text-sm font-medium text-foreground">No invoices in scope</p>
@@ -313,26 +231,11 @@ export function InvoicesListTable({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {scopeOptions.length > 1 && (
-            <Select value={scopeFilter} onValueChange={setScopeFilter}>
-              <SelectTrigger className="h-9 w-[200px] max-w-full">
-                <SelectValue placeholder={`All ${scopeNounPlural}`} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All {scopeNounPlural}</SelectItem>
-                {scopeOptions.map(([id, name]) => (
-                  <SelectItem key={id} value={id}>
-                    {name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
           <div className="relative w-[220px] max-w-full">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
+              value={localSearch}
+              onChange={(e) => setLocalSearch(e.target.value)}
               placeholder={`Search invoice, patient, ${scopeNoun}…`}
               className="pl-9"
             />
@@ -346,9 +249,11 @@ export function InvoicesListTable({
             key={f.key}
             label={f.label}
             active={statusFilter === f.key}
-            onClick={() =>
-              setStatusFilter(statusFilter === f.key ? 'all' : f.key)
-            }
+            onClick={() => {
+              const next =
+                statusFilter === f.key ? 'all' : f.key;
+              onListParamsChange({ statusFilter: next, page: 1 });
+            }}
           />
         ))}
         {cashLeakageCount > 0 && (
@@ -357,23 +262,26 @@ export function InvoicesListTable({
             <FilterChip
               label="Cash leakage"
               active={leakageOnly}
-              onClick={() => setLeakageOnly((v) => !v)}
+              onClick={() =>
+                onListParamsChange({
+                  cashLeakageOnly: !leakageOnly,
+                  page: 1,
+                })
+              }
             />
           </>
         )}
       </div>
 
-      {filtered.length === 0 ? (
+      {total === 0 && !isFetching ? (
         <p className="px-5 py-10 text-center text-[13px] text-muted-foreground">
-          {debouncedSearch
-            ? `No invoices match “${searchInput.trim()}”.`
+          {searchInput
+            ? `No invoices match “${localSearch.trim()}”.`
             : leakageOnly
               ? 'No cash-leakage invoices in the current filter.'
               : statusFilter !== 'all'
                 ? `No invoices with status “${PE_INVOICE_DISPLAY_STATUS_LABELS[statusFilter]}”.`
-                : scopeFilter !== 'all'
-                  ? `No invoices for this ${scopeNoun}.`
-                  : 'No invoices match the current filters.'}
+                : 'No invoices match the current filters.'}
         </p>
       ) : (
         <>
@@ -480,13 +388,22 @@ export function InvoicesListTable({
                 </tr>
               </thead>
               <tbody>
-                {pageRows.map((row) => {
+                {isFetching &&
+                  Array.from({ length: pageSize }).map((_, i) => (
+                    <tr key={`sk-${i}`} className="border-b border-border/60">
+                      {Array.from({ length: 8 }).map((_, j) => (
+                        <td key={j} className="px-3 py-3">
+                          <Skeleton className="h-4 w-full" />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                {!isFetching &&
+                  rows.map((row) => {
                   const displayStatus = deriveInvoiceDisplayStatus(row);
-                  const patientRecordsUrl = row.patientUuid
-                    ? `/patients?tab=patient-records&patientId=${encodeURIComponent(row.patientUuid)}`
-                    : null;
                   const patientLabel =
                     row.patientName ?? (row.patientId != null ? `#${row.patientId}` : '—');
+                  const invoiceLabel = row.invoiceNumber ?? row.platformInvoiceId;
 
                   return (
                     <tr
@@ -497,24 +414,27 @@ export function InvoicesListTable({
                       )}
                     >
                       <td className="px-3 py-3 font-semibold text-foreground">
-                        {row.invoiceNumber ?? row.platformInvoiceId}
-                        {row.isCashLeakage && (
-                          <span className="ml-2 inline-flex rounded-full border border-primary/25 bg-primary/12 px-2.5 py-0.5 text-[11px] font-semibold text-primary">
-                            Leakage
-                          </span>
-                        )}
+                        <DentallyInvoiceLink
+                          label={
+                            <>
+                              {invoiceLabel}
+                              {row.isCashLeakage && (
+                                <span className="ml-2 inline-flex rounded-full border border-primary/25 bg-primary/12 px-2.5 py-0.5 text-[11px] font-semibold text-primary">
+                                  Leakage
+                                </span>
+                              )}
+                            </>
+                          }
+                          dentallyPatientUuid={row.dentallyPatientUuid}
+                          accountUuid={row.accountUuid}
+                          invoiceUuid={row.invoiceUuid}
+                          className="text-foreground"
+                        />
                       </td>
                       <td className="px-3 py-3">
-                        {patientRecordsUrl ? (
-                          <Link
-                            to={patientRecordsUrl}
-                            className="font-semibold text-primary hover:underline"
-                          >
-                            {patientLabel}
-                          </Link>
-                        ) : (
-                          <span className="text-muted-foreground">{patientLabel}</span>
-                        )}
+                        <DentallyPatientLink dentallyPatientUuid={row.dentallyPatientUuid}>
+                          {patientLabel}
+                        </DentallyPatientLink>
                       </td>
                       <td className="px-3 py-3 text-foreground">
                         {useLocationScope ? rowLocationLabel(row) : row.practiceName}
@@ -560,11 +480,14 @@ export function InvoicesListTable({
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3 text-[12px] text-muted-foreground">
             <span>
-              Showing {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filtered.length)}{' '}
-              of {filtered.length.toLocaleString('en-GB')} invoices
-              {filtered.length !== rows.length
-                ? ` (filtered from ${rows.length.toLocaleString('en-GB')})`
-                : ''}
+              {isFetching && total === 0 ? (
+                <Skeleton className="h-3 w-48" />
+              ) : (
+                <>
+                  Showing {total === 0 ? 0 : (safePage - 1) * pageSize + 1}–
+                  {Math.min(safePage * pageSize, total)} of {total.toLocaleString('en-GB')} invoices
+                </>
+              )}
             </span>
             <div className="flex flex-wrap items-center gap-2">
               {totalPages > 1 && (
@@ -575,7 +498,9 @@ export function InvoicesListTable({
                     size="sm"
                     className="h-8 w-8 px-0"
                     disabled={safePage <= 1}
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    onClick={() =>
+                      onListParamsChange({ page: Math.max(1, safePage - 1) })
+                    }
                     aria-label="Previous page"
                     title="Previous"
                   >
@@ -590,7 +515,9 @@ export function InvoicesListTable({
                     size="sm"
                     className="h-8 w-8 px-0"
                     disabled={safePage >= totalPages}
-                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    onClick={() =>
+                      onListParamsChange({ page: Math.min(totalPages, safePage + 1) })
+                    }
                     aria-label="Next page"
                     title="Next"
                   >
@@ -600,7 +527,9 @@ export function InvoicesListTable({
               )}
               <Select
                 value={String(pageSize)}
-                onValueChange={(v) => setPageSize(Number(v))}
+                onValueChange={(v) =>
+                  onListParamsChange({ pageSize: Number(v), page: 1 })
+                }
               >
                 <SelectTrigger className="h-8 w-[64px]">
                   <SelectValue />
