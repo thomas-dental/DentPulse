@@ -5,6 +5,7 @@
  */
 
 import { Fragment, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Loader2,
   CheckCircle,
@@ -62,6 +63,7 @@ import { toast } from 'sonner';
 import { Play } from 'lucide-react';
 
 export function SyncSummary() {
+  const navigate = useNavigate();
   const { organizationId } = useOrganization();
   const { user } = useAuth();
 
@@ -1118,6 +1120,14 @@ export function SyncSummary() {
             >
               <RefreshCw className={cn('w-4 h-4 mr-2', isRefreshing && 'animate-spin')} />
               Refresh
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => navigate('/dev/pe-sync-inspector')}
+            >
+              <Database className="w-4 h-4 mr-2" />
+              PE Sync
             </Button>
           </div>
         </div>

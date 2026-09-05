@@ -122,9 +122,9 @@ export interface OverviewData {
 
 /** Overview tab's real data — reuses the exact hooks that already power the
  *  Plan Revenue tab and the Statement Health / Trends sections, so numbers
- *  here always agree with the rest of the page. Location-scoped through
- *  those hooks (upload_location_id stamping, legacy-null fallbacks); the
- *  location-comparison table is built from membersByLocation. */
+ *  here always agree with the rest of the page. Org-wide (Practice Plan
+ *  statement data has no location column), except the location-comparison
+ *  table, which is built from membersByLocation. */
 export function useOverviewData(): OverviewData {
   const { organizationId } = useOrganization();
   const { dateRange } = useFilters();
@@ -311,35 +311,17 @@ export function useOverviewData(): OverviewData {
 
   const clinicianBreakdown = useMemo(() => {
     const byDentist = new Map<string, { members: number; value: number }>();
-    const bump = (name: string) => {
-      const cur = byDentist.get(name) ?? { members: 0, value: 0 };
-      byDentist.set(name, cur);
-      return cur;
-    };
     for (const m of uploadedMembers) {
-      // The member is COUNTED once, under their latest statement's dentist —
-      // but their range £ is attributed month-by-month to whichever dentist
-      // each month's payment was actually printed under. A member who moved
-      // between dentists mid-range (e.g. Razaq → "Razaq 2" in July) must not
-      // carry earlier months' £ onto the latest name: that made this card
-      // disagree with provider production (which sums each month's statement
-      // rows as printed) over a wide range — client-flagged 2026-08-20.
-      bump(m.treating_dentist?.trim() || "Unassigned").members += 1;
-      const split = m.range_net_due_by_dentist;
-      if (split && Object.keys(split).length > 0) {
-        for (const [dentist, v] of Object.entries(split)) {
-          bump(dentist || "Unassigned").value += v;
-        }
-      } else {
-        bump(m.treating_dentist?.trim() || "Unassigned").value += m.range_net_due ?? m.net_due ?? 0;
-      }
+      const name = m.treating_dentist?.trim() || "Unassigned";
+      const cur = byDentist.get(name) ?? { members: 0, value: 0 };
+      cur.members += 1;
+      cur.value += m.net_due || 0;
+      byDentist.set(name, cur);
     }
-    // EVERY clinician with members, not a top-N cut — the card must list the
-    // same practitioners the Clinicians tab shows (statements are per-dentist
-    // documents; hiding the tail read as "these dentists' members are lost").
     return Array.from(byDentist.entries())
       .map(([name, v]) => ({ name, ...v }))
-      .sort((a, b) => b.members - a.members);
+      .sort((a, b) => b.members - a.members)
+      .slice(0, 4);
   }, [uploadedMembers]);
 
   const dataGapsCount = useMemo(

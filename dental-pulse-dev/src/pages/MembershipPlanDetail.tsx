@@ -681,11 +681,8 @@ export default function MembershipPlanDetail() {
                         </TableCell>
                       </TableRow>
                     ) : pagedPlanMembers.map((m) => {
-                      // Full given names as printed on the statement (a
-                      // genuine one-letter initial keeps the "P." style).
-                      const given = (m.initial ?? '').trim();
-                      const givenLabel = given ? (given.length === 1 ? `${given.toUpperCase()}.` : given) : '';
-                      const memberLabel = [m.title, givenLabel, m.surname].filter(Boolean).join(' ') || m.surname;
+                      const initialLetter = m.initial ? `${m.initial.charAt(0).toUpperCase()}.` : '';
+                      const memberLabel = [m.title, initialLetter, m.surname].filter(Boolean).join(' ') || m.surname;
                       const pt = m.patient_id ? patientNameMap[m.patient_id] : null;
                       const fullName = pt
                         ? [pt.title ?? m.title, pt.first, pt.last ?? m.surname].filter(Boolean).join(' ')

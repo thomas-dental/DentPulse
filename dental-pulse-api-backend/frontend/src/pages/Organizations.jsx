@@ -1,20 +1,8 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Eye, KeyRound } from 'lucide-react';
-import { Select } from 'antd';
-import { toast } from 'sonner';
 import { api } from '../lib/api';
 import UserAiKeyModal from './UserAiKeyModal';
-
-// Mirrors dental-pulse-dev's PLAN_LABELS/PLAN_TIERS (src/lib/planRegistry.ts).
-// This admin app is now the only place plan_tier can be changed from.
-const PLAN_TIER_OPTIONS = [
-  { value: 'basic', label: 'Basic' },
-  { value: 'essential', label: 'Essential' },
-  { value: 'growth', label: 'Growth' },
-  { value: 'accelerate', label: 'Accelerate' },
-];
-const PLAN_TIER_LABELS = Object.fromEntries(PLAN_TIER_OPTIONS.map((o) => [o.value, o.label]));
 
 export default function Organizations() {
   const [organizations, setOrganizations] = useState([]);
@@ -25,7 +13,6 @@ export default function Organizations() {
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(10);
   const [keyModalOwner, setKeyModalOwner] = useState(null);
-  const [updatingPlanId, setUpdatingPlanId] = useState(null);
   const navigate = useNavigate();
 
   const fetchOrganizations = useCallback(() => {
@@ -33,20 +20,6 @@ export default function Organizations() {
       .then((data) => setOrganizations(data))
       .catch(() => setOrganizations([]));
   }, []);
-
-  const handlePlanChange = async (org, planTier) => {
-    if (planTier === org.plan_tier) return;
-    setUpdatingPlanId(org.id);
-    try {
-      await api.updateOrganizationPlan(org.id, planTier);
-      setOrganizations((prev) => prev.map((o) => (o.id === org.id ? { ...o, plan_tier: planTier } : o)));
-      toast.success(`${org.name || 'Organization'} switched to ${PLAN_TIER_LABELS[planTier]}.`);
-    } catch (err) {
-      toast.error('Failed to update plan: ' + err.message);
-    } finally {
-      setUpdatingPlanId(null);
-    }
-  };
 
   useEffect(() => {
     fetchOrganizations().finally(() => setLoading(false));
@@ -198,7 +171,6 @@ export default function Organizations() {
                   <th className="sortable-th" onClick={() => handleSort('created_at')}>
                     Created{getSortIcon('created_at')}
                   </th>
-                  <th>Plan</th>
                   <th>AI API Key</th>
                   <th>Actions</th>
                 </tr>
@@ -206,7 +178,7 @@ export default function Organizations() {
               <tbody>
                 {paginated.length === 0 ? (
                   <tr>
-                    <td colSpan="8" className="empty-state">
+                    <td colSpan="7" className="empty-state">
                       {search ? 'No organizations match your search' : 'No organizations found'}
                     </td>
                   </tr>
@@ -251,17 +223,6 @@ export default function Organizations() {
                             month: 'short',
                             year: 'numeric',
                           })}
-                        </td>
-                        <td>
-                          <Select
-                            size="small"
-                            style={{ width: 116 }}
-                            value={org.plan_tier || 'basic'}
-                            loading={updatingPlanId === org.id}
-                            disabled={updatingPlanId === org.id}
-                            onChange={(value) => handlePlanChange(org, value)}
-                            options={PLAN_TIER_OPTIONS}
-                          />
                         </td>
                         <td>
                           {!owner

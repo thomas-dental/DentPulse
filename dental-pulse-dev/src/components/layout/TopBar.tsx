@@ -33,6 +33,7 @@ import { Building2, Check } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useFilters } from "@/contexts/FilterContext";
 import { SyncStatusIndicator } from "./TopBar/SyncStatusIndicator";
+import { PeSyncInspectorLink } from "./TopBar/PeSyncInspectorLink";
 import { NotificationDropdown } from "./TopBar/NotificationDropdown";
 import {
   ChartDateFilter,
@@ -375,6 +376,7 @@ export function TopBar({ sidebarCollapsed }: TopBarProps) {
 
         {/* Sync Status Indicator */}
         <SyncStatusIndicator />
+        <PeSyncInspectorLink />
 
         {/* User Menu */}
         <DropdownMenu>

@@ -17,7 +17,6 @@ export interface IncomeTypes {
   membershipIncome: string[];
   nhsIncome: string[];
   mosIncome: string[];
-  uoaIncome: string[];
 }
 
 export interface ProviderIncomeTypes {
@@ -42,7 +41,7 @@ export interface LocationAccountSettings {
 }
 
 const EMPTY_COST: CostTypes = { labFees: [], staff: [], operatingLease: [], clinicianCost: [], overhead: [], material: [], marketing: [] };
-const EMPTY_INCOME: IncomeTypes = { privateIncome: [], membershipIncome: [], nhsIncome: [], mosIncome: [], uoaIncome: [] };
+const EMPTY_INCOME: IncomeTypes = { privateIncome: [], membershipIncome: [], nhsIncome: [], mosIncome: [] };
 const EMPTY_PROVIDER_INCOME: ProviderIncomeTypes = { privateIncome: [], membershipIncome: [], nhsIncome: [] };
 const EMPTY_PNL: PnlAccounts = { administrativeCost: [], costOfSales: [] };
 const EMPTY_SETTINGS: LocationAccountSettings = {
@@ -71,7 +70,7 @@ export function useLocationAccountSettings(locationId: string | null) {
       const { data, error } = await (supabase as any)
         .from('practice_locations')
         .select(
-          'lab_fees_accounts, staff_costs_accounts, operating_lease_accounts, clinician_cost_accounts, overhead_cost_accounts, material_cost_accounts, marketing_cost_accounts, private_income_accounts, membership_income_accounts, nhs_income_accounts, mos_income_accounts, uoa_income_accounts, private_income_coa_accounts, membership_income_coa_accounts, nhs_income_coa_accounts, mos_income_coa_accounts, uoa_income_coa_accounts, provider_private_income_accounts, provider_membership_income_accounts, provider_nhs_income_accounts, administrative_cost_accounts, cost_of_sales_accounts'
+          'lab_fees_accounts, staff_costs_accounts, operating_lease_accounts, clinician_cost_accounts, overhead_cost_accounts, material_cost_accounts, marketing_cost_accounts, private_income_accounts, membership_income_accounts, nhs_income_accounts, mos_income_accounts, private_income_coa_accounts, membership_income_coa_accounts, nhs_income_coa_accounts, mos_income_coa_accounts, provider_private_income_accounts, provider_membership_income_accounts, provider_nhs_income_accounts, administrative_cost_accounts, cost_of_sales_accounts'
         )
         .eq('id', locationId)
         .single();
@@ -92,14 +91,12 @@ export function useLocationAccountSettings(locationId: string | null) {
           membershipIncome: arr(data?.membership_income_accounts),
           nhsIncome: arr(data?.nhs_income_accounts),
           mosIncome: arr(data?.mos_income_accounts),
-          uoaIncome: arr(data?.uoa_income_accounts),
         },
         incomeCoaTypes: {
           privateIncome: arr(data?.private_income_coa_accounts),
           membershipIncome: arr(data?.membership_income_coa_accounts),
           nhsIncome: arr(data?.nhs_income_coa_accounts),
           mosIncome: arr(data?.mos_income_coa_accounts),
-          uoaIncome: arr(data?.uoa_income_coa_accounts),
         },
         providerIncomeTypes: {
           privateIncome: arr(data?.provider_private_income_accounts),
@@ -132,12 +129,10 @@ export function useLocationAccountSettings(locationId: string | null) {
           membership_income_accounts: payload.incomeTypes.membershipIncome,
           nhs_income_accounts: payload.incomeTypes.nhsIncome,
           mos_income_accounts: payload.incomeTypes.mosIncome,
-          uoa_income_accounts: payload.incomeTypes.uoaIncome,
           private_income_coa_accounts: payload.incomeCoaTypes.privateIncome,
           membership_income_coa_accounts: payload.incomeCoaTypes.membershipIncome,
           nhs_income_coa_accounts: payload.incomeCoaTypes.nhsIncome,
           mos_income_coa_accounts: payload.incomeCoaTypes.mosIncome,
-          uoa_income_coa_accounts: payload.incomeCoaTypes.uoaIncome,
           provider_private_income_accounts: payload.providerIncomeTypes.privateIncome,
           provider_membership_income_accounts: payload.providerIncomeTypes.membershipIncome,
           provider_nhs_income_accounts: payload.providerIncomeTypes.nhsIncome,

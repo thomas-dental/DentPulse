@@ -7,11 +7,10 @@ import {
   YAxis,
 } from "recharts";
 
-/** By-month trend card: latest month's value (labelled with WHICH month, so
- *  it can't be misread as a range total — the range totals live in the tiles
- *  above), %-change badge across the charted months, and a soft area/line
- *  chart. `data` carries its own axis labels (real calendar months, not a
- *  fixed demo range) so this has no dependency on any hardcoded month list. */
+/** 12-month trend card: big current value, %-change badge, and a soft
+ *  area/line chart. `data` carries its own axis labels (real calendar
+ *  months, not a fixed demo range) so this has no dependency on any
+ *  hardcoded month list. */
 export function TrendChart({
   data,
   formatter,
@@ -24,7 +23,6 @@ export function TrendChart({
   // fill silently resolve to the other's gradient.
   const gradientId = `mpiTrendFill-${useId()}`;
   const last = data[data.length - 1]?.value ?? 0;
-  const lastLabel = data[data.length - 1]?.label ?? "";
   const first = data[0]?.value ?? 0;
   const changePct = first !== 0 ? (last / first - 1) * 100 : 0;
   const rising = last >= first;
@@ -35,11 +33,6 @@ export function TrendChart({
       <div className="flex items-baseline justify-between mb-1">
         <span className="text-[21px] font-semibold tracking-tight num" style={{ color: "var(--mpi-ink)" }}>
           {formatter(last)}
-          {lastLabel ? (
-            <span className="text-xs font-medium ml-1.5" style={{ color: "var(--mpi-t3)" }}>
-              in {lastLabel}
-            </span>
-          ) : null}
         </span>
         <span className="text-xs font-medium num" style={{ color }}>
           {changePct >= 0 ? "+" : ""}

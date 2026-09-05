@@ -49,13 +49,12 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { formatAmount, parseAmount } from "@/lib/utils";
-import { providerMatchesManagementType } from "@/lib/providerRosterFilters";
 import {
   useSlidingScales,
   type SlidingScaleBand,
   type ScaleType,
 } from "@/hooks/useSlidingScales";
-import { getOperationalExpense } from "@/services/integrations/plCostService";
+import { getOpCostByPlatform } from "@/services/integrations/plCostService";
 import {
   loadProviderCostInputs,
   type ProviderCostInputRow,
@@ -70,7 +69,6 @@ import {
   getEffectivePerHourRate,
   PER_HOUR_EMPLOYEE_UPLIFT_PERCENT,
 } from "@/lib/payslipCalculations";
-import { computeProviderGrossShare } from "@/lib/associatePracticeProfit";
 import { useOrganizationSettings } from "@/hooks/useOrganizationSettings";
 import type {
   ProviderCostSourceMethod,
@@ -143,7 +141,6 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   providerPerformsNhs,
   providerPerformsMos,
-  providerPerformsUoa,
   encodeProviderAdditionalOptions,
   type WorkingDayScheduleType,
   type WorkingDaySchedule,
@@ -153,6 +150,7 @@ import {
 } from "@/types/provider";
 import { PayslipTab } from "@/components/providers/PayslipTab";
 import { ContractAttachmentsCard } from "@/components/providers/ContractAttachmentsCard";
+import { PePrivateShareProviderPanel } from "@/components/patient-economics/PePractitionerPrivateShareUi";
 import { ContractHistoryCard } from "@/components/providers/ContractHistoryCard";
 import { SpecialTreatmentsCard } from "@/components/providers/SpecialTreatmentsCard";
 import { SlidingScaleBandEditor } from "@/components/providers/SlidingScaleBandEditor";
@@ -345,7 +343,6 @@ export default function ProviderDetail() {
     phone: "",
     performsNhsTreatments: false,
     performsMosTreatments: false,
-    performsUoaTreatments: false,
     isPrincipalAssociate: false,
     splitSourceMethod: "flat-percentage",
     associateSplitPercentage: 50,
@@ -449,9 +446,9 @@ export default function ProviderDetail() {
   >([{ month: "", data: {} }]);
   const [isLoadingDialogData, setIsLoadingDialogData] = useState(false);
 
-  // NHS Count / MOS Count / UOA Count dialog state — same "add a month row"
-  // pattern as Working Hours, but each edits a single appointment_summary
-  // column (uda_count for NHS, mos_count for MOS, uoa_count for UOA).
+  // NHS Count / MOS Count dialog state — same "add a month row" pattern as
+  // Working Hours, but each edits a single appointment_summary column
+  // (uda_count for NHS, mos_count for MOS).
   const [showNhsCountDialog, setShowNhsCountDialog] = useState(false);
   const [nhsCountRows, setNhsCountRows] = useState<
     { month: string; data: Record<string, { count: string }> }[]
@@ -463,12 +460,6 @@ export default function ProviderDetail() {
     { month: string; data: Record<string, { count: string }> }[]
   >([{ month: "", data: {} }]);
   const [isLoadingMosCountDialog, setIsLoadingMosCountDialog] = useState(false);
-
-  const [showUoaCountDialog, setShowUoaCountDialog] = useState(false);
-  const [uoaCountRows, setUoaCountRows] = useState<
-    { month: string; data: Record<string, { count: string }> }[]
-  >([{ month: "", data: {} }]);
-  const [isLoadingUoaCountDialog, setIsLoadingUoaCountDialog] = useState(false);
 
   // Profit Goals Settings state
   const [profitGoalsDateRange, setProfitGoalsDateRange] = useState<{
@@ -1031,10 +1022,11 @@ export default function ProviderDetail() {
         const endDateStr = toLocalDateStr(profitGoalsDateRange.to);
         let opCosts = 0;
         try {
-          const { amount } = await getOperationalExpense(
+          const { amount } = await getOpCostByPlatform(
             organizationId,
             startDateStr,
             endDateStr,
+            "TC",
             selectedLocationId,
           );
           if (amount != null) opCosts = amount;
@@ -1224,7 +1216,6 @@ export default function ProviderDetail() {
     leavingDate: null as Date | null,
     performsNhsTreatments: false,
     performsMosTreatments: false,
-    performsUoaTreatments: false,
   });
   const [addAssociateJoiningDateOpen, setAddAssociateJoiningDateOpen] =
     useState(false);
@@ -1305,7 +1296,6 @@ export default function ProviderDetail() {
         additional_options: encodeProviderAdditionalOptions(
           addAssociateForm.performsNhsTreatments,
           addAssociateForm.performsMosTreatments,
-          addAssociateForm.performsUoaTreatments,
         ),
         provider_type_id: provider?.provider_type_id || null,
         location_id: provider?.location_id || null,
@@ -1612,13 +1602,6 @@ export default function ProviderDetail() {
       netProductionDateRange.to,
       "mos_count",
     );
-  const { data: allUoaCounts, isLoading: isLoadingAllUoaCounts } =
-    useAllProvidersCounts(
-      providerTypeCapitalized,
-      netProductionDateRange.from,
-      netProductionDateRange.to,
-      "uoa_count",
-    );
   const thisProviderExtId = (provider as any)?.external_id
     ? Number((provider as any).external_id)
     : null;
@@ -1648,19 +1631,6 @@ export default function ProviderDetail() {
       totalCount: row?.total ?? 0,
     };
   }, [allMosCounts, thisProviderExtId]);
-  const uoaCountSummary = useMemo(() => {
-    if (!allUoaCounts || thisProviderExtId == null) return null;
-    const row = allUoaCounts.providers.find((p) =>
-      p.externalIds.includes(thisProviderExtId),
-    );
-    return {
-      monthlyCounts: allUoaCounts.months.map((month) => ({
-        month,
-        count: row?.monthlyData[month] ?? 0,
-      })),
-      totalCount: row?.total ?? 0,
-    };
-  }, [allUoaCounts, thisProviderExtId]);
 
   // KPI cards — driven by global top filter
   const kpiMtdStart = globalDateRange.startDate;
@@ -2034,24 +2004,28 @@ export default function ProviderDetail() {
 
   // Associates for the Working Hours dialog — filtered by provider_role to match the list page
   const dialogAssociates = useMemo(() => {
+    const roleMap: Record<string, string[]> = {
+      dentist: ["dentist", "dental surgeon", "principal dentist"],
+      hygienist: ["hygienist", "dental hygienist", "hygiene"],
+      therapist: ["therapist", "dental therapist", "therapy"],
+    };
+    const knownRoles = [
+      ...roleMap.dentist,
+      ...roleMap.hygienist,
+      ...roleMap.therapist,
+    ];
     const typeKey = type?.toLowerCase();
-    const managementType =
-      typeKey === "dentist" || typeKey === "associate"
-        ? "Dentist"
-        : typeKey === "hygienist"
-          ? "Hygienist"
-          : typeKey === "therapist"
-            ? "Therapist"
-            : typeKey === "other"
-              ? "Other"
-              : null;
-    if (!managementType) return allProviders;
-    return allProviders.filter((p: any) =>
-      providerMatchesManagementType(p, managementType),
-    );
+    const allowedRoles = typeKey ? roleMap[typeKey] : undefined;
+    return allProviders.filter((p: any) => {
+      const role = (p.provider_role ?? "").toLowerCase();
+      if (typeKey === "other") return !knownRoles.includes(role);
+      if (!allowedRoles) return true;
+      if (!p.provider_role) return false;
+      return allowedRoles.includes(role);
+    });
   }, [allProviders, type]);
 
-  // NHS / MOS / UOA count dialogs only show providers who opted into that treatment type.
+  // NHS / MOS count dialogs only show providers who opted into that treatment type.
   const nhsCountDialogAssociates = useMemo(
     () =>
       dialogAssociates.filter((p: any) =>
@@ -2066,19 +2040,8 @@ export default function ProviderDetail() {
       ),
     [dialogAssociates],
   );
-  const uoaCountDialogAssociates = useMemo(
-    () =>
-      dialogAssociates.filter((p: any) =>
-        providerPerformsUoa(p.additional_options),
-      ),
-    [dialogAssociates],
-  );
-  const countDialogAssociatesFor = (field: "uda_count" | "mos_count" | "uoa_count") =>
-    field === "uda_count"
-      ? nhsCountDialogAssociates
-      : field === "mos_count"
-        ? mosCountDialogAssociates
-        : uoaCountDialogAssociates;
+  const countDialogAssociatesFor = (field: "uda_count" | "mos_count") =>
+    field === "uda_count" ? nhsCountDialogAssociates : mosCountDialogAssociates;
 
   // Open Working Hours dialog in edit mode — load from appointment_summary
   const openEditDialog = async (monthLabel: string) => {
@@ -2273,77 +2236,70 @@ export default function ProviderDetail() {
     setWorkingHoursRows([{ month: "", data: {} }]);
   };
 
-  // Fetches this contract type's saved counts for one month, keyed by the
-  // representative provider id — shared by openCountEditDialog (opened from
-  // a table cell, month already known) and the "Add ... Count" dialogs'
-  // month picker (month chosen fresh inside the dialog), so both paths show
-  // previously saved values instead of the picker resetting to blank/0.
-  const loadCountDataForMonth = async (
-    monthValue: string,
-    field: "uda_count" | "mos_count" | "uoa_count",
-  ): Promise<Record<string, { count: string }>> => {
-    if (!organizationId || !monthValue) return {};
-    const monthDate = monthValue + "-01";
-    const associates = countDialogAssociatesFor(field);
-    const emailToRepId = new Map<string, string>();
-    for (const p of associates) {
-      const key = ((p as any).email ?? (p as any).name ?? "").toLowerCase();
-      if (key && !emailToRepId.has(key)) emailToRepId.set(key, (p as any).id);
-    }
-    if (emailToRepId.size === 0) return {};
-
-    const { data: allOrgProviders } = await (supabase as any)
-      .from("providers")
-      .select("email, name, external_id")
-      .eq("organization_id", organizationId)
-      .eq("is_active", true)
-      .is("deleted_at", null);
-
-    const extIdToRepId = new Map<number, string>();
-    for (const p of allOrgProviders ?? []) {
-      const key = ((p as any).email ?? (p as any).name ?? "").toLowerCase();
-      const repId = emailToRepId.get(key);
-      if (repId && (p as any).external_id) {
-        extIdToRepId.set(Number((p as any).external_id), repId);
-      }
-    }
-
-    const allExtIds = Array.from(extIdToRepId.keys());
-    if (allExtIds.length === 0) return {};
-    const { data: summaryRows } = await (supabase as any)
-      .from("appointment_summary")
-      .select(`practitioner_id, ${field}`)
-      .eq("organization_id", organizationId)
-      .eq("month", monthDate)
-      .in("practitioner_id", allExtIds);
-
-    const rowData: Record<string, { count: string }> = {};
-    for (const row of summaryRows ?? []) {
-      const repId = extIdToRepId.get(Number(row.practitioner_id));
-      if (!repId || rowData[repId]) continue;
-      rowData[repId] = {
-        count: row[field] != null ? String(row[field]) : "",
-      };
-    }
-    return rowData;
-  };
-
-  // NHS Count (uda_count) / MOS Count (mos_count) / UOA Count (uoa_count)
-  // dialogs — same "add a month row" pattern as Working Hours, each writing
-  // only its own single column so neither clobbers Working Hours' own
-  // uda_count field or the other counts' columns on save.
+  // NHS Count (uda_count) / MOS Count (mos_count) dialogs — same "add a month
+  // row" pattern as Working Hours, each writing only its own single column so
+  // neither clobbers Working Hours' own uda_count field or the other count's
+  // column on save.
   const openCountEditDialog = async (
     monthLabel: string,
-    field: "uda_count" | "mos_count" | "uoa_count",
+    field: "uda_count" | "mos_count",
     setRows: typeof setNhsCountRows,
     setLoading: typeof setIsLoadingNhsCountDialog,
     setOpen: typeof setShowNhsCountDialog,
   ) => {
     const monthValue = dayjs(monthLabel, "MMM-YY").format("YYYY-MM");
+    const monthDate = monthValue + "-01";
     setLoading(true);
     setOpen(true);
     try {
-      const rowData = await loadCountDataForMonth(monthValue, field);
+      const associates = countDialogAssociatesFor(field);
+      const emailToRepId = new Map<string, string>();
+      for (const p of associates) {
+        const key = ((p as any).email ?? (p as any).name ?? "").toLowerCase();
+        if (key && !emailToRepId.has(key)) emailToRepId.set(key, (p as any).id);
+      }
+
+      if (emailToRepId.size === 0) {
+        setRows([{ month: monthValue, data: {} }]);
+        return;
+      }
+
+      const { data: allOrgProviders } = await (supabase as any)
+        .from("providers")
+        .select("email, name, external_id")
+        .eq("organization_id", organizationId)
+        .eq("is_active", true)
+        .is("deleted_at", null);
+
+      const extIdToRepId = new Map<number, string>();
+      for (const p of allOrgProviders ?? []) {
+        const key = ((p as any).email ?? (p as any).name ?? "").toLowerCase();
+        const repId = emailToRepId.get(key);
+        if (repId && (p as any).external_id) {
+          extIdToRepId.set(Number((p as any).external_id), repId);
+        }
+      }
+
+      const allExtIds = Array.from(extIdToRepId.keys());
+      if (allExtIds.length === 0) {
+        setRows([{ month: monthValue, data: {} }]);
+        return;
+      }
+      const { data: summaryRows } = await (supabase as any)
+        .from("appointment_summary")
+        .select(`practitioner_id, ${field}`)
+        .eq("organization_id", organizationId)
+        .eq("month", monthDate)
+        .in("practitioner_id", allExtIds);
+
+      const rowData: Record<string, { count: string }> = {};
+      for (const row of summaryRows ?? []) {
+        const repId = extIdToRepId.get(Number(row.practitioner_id));
+        if (!repId || rowData[repId]) continue;
+        rowData[repId] = {
+          count: row[field] != null ? String(row[field]) : "",
+        };
+      }
       setRows([{ month: monthValue, data: rowData }]);
     } finally {
       setLoading(false);
@@ -2352,7 +2308,7 @@ export default function ProviderDetail() {
 
   const saveCountRows = async (
     rows: typeof nhsCountRows,
-    field: "uda_count" | "mos_count" | "uoa_count",
+    field: "uda_count" | "mos_count",
     setOpen: typeof setShowNhsCountDialog,
     setRows: typeof setNhsCountRows,
     successMessage: string,
@@ -2537,9 +2493,6 @@ export default function ProviderDetail() {
           (provider as any).additional_options,
         ),
         performsMosTreatments: providerPerformsMos(
-          (provider as any).additional_options,
-        ),
-        performsUoaTreatments: providerPerformsUoa(
           (provider as any).additional_options,
         ),
         isPrincipalAssociate: (provider as any).is_principal_associate || false,
@@ -2924,11 +2877,7 @@ export default function ProviderDetail() {
     const materialsCosts = resolvedProviderCosts.material.amount;
 
     // Excel Formula: Associate Net Pay = (Total Production * Associate Split %) - (Cost of Labs * Associate Lab Split %)
-    const associateGrossShare = computeProviderGrossShare(
-      provider as any,
-      totalProduction,
-      totalWorkingHours,
-    );
+    const associateGrossShare = totalProduction * (associateSplitPercent / 100);
     const labCostDeduction = costOfLabs * (associateLabSplitPercent / 100);
     const associateNetPay = associateGrossShare - labCostDeduction;
 
@@ -3021,12 +2970,8 @@ export default function ProviderDetail() {
       : resolvedProviderCosts.material.amount;
 
     // Calculate Planned Associate Net Pay using same formula as Actual
-    const plannedAssociateGrossShare = computeProviderGrossShare(
-      provider as any,
-      plannedTotalProduction,
-      associateMetrics.workingDays *
-        (profitGoalsMetrics.openHoursPerDay || 8),
-    );
+    const plannedAssociateGrossShare =
+      plannedTotalProduction * (associateMetrics.associateSplitPercent / 100);
     const plannedLabCostDeduction =
       plannedCostOfLabs * (associateMetrics.associateLabSplitPercent / 100);
     const plannedAssociateNetPay =
@@ -5145,24 +5090,6 @@ export default function ProviderDetail() {
                                 }
                               />
                             </div>
-                            <div className="flex items-center justify-between gap-3">
-                              <Label
-                                htmlFor="performs-uoa"
-                                className="font-normal cursor-pointer"
-                              >
-                                Does Perform UOA Treatments?
-                              </Label>
-                              <Switch
-                                id="performs-uoa"
-                                checked={editFormData.performsUoaTreatments}
-                                onCheckedChange={(checked) =>
-                                  setEditFormData({
-                                    ...editFormData,
-                                    performsUoaTreatments: checked,
-                                  })
-                                }
-                              />
-                            </div>
                             {type === "dentist" && (
                               <div className="flex items-center justify-between gap-3">
                                 <Label
@@ -5801,7 +5728,6 @@ export default function ProviderDetail() {
                                 encodeProviderAdditionalOptions(
                                   editFormData.performsNhsTreatments,
                                   editFormData.performsMosTreatments,
-                                  editFormData.performsUoaTreatments,
                                 ),
                               is_principal_associate:
                                 type === "dentist"
@@ -6001,34 +5927,6 @@ export default function ProviderDetail() {
                             )}
                           </div>
                         </div>
-                        {editFormData.splitSourceMethod ===
-                          "flat-percentage" && (
-                          <div className="space-y-2">
-                            <Label htmlFor="contract-associate-split-percentage">
-                              Split Percentage
-                            </Label>
-                            <div className="flex h-10 w-full items-center rounded-md border border-input bg-background">
-                              <Input
-                                id="contract-associate-split-percentage"
-                                type="number"
-                                value={editFormData.associateSplitPercentage}
-                                onChange={(e) =>
-                                  setEditFormData({
-                                    ...editFormData,
-                                    associateSplitPercentage: Number(
-                                      e.target.value,
-                                    ),
-                                  })
-                                }
-                                placeholder="50"
-                                className="h-full border-0 bg-transparent hover:border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
-                              />
-                              <span className="px-3 text-sm text-muted-foreground">
-                                %
-                              </span>
-                            </div>
-                          </div>
-                        )}
                         {editFormData.splitSourceMethod === "per-case" && (
                           <div className="space-y-2">
                             <Label htmlFor="contract-per-case-rate">
@@ -6529,6 +6427,16 @@ export default function ProviderDetail() {
                 </CardContent>
               </Card>
             )}
+
+            <Card>
+              <CardContent className="pt-6">
+                <PePrivateShareProviderPanel
+                  organizationId={organizationId}
+                  practitionerId={provider?.id}
+                  practitionerName={provider?.name}
+                />
+              </CardContent>
+            </Card>
 
             <ContractAttachmentsCard providerId={provider?.id} />
 
@@ -7188,94 +7096,6 @@ export default function ProviderDetail() {
                         netProductionDateRange.to ? (
                         <div className="text-center py-8 text-muted-foreground">
                           No MOS count data available for the selected date
-                          range.
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* UOA Count Section */}
-              <Card>
-                <CardContent className="pt-6">
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-xl font-bold text-foreground">
-                        UOA Count
-                      </h3>
-                      <Button
-                        className="bg-sidebar hover:bg-sidebar hover:text-sidebar-foreground text-white gap-2"
-                        onClick={() => {
-                          setUoaCountRows([{ month: "", data: {} }]);
-                          setShowUoaCountDialog(true);
-                        }}
-                      >
-                        <Plus className="w-4 h-4" />
-                        Add UOA Count
-                      </Button>
-                    </div>
-                    <div className="overflow-x-auto">
-                      {isLoadingAllUoaCounts ? (
-                        <div className="flex items-center justify-center py-8">
-                          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                        </div>
-                      ) : uoaCountSummary &&
-                        uoaCountSummary.monthlyCounts.length > 0 ? (
-                        <table className="w-full border-collapse">
-                          <thead>
-                            <tr className="bg-sidebar text-white">
-                              <th className="text-left p-3 font-semibold text-sm">
-                                Name
-                              </th>
-                              {uoaCountSummary.monthlyCounts.map((mc) => (
-                                <th
-                                  key={mc.month}
-                                  className="text-right p-3 font-semibold text-sm"
-                                >
-                                  {mc.month}
-                                </th>
-                              ))}
-                              <th className="text-right p-3 font-semibold text-sm">
-                                Total
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            <tr className="border-b border-border hover:bg-muted/50">
-                              <td className="p-3 font-medium">
-                                {provider?.name ?? ""}
-                              </td>
-                              {uoaCountSummary.monthlyCounts.map((mc) => (
-                                <td
-                                  key={mc.month}
-                                  className="p-3 text-right cursor-pointer hover:bg-primary/10 hover:text-primary transition-colors"
-                                  onClick={() =>
-                                    openCountEditDialog(
-                                      mc.month,
-                                      "uoa_count",
-                                      setUoaCountRows,
-                                      setIsLoadingUoaCountDialog,
-                                      setShowUoaCountDialog,
-                                    )
-                                  }
-                                >
-                                  {mc.count > 0 ? mc.count.toString() : "-"}
-                                </td>
-                              ))}
-                              <td className="p-3 text-right font-semibold">
-                                {uoaCountSummary.totalCount > 0
-                                  ? uoaCountSummary.totalCount.toString()
-                                  : "-"}
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      ) : !isLoadingAllUoaCounts &&
-                        netProductionDateRange.from &&
-                        netProductionDateRange.to ? (
-                        <div className="text-center py-8 text-muted-foreground">
-                          No UOA count data available for the selected date
                           range.
                         </div>
                       ) : null}
@@ -8138,32 +7958,20 @@ export default function ProviderDetail() {
                                 <DatePicker
                                   picker="month"
                                   value={row.month ? dayjs(row.month) : null}
-                                  onChange={(date) => {
-                                    const monthValue = date
-                                      ? date.format("YYYY-MM")
-                                      : "";
+                                  onChange={(date) =>
                                     setNhsCountRows((prev) =>
                                       prev.map((r, i) =>
                                         i === rowIdx
-                                          ? { ...r, month: monthValue }
+                                          ? {
+                                              ...r,
+                                              month: date
+                                                ? date.format("YYYY-MM")
+                                                : "",
+                                            }
                                           : r,
                                       ),
-                                    );
-                                    if (monthValue) {
-                                      loadCountDataForMonth(
-                                        monthValue,
-                                        "uda_count",
-                                      ).then((rowData) =>
-                                        setNhsCountRows((prev) =>
-                                          prev.map((r, i) =>
-                                            i === rowIdx
-                                              ? { ...r, data: rowData }
-                                              : r,
-                                          ),
-                                        ),
-                                      );
-                                    }
-                                  }}
+                                    )
+                                  }
                                   format="MMM YYYY"
                                   style={{ width: "100%", height: "34px" }}
                                   placeholder="Select month"
@@ -8347,32 +8155,20 @@ export default function ProviderDetail() {
                                 <DatePicker
                                   picker="month"
                                   value={row.month ? dayjs(row.month) : null}
-                                  onChange={(date) => {
-                                    const monthValue = date
-                                      ? date.format("YYYY-MM")
-                                      : "";
+                                  onChange={(date) =>
                                     setMosCountRows((prev) =>
                                       prev.map((r, i) =>
                                         i === rowIdx
-                                          ? { ...r, month: monthValue }
+                                          ? {
+                                              ...r,
+                                              month: date
+                                                ? date.format("YYYY-MM")
+                                                : "",
+                                            }
                                           : r,
                                       ),
-                                    );
-                                    if (monthValue) {
-                                      loadCountDataForMonth(
-                                        monthValue,
-                                        "mos_count",
-                                      ).then((rowData) =>
-                                        setMosCountRows((prev) =>
-                                          prev.map((r, i) =>
-                                            i === rowIdx
-                                              ? { ...r, data: rowData }
-                                              : r,
-                                          ),
-                                        ),
-                                      );
-                                    }
-                                  }}
+                                    )
+                                  }
                                   format="MMM YYYY"
                                   style={{ width: "100%", height: "34px" }}
                                   placeholder="Select month"
@@ -8447,215 +8243,6 @@ export default function ProviderDetail() {
                       setShowMosCountDialog,
                       setMosCountRows,
                       "MOS count saved successfully.",
-                    )
-                  }
-                >
-                  Save
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
-
-          <Dialog
-            open={showUoaCountDialog}
-            onOpenChange={setShowUoaCountDialog}
-          >
-            <DialogContent className="sm:max-w-[90vw] max-h-[90vh] flex flex-col gap-0 p-0">
-              <DialogHeader className="flex-shrink-0 px-6 pt-6 pb-4 border-b">
-                <DialogTitle className="text-lg font-semibold">
-                  Associates UOA Count
-                </DialogTitle>
-              </DialogHeader>
-              <div className="flex-1 overflow-auto">
-                {isLoadingUoaCountDialog ? (
-                  <div className="flex items-center justify-center py-12">
-                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                  </div>
-                ) : (
-                  !isLoadingUoaCountDialog &&
-                  (() => {
-                    const associates = uoaCountDialogAssociates;
-                    if (associates.length === 0) {
-                      return (
-                        <div className="px-6 py-12 text-center text-sm text-muted-foreground">
-                          No providers are flagged for UOA treatments. Enable
-                          “Does Perform UOA Treatments?” on a provider’s Edit
-                          page to include them here.
-                        </div>
-                      );
-                    }
-                    const updateCell = (
-                      rowIdx: number,
-                      pid: string,
-                      value: string,
-                    ) => {
-                      setUoaCountRows((prev) =>
-                        prev.map((row, i) =>
-                          i !== rowIdx
-                            ? row
-                            : {
-                                ...row,
-                                data: { ...row.data, [pid]: { count: value } },
-                              },
-                        ),
-                      );
-                    };
-                    const addRow = () =>
-                      setUoaCountRows((prev) => [
-                        ...prev,
-                        { month: "", data: {} },
-                      ]);
-                    const removeRow = (idx: number) =>
-                      setUoaCountRows((prev) =>
-                        prev.length === 1
-                          ? [{ month: "", data: {} }]
-                          : prev.filter((_, i) => i !== idx),
-                      );
-                    return (
-                      <table
-                        className="border-collapse text-sm"
-                        style={{
-                          minWidth: `${180 + associates.length * 120 + 80}px`,
-                        }}
-                      >
-                        <thead className="sticky top-0 z-10">
-                          <tr>
-                            <th
-                              className="sticky left-0 z-20 border border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide whitespace-nowrap w-[160px] min-w-[160px]"
-                              style={{ background: "hsl(var(--muted))" }}
-                            >
-                              Month
-                            </th>
-                            {associates.map((p: any) => (
-                              <th
-                                key={p.id}
-                                className="border border-border px-3 py-3 text-center text-sm font-semibold whitespace-nowrap"
-                                style={{ background: "hsl(var(--muted))" }}
-                              >
-                                {p.name}
-                              </th>
-                            ))}
-                            <th
-                              className="border border-border px-3 py-3 text-center text-xs font-semibold uppercase tracking-wide whitespace-nowrap w-[80px]"
-                              style={{ background: "hsl(var(--muted))" }}
-                            >
-                              Actions
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {uoaCountRows.map((row, rowIdx) => (
-                            <tr
-                              key={rowIdx}
-                              className="group hover:bg-muted/20 transition-colors"
-                            >
-                              <td
-                                className="sticky left-0 z-10 border border-border px-3 py-2"
-                                style={{ background: "hsl(var(--background))" }}
-                              >
-                                <DatePicker
-                                  picker="month"
-                                  value={row.month ? dayjs(row.month) : null}
-                                  onChange={(date) => {
-                                    const monthValue = date
-                                      ? date.format("YYYY-MM")
-                                      : "";
-                                    setUoaCountRows((prev) =>
-                                      prev.map((r, i) =>
-                                        i === rowIdx
-                                          ? { ...r, month: monthValue }
-                                          : r,
-                                      ),
-                                    );
-                                    if (monthValue) {
-                                      loadCountDataForMonth(
-                                        monthValue,
-                                        "uoa_count",
-                                      ).then((rowData) =>
-                                        setUoaCountRows((prev) =>
-                                          prev.map((r, i) =>
-                                            i === rowIdx
-                                              ? { ...r, data: rowData }
-                                              : r,
-                                          ),
-                                        ),
-                                      );
-                                    }
-                                  }}
-                                  format="MMM YYYY"
-                                  style={{ width: "100%", height: "34px" }}
-                                  placeholder="Select month"
-                                />
-                              </td>
-                              {associates.map((p: any) => {
-                                const pid = p.id;
-                                const cell = row.data[pid] ?? { count: "" };
-                                return (
-                                  <td
-                                    key={pid}
-                                    className="border border-border px-2 py-2"
-                                  >
-                                    <input
-                                      type="number"
-                                      placeholder="0"
-                                      value={cell.count}
-                                      onChange={(e) =>
-                                        updateCell(rowIdx, pid, e.target.value)
-                                      }
-                                      className="h-8 w-full min-w-[90px] rounded-md border border-input bg-background px-2 text-sm text-center focus:outline-none focus:ring-1 focus:ring-ring"
-                                    />
-                                  </td>
-                                );
-                              })}
-                              <td className="border border-border px-2 py-2">
-                                <div className="flex items-center justify-center gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={addRow}
-                                    className="w-7 h-7 rounded-full bg-primary text-white flex items-center justify-center hover:bg-primary/80 transition-colors shadow-sm"
-                                    title="Add row"
-                                  >
-                                    <Plus className="w-3.5 h-3.5" />
-                                  </button>
-                                  {uoaCountRows.length > 1 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => removeRow(rowIdx)}
-                                      className="w-7 h-7 rounded-full bg-destructive text-white flex items-center justify-center hover:bg-destructive/80 transition-colors shadow-sm"
-                                      title="Remove row"
-                                    >
-                                      <Minus className="w-3.5 h-3.5" />
-                                    </button>
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    );
-                  })()
-                )}
-              </div>
-              <div className="flex justify-end gap-3 px-6 py-4 border-t flex-shrink-0">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setShowUoaCountDialog(false);
-                    setUoaCountRows([{ month: "", data: {} }]);
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  className="bg-sidebar hover:bg-sidebar/90 text-white px-8"
-                  onClick={() =>
-                    saveCountRows(
-                      uoaCountRows,
-                      "uoa_count",
-                      setShowUoaCountDialog,
-                      setUoaCountRows,
-                      "UOA count saved successfully.",
                     )
                   }
                 >
@@ -9905,24 +9492,6 @@ export default function ProviderDetail() {
                       setAddAssociateForm({
                         ...addAssociateForm,
                         performsMosTreatments: checked,
-                      })
-                    }
-                  />
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <Label
-                    htmlFor="add-performs-uoa"
-                    className="cursor-pointer font-normal"
-                  >
-                    Does Perform UOA Treatments?
-                  </Label>
-                  <Switch
-                    id="add-performs-uoa"
-                    checked={addAssociateForm.performsUoaTreatments}
-                    onCheckedChange={(checked) =>
-                      setAddAssociateForm({
-                        ...addAssociateForm,
-                        performsUoaTreatments: checked,
                       })
                     }
                   />

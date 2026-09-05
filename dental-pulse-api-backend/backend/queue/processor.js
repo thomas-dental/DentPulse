@@ -10,12 +10,30 @@ const path = require('path');
 const { supabaseAdmin } = require('../config/supabase');
 const { fetchDentallyPage, fetchInvoiceDetailsBatch, fetchAccountDetailsBatch, fetchPatientById, extractRecords, PER_PAGE, getInvoiceBatchConcurrency } = require('../api/dentally/client');
 const { sleep } = require('../utils/helpers');
-const { upsertEntityData, getCategoryMap, getLocationMap, getCancellationReasonMap, invalidateMapCaches } = require('../services/sync/upsert');
+const {
+  upsertEntityData,
+  getCategoryMap,
+  getLocationMap,
+  getCancellationReasonMap,
+  getAcquisitionSourceMap,
+  invalidateMapCaches,
+} = require('../services/sync/upsert');
 const { ENTITIES_NEEDING_LOCATION_MAP } = require('../api/dentally/config');
 const { chunkLabel } = require('../utils/dateHelpers');
 const logger = require('../services/sync/logger');
+const { decryptIntegrationPat } = require('../services/patientEconomics/integrationPat');
 
 const { getSyncSettings } = require('../services/sync/settingsStore');
+const {
+  schedulePeFactsRefreshWhenLegacySyncBatchIdle,
+} = require('../services/patientEconomics/legacySyncFactsRefresh');
+
+function notifyLegacySyncBatchJobTerminal(job) {
+  schedulePeFactsRefreshWhenLegacySyncBatchIdle({
+    practiceId: job.organization_id,
+    integrationId: job.integration_id,
+  });
+}
 
 function readSyncMode() {
   try {
@@ -33,7 +51,7 @@ const MAX_PAGES_PER_JOB = 5000;
  * Process a single sync job (all pages).
  *
  * @param {object} job - sync_jobs row
- * @param {object} integration - integrations row { id, api_key, api_endpoints }
+ * @param {object} integration - integrations row { id, encrypted_pat, encrypted_pat_iv, api_endpoints }
  * @param {object} cancelTokens - Map<jobId, boolean> for cancellation
  * @returns {Promise<void>}
  */
@@ -41,6 +59,16 @@ async function processSyncJob(job, integration, cancelTokens) {
   const entityAlias = job.entity_alias || 'appointments';
   const dateLabel = job.start_date ? ` for ${chunkLabel(job.start_date)}` : '';
   console.log(`[SyncEngine] Starting job ${job.id}: ${entityAlias}${dateLabel}`);
+
+  let dentallyPat;
+  try {
+    dentallyPat = decryptIntegrationPat(integration);
+  } catch (err) {
+    console.error(`[SyncEngine] Job ${job.id}: ${err.message}`);
+    await logger.markFailed(job.id, err.message);
+    notifyLegacySyncBatchJobTerminal(job);
+    return;
+  }
 
   try {
     await logger.markRunning(job.id);
@@ -55,6 +83,9 @@ async function processSyncJob(job, integration, cancelTokens) {
     }
     if (entityAlias === 'appointments' || entityAlias === 'appointments_current_month') {
       maps.cancellationReasonMap = await getCancellationReasonMap(job.organization_id);
+    }
+    if (entityAlias === 'patients') {
+      maps.acquisitionSourceMap = await getAcquisitionSourceMap(job.organization_id);
     }
 
     // Resume from last saved page (on retry, skip already-processed pages)
@@ -102,7 +133,7 @@ async function processSyncJob(job, integration, cancelTokens) {
       console.log(`[SyncEngine] ${entityAlias}${dateLabel} - page ${currentPage}...`);
 
       const responseData = await fetchDentallyPage(
-        integration.api_key,
+        dentallyPat,
         integration.api_endpoints,
         entityAlias,
         currentPage,
@@ -147,11 +178,11 @@ async function processSyncJob(job, integration, cancelTokens) {
 
       // For invoices, fetch detail in parallel batches to get invoice_items
       if (entityAlias === 'invoices' && records.length > 0) {
-        const batchSize = getInvoiceBatchConcurrency(integration.api_key);
+        const batchSize = getInvoiceBatchConcurrency(dentallyPat);
         console.log(`[SyncEngine] Fetching detail for ${records.length} invoices (parallel, concurrency=${batchSize})...`);
         const cancelCheck = () => cancelTokens.get(job.id) === true;
         records = await fetchInvoiceDetailsBatch(
-          integration.api_key,
+          dentallyPat,
           integration.api_endpoints,
           records,
           cancelCheck
@@ -170,11 +201,11 @@ async function processSyncJob(job, integration, cancelTokens) {
       // For accounts, fetch detail in parallel batches to get `uuid` (not
       // returned by the list endpoint; we need it for Dentally deep links).
       if (entityAlias === 'accounts' && records.length > 0) {
-        const batchSize = getInvoiceBatchConcurrency(integration.api_key);
+        const batchSize = getInvoiceBatchConcurrency(dentallyPat);
         console.log(`[SyncEngine] Fetching detail for ${records.length} accounts (parallel, concurrency=${batchSize})...`);
         const cancelCheck = () => cancelTokens.get(job.id) === true;
         records = await fetchAccountDetailsBatch(
-          integration.api_key,
+          dentallyPat,
           integration.api_endpoints,
           records,
           cancelCheck
@@ -341,12 +372,20 @@ async function processSyncJob(job, integration, cancelTokens) {
       .eq('entity_alias', entityAlias);
 
     // Invalidate map caches after reference entities are synced so subsequent jobs get fresh data
-    if (entityAlias === 'locations' || entityAlias === 'treatment_category' || entityAlias === 'treatments' || entityAlias === 'appointment_cancellation_reasons') {
+    if (
+      entityAlias === 'locations'
+      || entityAlias === 'treatment_category'
+      || entityAlias === 'treatments'
+      || entityAlias === 'appointment_cancellation_reasons'
+      || entityAlias === 'acquisition_sources'
+    ) {
       invalidateMapCaches(job.organization_id);
     }
 
     const dedupMsg = totalDuplicatesSkipped > 0 ? `, ${totalDuplicatesSkipped} duplicates skipped` : '';
     console.log(`[SyncEngine] ${entityAlias}${dateLabel}: ${totalProcessed} records synced, ${totalFailed} failed${dedupMsg}`);
+
+    notifyLegacySyncBatchJobTerminal(job);
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -373,6 +412,7 @@ async function processSyncJob(job, integration, cancelTokens) {
       return 'retry';
     } else {
       await logger.markFailed(job.id, errorMessage);
+      notifyLegacySyncBatchJobTerminal(job);
       return 'failed';
     }
   }
@@ -412,7 +452,7 @@ async function syncMissingPatientsFromInvoices(invoiceRecords, organizationId, u
   for (let i = 0; i < missingIds.length; i += BATCH_SIZE) {
     const batch = missingIds.slice(i, i + BATCH_SIZE);
     const settled = await Promise.allSettled(
-      batch.map(pid => fetchPatientById(integration.api_key, integration.api_endpoints, pid))
+      batch.map(pid => fetchPatientById(dentallyPat, integration.api_endpoints, pid))
     );
     for (const result of settled) {
       if (result.status === 'fulfilled' && result.value) fetched.push(result.value);

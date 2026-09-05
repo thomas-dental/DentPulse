@@ -11,12 +11,10 @@ export interface RevenueSettings {
   membership_income_from: RevenueSourceValue;
   nhs_income_from: RevenueSourceValue;
   mos_income_from: RevenueSourceValue;
-  uoa_income_from: RevenueSourceValue;
   private_income_level: IncomeLevelValue;
   membership_income_level: IncomeLevelValue;
   nhs_income_level: IncomeLevelValue;
   mos_income_level: IncomeLevelValue;
-  uoa_income_level: IncomeLevelValue;
 }
 
 // Matches practice_locations' existing column defaults, so a location that has
@@ -27,12 +25,10 @@ const FALLBACK_REVENUE_SETTINGS: RevenueSettings = {
   membership_income_from: 'accounting',
   nhs_income_from: 'accounting',
   mos_income_from: 'accounting',
-  uoa_income_from: 'accounting',
   private_income_level: 'practice',
   membership_income_level: 'practice',
   nhs_income_level: 'practice',
   mos_income_level: 'practice',
-  uoa_income_level: 'practice',
 };
 
 const SOURCE_COLUMNS = {
@@ -40,7 +36,6 @@ const SOURCE_COLUMNS = {
   membership_income_from: 'membership_income_source',
   nhs_income_from: 'nhs_income_source',
   mos_income_from: 'mos_income_source',
-  uoa_income_from: 'uoa_income_source',
 } as const;
 
 export function useRevenueSettings(locationId: string | null) {
@@ -87,7 +82,7 @@ export function useRevenueSettings(locationId: string | null) {
     queryFn: async () => {
       let query = (supabase as any)
         .from('practice_locations')
-        .select('private_income_source, membership_income_source, nhs_income_source, mos_income_source, uoa_income_source')
+        .select('private_income_source, membership_income_source, nhs_income_source, mos_income_source')
         .eq('organization_id', organizationId);
       query = normalizedLocationId ? query.eq('id', normalizedLocationId) : query.order('created_at', { ascending: true }).limit(1);
       const { data, error } = await query.maybeSingle();
@@ -97,7 +92,6 @@ export function useRevenueSettings(locationId: string | null) {
         membership_income_source: string | null;
         nhs_income_source: string | null;
         mos_income_source: string | null;
-        uoa_income_source: string | null;
       } | null;
     },
     enabled: !!organizationId,
@@ -109,7 +103,6 @@ export function useRevenueSettings(locationId: string | null) {
     membership_income_from: (currentLocationValues?.membership_income_source as RevenueSourceValue) || FALLBACK_REVENUE_SETTINGS.membership_income_from,
     nhs_income_from: (currentLocationValues?.nhs_income_source as RevenueSourceValue) || FALLBACK_REVENUE_SETTINGS.nhs_income_from,
     mos_income_from: (currentLocationValues?.mos_income_source as RevenueSourceValue) || FALLBACK_REVENUE_SETTINGS.mos_income_from,
-    uoa_income_from: (currentLocationValues?.uoa_income_source as RevenueSourceValue) || FALLBACK_REVENUE_SETTINGS.uoa_income_from,
   };
 
   const isOverride = !!locationOverride;

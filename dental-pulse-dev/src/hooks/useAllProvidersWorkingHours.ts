@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useOrganization } from './useOrganization';
-import { filterProvidersByManagementType } from '@/lib/providerRosterFilters';
 import { startOfMonth, endOfMonth, format } from 'date-fns'; // startOfMonth/endOfMonth used for default range
 import dayjs from 'dayjs';
 
@@ -33,7 +32,7 @@ export function useAllProvidersWorkingHours(
 
   return useQuery({
     queryKey: [
-      'all-providers-working-hours-v3',
+      'all-providers-working-hours-v2',
       organizationId,
       providerType,
       startDate ? format(startDate, 'yyyy-MM-dd') : null,
@@ -62,13 +61,24 @@ export function useAllProvidersWorkingHours(
         .eq('organization_id', organizationId)
         .is('deleted_at', null);
 
+      if (providerType === 'Dentist') {
+        providersQuery = providersQuery.or('provider_role.ilike.%dentist%,provider_role.ilike.%dental surgeon%,provider_role.ilike.%principal dentist%');
+      } else if (providerType === 'Hygienist') {
+        providersQuery = providersQuery.or('provider_role.ilike.%hygienist%,provider_role.ilike.%dental hygienist%,provider_role.ilike.%hygiene%');
+      } else if (providerType === 'Therapist') {
+        providersQuery = providersQuery.or('provider_role.ilike.%therapist%,provider_role.ilike.%dental therapist%,provider_role.ilike.%therapy%');
+      } else if (providerType === 'Other') {
+        providersQuery = providersQuery
+          .filter('provider_role', 'not.ilike', '%dentist%')
+          .filter('provider_role', 'not.ilike', '%hygienist%')
+          .filter('provider_role', 'not.ilike', '%hygiene%')
+          .filter('provider_role', 'not.ilike', '%therapist%')
+          .filter('provider_role', 'not.ilike', '%therapy%');
+      }
+
       const { data: rawProviderRows, error: providersError } = await providersQuery;
       if (providersError) throw providersError;
-      const typedProviderRows = filterProvidersByManagementType(
-        rawProviderRows,
-        providerType,
-      );
-      if (!typedProviderRows.length) return { providers: [], months: [] };
+      if (!rawProviderRows?.length) return { providers: [], months: [] };
 
       // 2. Build month label list
       const months: string[] = [];
@@ -81,7 +91,7 @@ export function useAllProvidersWorkingHours(
       // 3. Always deduplicate by email — one entry per unique person regardless of how many
       // location rows they have in the providers table. Collect all their external_ids.
       const emailGroupMap = new Map<string, { displayName: string; providerId: string; externalIds: number[] }>();
-      for (const p of typedProviderRows) {
+      for (const p of rawProviderRows) {
         const key = (p.email ?? p.name ?? '').toLowerCase();
         if (!emailGroupMap.has(key)) {
           emailGroupMap.set(key, { displayName: p.name, providerId: p.id, externalIds: [] });

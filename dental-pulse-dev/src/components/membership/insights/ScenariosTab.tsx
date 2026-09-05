@@ -12,7 +12,7 @@ import { getOpCostByPlatform } from "@/services/integrations/plCostService";
 import { ScopeBar } from "./ScopeBar";
 import { Stat } from "./Stat";
 import { useChurnData } from "./useChurnData";
-import { gbp, gbpExact, nn } from "./format";
+import { gbp, nn } from "./format";
 
 function toDateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -102,9 +102,7 @@ export function ScenariosTab() {
     const prevHours = hoursFor(prevChairQ.data);
     const current = curHours > 0 && opCostQ.data?.current != null ? opCostQ.data.current / curHours : null;
     const previous = prevHours > 0 && opCostQ.data?.previous != null ? opCostQ.data.previous / prevHours : null;
-    // curCost/curHours exposed so the tile's tooltip can show the real
-    // worked sum (cost ÷ hours), not just the finished rate.
-    return { current, previous, platform: opCostQ.data?.platform ?? null, curCost: opCostQ.data?.current ?? null, curHours };
+    return { current, previous, platform: opCostQ.data?.platform ?? null };
   }, [curChairQ.data, prevChairQ.data, opCostQ.data, selectedLocationId]);
 
   const sites = useMemo(() => {
@@ -215,28 +213,13 @@ export function ScenariosTab() {
                   : "this month"
               }
               tone={costPerHour.previous != null ? (costPerHour.current >= costPerHour.previous ? "down" : "up") : undefined}
-              calc={[
-                {
-                  label: `${opCostQ.data?.platform ?? "Accounting"} operating cost ('TC'), this month`,
-                  value: costPerHour.curCost != null ? gbpExact(costPerHour.curCost) : "—",
-                },
-                { label: "÷ Available chair hours, same period", value: `${nn(costPerHour.curHours)} hrs` },
-                { label: "= Cost per surgery hour", value: gbpExact(costPerHour.current), isTotal: true },
-                ...(costPerHour.previous != null
-                  ? [{ label: "Last month", value: gbpExact(costPerHour.previous) }]
-                  : []),
-              ]}
+              tooltip={`${opCostQ.data?.platform ?? "Accounting"} total operating cost (wages, associate rates, lab, materials, rent, rates — account code 'TC') this month ÷ real available chair hours for the same period.`}
             />
             <Stat
               k="Plan fee per patient"
               v={gbp(avgMemberValue)}
               note="a month, for comparison"
-              tooltip="Not directly comparable £-for-£ to an hourly cost — it depends how many chair-hours a typical plan patient consumes a month — but the trend direction is the real signal."
-              calc={[
-                { label: "Net plan cash a month", value: gbpExact(baseMrr) },
-                { label: "÷ Members", value: nn(baseMembers) },
-                { label: "= Average fee per member", value: gbpExact(avgMemberValue), isTotal: true },
-              ]}
+              tooltip="Same average revenue per member used by the levers below — not directly comparable £-for-£ to an hourly cost, since it depends how many chair-hours a typical plan patient actually consumes a month, but the trend direction is the real signal."
             />
           </div>
         </div>
@@ -281,35 +264,9 @@ export function ScenariosTab() {
           v={gbp(mrr)}
           note={`${delta >= 0 ? "+" : "−"}${gbp(Math.abs(delta))} vs today`}
           tone={delta >= 0 ? "up" : "down"}
-          calc={[
-            { label: "Today's net cash", value: gbpExact(baseMrr) },
-            { label: "+ Price uplift", value: gbpExact(upliftRevenue) },
-            { label: `+ New members (${nn(newMembers)}) × avg fee`, value: gbpExact(newMembers * avgMemberValue) },
-            { label: `+ Churn saved (${nn(churnSaved)}) × avg fee`, value: gbpExact(churnSaved * avgMemberValue) },
-            { label: "+ Upgrades", value: gbpExact(upgradeRevenue) },
-            { label: "= Scenario net cash", value: gbpExact(mrr), isTotal: true },
-          ]}
         />
-        <Stat
-          k="Annual impact"
-          v={gbp(delta * 12)}
-          note="incremental, full year"
-          calc={[
-            { label: "Monthly change vs today", value: `${delta >= 0 ? "+" : "−"}${gbpExact(Math.abs(delta))}` },
-            { label: "× 12 months", value: gbpExact(delta * 12), isTotal: true },
-          ]}
-        />
-        <Stat
-          k="Members"
-          v={nn(members)}
-          note={`from ${nn(baseMembers)} today`}
-          calc={[
-            { label: "Members today", value: nn(baseMembers) },
-            { label: "+ New members", value: nn(newMembers) },
-            { label: "+ Churn saved", value: nn(churnSaved) },
-            { label: "= Scenario members", value: nn(members), isTotal: true },
-          ]}
-        />
+        <Stat k="Annual impact" v={gbp(delta * 12)} note="incremental, full year" />
+        <Stat k="Members" v={nn(members)} note={`from ${nn(baseMembers)} today`} />
       </div>
 
       <div className="mpi-card">

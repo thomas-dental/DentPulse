@@ -23,21 +23,7 @@ import type { TreatmentDateBasis } from '@/lib/paidDateBasis';
 import { useFilters } from '@/contexts/FilterContext';
 import { Calendar } from 'lucide-react';
 import { useProfitMetrics } from '@/hooks/useProfitMetrics';
-import {
-  useAllProvidersNetProduction,
-  filterNetProductionByStatus,
-  personMatchesProductionStatus,
-  buildNetProductionMonthlyTrend,
-  PRODUCTION_PROVIDER_STATUS_OPTIONS,
-  type ProductionProviderStatus,
-} from '@/hooks/useAllProvidersNetProduction';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { useAllProvidersNetProduction } from '@/hooks/useAllProvidersNetProduction';
 import { useAllProvidersWorkingHours } from '@/hooks/useAllProvidersWorkingHours';
 import { useTreatmentProfitPlanning } from '@/hooks/useTreatmentProfitPlanning';
 import { useAssociatePerformanceMetrics } from '@/hooks/useAssociatePerformanceMetrics';
@@ -234,9 +220,6 @@ export default function TreatmentInsights() {
   // completion day.
   const [dateBasis, setDateBasis] = useState<TreatmentDateBasis>('completed');
   const paidBasis = dateBasis === 'paid';
-  // Same Active / All / Inactive control as Providers → Production Data.
-  const [providerStatus, setProviderStatus] =
-    useState<ProductionProviderStatus>('all');
   const {
     summary,
     revenueByCategory,
@@ -298,18 +281,10 @@ export default function TreatmentInsights() {
     true,
     allNetProduction != null, // serialize: don't stack both RPC sweeps at once
   );
-  const visibleNetProduction = useMemo(
-    () => filterNetProductionByStatus(allNetProduction?.providers, providerStatus),
-    [allNetProduction, providerStatus],
-  );
-  const visiblePrevNetProduction = useMemo(
-    () => filterNetProductionByStatus(prevAllNetProduction?.providers, providerStatus),
-    [prevAllNetProduction, providerStatus],
-  );
-  const sumRaw = (rows: typeof visibleNetProduction) =>
-    rows.reduce((s, p) => s + p.totalRaw, 0);
-  const netProductionTotal = useMemo(() => sumRaw(visibleNetProduction), [visibleNetProduction]);
-  const prevNetProductionTotal = useMemo(() => sumRaw(visiblePrevNetProduction), [visiblePrevNetProduction]);
+  const sumRaw = (rows: typeof allNetProduction) =>
+    (rows?.providers ?? []).reduce((s, p) => s + p.totalRaw, 0);
+  const netProductionTotal = useMemo(() => sumRaw(allNetProduction), [allNetProduction]);
+  const prevNetProductionTotal = useMemo(() => sumRaw(prevAllNetProduction), [prevAllNetProduction]);
   const netProductionTrend =
     prevNetProductionTotal > 0
       ? Math.round(((netProductionTotal - prevNetProductionTotal) / prevNetProductionTotal) * 1000) / 10
@@ -322,9 +297,9 @@ export default function TreatmentInsights() {
   // overlay when configured. totalNhs here is the overlay-applied figure. ──
   const incomeByPayorCards = useMemo(() => {
     const sum = (
-      rows: typeof visibleNetProduction,
+      rows: typeof allNetProduction,
       sel: (p: { totalPrivate: number; totalMembership: number; totalNhs: number }) => number,
-    ) => rows.reduce((s, p) => s + sel(p), 0);
+    ) => (rows?.providers ?? []).reduce((s, p) => s + sel(p), 0);
     const pct = (c: number, p: number) => (p > 0 ? Math.round(((c - p) / p) * 1000) / 10 : 0);
     const mk = (
       title: string,
@@ -333,8 +308,8 @@ export default function TreatmentInsights() {
       iconBg: string,
       iconColor: string,
     ) => {
-      const curr = sum(visibleNetProduction, sel);
-      const prev = sum(visiblePrevNetProduction, sel);
+      const curr = sum(allNetProduction, sel);
+      const prev = sum(prevAllNetProduction, sel);
       return { title, amount: curr, value: formatCurrencyWhole(curr), trend: pct(curr, prev), icon, iconBg, iconColor };
     };
     return [
@@ -342,16 +317,15 @@ export default function TreatmentInsights() {
       mk('NHS Income', (p) => p.totalNhs, Stethoscope, 'bg-sky-100 dark:bg-sky-900/40', 'text-sky-600 dark:text-sky-400'),
       mk('Membership Plan Income', (p) => p.totalMembership, Users, 'bg-rose-100 dark:bg-rose-900/40', 'text-rose-600 dark:text-rose-400'),
     ];
-  }, [visibleNetProduction, visiblePrevNetProduction]);
+  }, [allNetProduction, prevAllNetProduction]);
 
-  // ── Monthly Revenue Trend ──────────────────────────────────────────────
-  // Completed basis: Production Data monthly `rawTotal` (Dentally Practitioner
-  // Activity) so Jan–Jul bars match the net-production column totals for the
-  // same Active / Inactive / All filter. The old TPI chart pipeline excluded
-  // £0 rows, charting, and unmapped plans, so months never summed to the tile.
-  // Paid basis: keep the invoice-paid TPI series (net production is completion
-  // dated) and only overlay NHS from the filtered production set.
-  const { data: trendNetProduction, isLoading: trendNetProductionLoading } = useAllProvidersNetProduction(
+  // ── Monthly Revenue Trend: NHS series from the Providers module ──────────
+  // The TPI pipeline prices NHS items at £0, so the chart's NHS line is fed
+  // from Net Production's monthly NHS instead (provider's mapped NHS accounts
+  // / DentPulse UDA overlay — the same figures as the Providers module and
+  // the NHS Income box). When the chart's own datepicker is set, a dedicated
+  // Net Production fetch covers that window.
+  const { data: trendNetProduction } = useAllProvidersNetProduction(
     null,
     trendCustomRange.from ?? dateRange.startDate,
     trendCustomRange.to ?? dateRange.endDate,
@@ -360,35 +334,29 @@ export default function TreatmentInsights() {
     true,
     !!(trendCustomRange.from && trendCustomRange.to), // only fetched while the picker is active
   );
-  const visibleTrendNetProduction = useMemo(
-    () => filterNetProductionByStatus(trendNetProduction?.providers, providerStatus),
-    [trendNetProduction, providerStatus],
+  const nhsByMonthKey = useMemo(() => {
+    const MONTH_NUM: Record<string, string> = {
+      jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+      jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
+    };
+    const src = trendCustomRange.from && trendCustomRange.to ? trendNetProduction : allNetProduction;
+    const map = new Map<string, number>();
+    for (const p of src?.providers ?? []) {
+      for (const [label, cell] of Object.entries(p.monthlyData)) {
+        // labels are 'Mon-YY' (e.g. 'Jul-26') → '2026-07'
+        const mm = MONTH_NUM[label.slice(0, 3).toLowerCase()];
+        const yy = label.slice(4, 6);
+        if (!mm || yy.length !== 2) continue;
+        const key = `20${yy}-${mm}`;
+        map.set(key, (map.get(key) || 0) + (cell.nhs || 0));
+      }
+    }
+    return map;
+  }, [allNetProduction, trendNetProduction, trendCustomRange]);
+  const monthlyTrendDisplay = useMemo(
+    () => monthlyTrend.map((r) => ({ ...r, nhs: nhsByMonthKey.get(r.monthKey) ?? 0 })),
+    [monthlyTrend, nhsByMonthKey],
   );
-  const monthlyTrendDisplay = useMemo(() => {
-    const trendStart = trendCustomRange.from ?? dateRange.startDate;
-    const trendEnd = trendCustomRange.to ?? dateRange.endDate;
-    const src =
-      trendCustomRange.from && trendCustomRange.to
-        ? visibleTrendNetProduction
-        : visibleNetProduction;
-    const fromProduction = buildNetProductionMonthlyTrend(src, trendStart, trendEnd);
-
-    if (!paidBasis) return fromProduction;
-
-    const nhsByMonthKey = new Map(fromProduction.map((r) => [r.monthKey, r.nhs]));
-    return monthlyTrend.map((r) => ({
-      ...r,
-      nhs: nhsByMonthKey.get(r.monthKey) ?? 0,
-    }));
-  }, [
-    paidBasis,
-    monthlyTrend,
-    visibleNetProduction,
-    visibleTrendNetProduction,
-    trendCustomRange,
-    dateRange.startDate,
-    dateRange.endDate,
-  ]);
 
   // ── Total Hours tile source ────────────────────────────────────────────
   // Appointment-based working hours (appointment_summary org-wide /
@@ -411,30 +379,13 @@ export default function TreatmentInsights() {
   const workingHoursTotal = useMemo(
     () =>
       Math.round(
-        (allWorkingHours?.providers ?? [])
-          .filter((p) =>
-            personMatchesProductionStatus(
-              p.providerName,
-              providerStatus,
-              allNetProduction?.providers,
-            ),
-          )
-          .reduce((s, p) => s + p.total, 0) * 10,
+        (allWorkingHours?.providers ?? []).reduce((s, p) => s + p.total, 0) * 10,
       ) / 10,
-    [allWorkingHours, providerStatus, allNetProduction],
+    [allWorkingHours],
   );
   const prevWorkingHoursTotal = useMemo(
-    () =>
-      (prevAllWorkingHours?.providers ?? [])
-        .filter((p) =>
-          personMatchesProductionStatus(
-            p.providerName,
-            providerStatus,
-            prevAllNetProduction?.providers,
-          ),
-        )
-        .reduce((s, p) => s + p.total, 0),
-    [prevAllWorkingHours, providerStatus, prevAllNetProduction],
+    () => (prevAllWorkingHours?.providers ?? []).reduce((s, p) => s + p.total, 0),
+    [prevAllWorkingHours],
   );
   const workingHoursTrend =
     prevWorkingHoursTotal > 0
@@ -865,13 +816,12 @@ export default function TreatmentInsights() {
       icon: TrendingUp,
       iconBg: 'bg-teal-100 dark:bg-teal-900/40',
       iconColor: 'text-teal-600 dark:text-teal-400',
-          help: paidBasis
+      help: paidBasis
         ? `Income from treatments whose invoice was PAID in the selected period, dated by the ` +
           `payment day — the same total as Dentally's Practitioner Activity report with its Date ` +
           `filter set to "Paid on". ${trendHelp}`
         : `Income from treatments completed in the selected period — the same total as Dentally's ` +
-          `Practitioner Activity report and Providers → Net Production (raw TPI) for the same dates, ` +
-          `location, and Active / Inactive / All filter. ${trendHelp}`,
+          `Practitioner Activity report for the same dates and location. ${trendHelp}`,
       dentallyUrl: dentallyPractitionerActivityUrl,
     },
     {
@@ -1013,28 +963,6 @@ export default function TreatmentInsights() {
               <p className="text-muted-foreground">Executive overview of treatment performance across all service types</p>
             </div>
             <div className="flex items-center gap-3 flex-wrap justify-end">
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground whitespace-nowrap">
-                  Show Providers
-                </span>
-                <Select
-                  value={providerStatus}
-                  onValueChange={(next) =>
-                    setProviderStatus(next as ProductionProviderStatus)
-                  }
-                >
-                  <SelectTrigger className="h-9 w-[130px] font-normal">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PRODUCTION_PROVIDER_STATUS_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
               <DateBasisToggle value={dateBasis} onChange={setDateBasis} />
               <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 border border-border rounded-md px-3 py-1.5">
                 <Calendar className="w-4 h-4" />
@@ -1232,9 +1160,7 @@ export default function TreatmentInsights() {
             <CardHeader className="pb-2 flex flex-row flex-wrap items-start justify-between space-y-0 gap-2">
               <div>
                 <CardTitle className="text-lg font-semibold">Monthly Revenue Trend</CardTitle>
-                <p className="text-sm text-muted-foreground">
-                  Dentally net production by month — matches Providers → Production Data
-                </p>
+                <p className="text-sm text-muted-foreground">By treatment type over selected period</p>
               </div>
               <ConfigProvider
                 theme={{
@@ -1268,13 +1194,9 @@ export default function TreatmentInsights() {
               </ConfigProvider>
             </CardHeader>
             <CardContent>
-              {(paidBasis
-                ? isTrendLoading
-                : trendCustomRange.from && trendCustomRange.to
-                  ? trendNetProductionLoading
-                  : netProductionLoading) ? (
+              {isTrendLoading ? (
                 <div className="h-[300px] bg-muted animate-pulse rounded" />
-              ) : monthlyTrendDisplay.length > 0 ? (
+              ) : monthlyTrend.length > 0 ? (
                 <ResponsiveContainer width="100%" height={300}>
                   <ComposedChart data={monthlyTrendDisplay} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                     <defs>

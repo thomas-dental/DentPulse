@@ -10,6 +10,7 @@ import { parseMembershipFile, type ParsedMembershipRow } from '@/utils/membershi
 import type { PracticePlanParseResult } from '@/utils/practicePlanPdfParser.core';
 import { isEditDistanceOne } from '@/lib/stringSimilarity';
 import { toast } from 'sonner';
+import { importMembershipCsvViaEdgeFunction } from '@/services/membershipImportService';
 
 export interface MembershipUploadMember {
   id: string;
@@ -17,11 +18,6 @@ export interface MembershipUploadMember {
   initial: string | null;
   dob: string | null;
   treating_dentist: string | null;
-  /** Location the file was uploaded under — the row's OWNING location for
-   *  every location-scoped read (client rule 2026-08-20). null on legacy
-   *  rows imported before upload-location stamping; those fall back to the
-   *  patient's home location_id. */
-  upload_location_id?: string | null;
   fee_category: string;
   discount_percent: number;
   net_due: number;
@@ -43,19 +39,6 @@ export interface MembershipUploadMember {
    *  comparable to the plan's monthly list price — the Practice Plan fee
    *  derivation in useOverviewData.ts excludes them. */
   annual_payer: string | null;
-  /** Set by dedupeMembers: this member's collected £ summed across every
-   *  month in the header's selected range (per-month max, so a £0 annual
-   *  copy never shadows the paid one). Equals net_due for a single-month
-   *  range. Range-scoped revenue tiles must use this, never net_due — the
-   *  kept row only carries its own (latest) month's payment. */
-  range_net_due?: number;
-  /** Set by dedupeMembers alongside range_net_due: the same range £ broken
-   *  down by the treating dentist each month's payment was actually printed
-   *  under ('' key = no dentist recorded). A member who moved between
-   *  dentists mid-range (e.g. Razaq → "Razaq 2") keeps each month's £ under
-   *  that month's own dentist — the attribution the statements themselves
-   *  use, and the one provider production reconciles against. */
-  range_net_due_by_dentist?: Record<string, number>;
 }
 
 export interface MembershipLocationGroup {
@@ -281,83 +264,22 @@ async function enrichWithCurrentPlan(
  *  Insights consumers (e.g. useCliniciansData's prior-month comparison) get
  *  the exact same member count this page shows, not a raw row count that
  *  double-counts re-upload duplicates. */
-/** One removable chunk of uploaded data: a month × statement-dentist pair
- *  (dentist null = rows with no dentist recorded, e.g. sheet uploads). */
-export interface UploadSlice {
-  month: number;
-  year: number;
-  treatingDentist: string | null;
-  memberCount: number;
-  totalNetDue: number;
-}
-
 export function dedupeMembers(rows: MembershipUploadMember[]): MembershipUploadMember[] {
   const sorted = [...rows].sort((a, b) => {
     if (a.upload_year !== b.upload_year) return b.upload_year - a.upload_year;
-    if (a.upload_month !== b.upload_month) return b.upload_month - a.upload_month;
-    // Same-month duplicates keep the PAID copy deterministically — an annual
-    // payer can exist both as their collected row and as a £0 annual-section
-    // row from an older import; DB fetch order must not decide which £ the
-    // page shows.
-    return (Number(b.net_due) || 0) - (Number(a.net_due) || 0);
+    return b.upload_month - a.upload_month;
   });
   const seen = new Set<string>();
   const out: MembershipUploadMember[] = [];
-  // Per member, per month: the month's highest net_due (same rule as the
-  // same-month tie-break above — the paid copy wins over a £0 annual copy).
-  // Summed across the months in range this becomes range_net_due, so a
-  // multi-month header range reports the member's REAL collected £ for the
-  // whole range while the member itself is still counted once (client
-  // report 2026-08-19: "custom range revenue not updated" — revenue tiles
-  // showed one blended month for a four-month range).
-  // Each month also remembers WHICH dentist the winning (max) row was
-  // printed under, so range_net_due_by_dentist can attribute each month's £
-  // to that month's own dentist — a member who moved between dentists
-  // mid-range must not carry earlier months' £ onto their latest dentist
-  // (that's what made the Overview clinician card disagree with provider
-  // production over a wide range).
-  const perMonthMax = new Map<string, Map<string, { v: number; dentist: string }>>();
-  const keyOf = (r: MembershipUploadMember): string =>
-    // Practice Plan rows dedupe by PP's OWN patient id (pay_grp_id) — the
-    // one identity that is genuinely unique per paying member. Keying them
-    // by the matched Dentally patient_id collapsed DISTINCT members whose
-    // patients merely share a legacy card NUMBER across this org's sites
-    // (e.g. "005253" is a different person at each practice) — Appoline
-    // July 2026: 62 real rows / £790 of monthly fees hidden from every
-    // total. The same member re-uploaded across months keeps the same PP
-    // id, so cross-month collapse still works.
-    r.explanatory_text === PRACTICE_PLAN_MARKER && r.pay_grp_id
-      ? `pp:${r.pay_grp_id}`
-      : r.patient_id
-        ? `pid:${r.patient_id}`
-        : `k:${r.pay_grp_id ?? ''}|${(r.surname ?? '').toLowerCase()}|${(r.initial ?? '').toLowerCase()}|${r.dob ?? ''}`;
   for (const r of sorted) {
-    const key = keyOf(r);
-    const mk = `${r.upload_year}-${r.upload_month}`;
-    let months = perMonthMax.get(key);
-    if (!months) { months = new Map(); perMonthMax.set(key, months); }
-    const v = Number(r.net_due) || 0;
-    const existing = months.get(mk);
-    if (!existing || v > existing.v) {
-      months.set(mk, { v, dentist: r.treating_dentist?.trim() ?? '' });
-    }
+    const key = r.patient_id
+      ? `pid:${r.patient_id}`
+      : `k:${r.pay_grp_id ?? ''}|${(r.surname ?? '').toLowerCase()}|${(r.initial ?? '').toLowerCase()}|${r.dob ?? ''}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(r);
   }
-  return out.map(r => {
-    let rangeTotal = 0;
-    const byDentist: Record<string, number> = {};
-    for (const { v, dentist } of perMonthMax.get(keyOf(r))!.values()) {
-      rangeTotal += v;
-      byDentist[dentist] = Math.round(((byDentist[dentist] ?? 0) + v) * 100) / 100;
-    }
-    return {
-      ...r,
-      range_net_due: Math.round(rangeTotal * 100) / 100,
-      range_net_due_by_dentist: byDentist,
-    };
-  });
+  return out;
 }
 
 // Groups Denplan-sheet rows by the matched DB patient's current payment plan
@@ -475,6 +397,10 @@ export function useMembershipUploadData() {
   // the statement header + failed/cancelled event rows alongside the member
   // rows. One entry per PP PDF (statements are per-dentist documents).
   const ppStatementsRef = useRef<PracticePlanParseResult[]>([]);
+  // Original Denplan CSV File objects — on confirm we upload to Storage and
+  // invoke patient-economics-membership-import (Edge Function). Cleared for PDF.
+  const pendingCsvFilesRef = useRef<File[]>([]);
+  const [isEdgeImporting, setIsEdgeImporting] = useState(false);
 
   // Denplan facility → product/plan mappings for this organization.
   // Normalises the row so callers can always rely on `payment_plan_ids` as
@@ -681,6 +607,7 @@ export function useMembershipUploadData() {
       const emptyResult = {
         rows: [] as MembershipUploadMember[],
         fallbackMonth: null as MonthPair | null,
+        usedLocationFallback: false,
       };
       if (!organizationId || monthYearPairs.length === 0) return emptyResult;
       const { pairs, fallbackMonth } = await resolveEffectivePairs(organizationId, monthYearPairs);
@@ -695,7 +622,7 @@ export function useMembershipUploadData() {
         while (hasMore) {
           let q = (supabase as any)
             .from('membership_upload_members')
-            .select('id, surname, initial, dob, treating_dentist, fee_category, discount_percent, net_due, upload_month, upload_year, mapped_plan_id, mapped_plan_name, location_id, upload_location_id, patient_id, title, pay_grp_size, pay_grp_id, explanatory_text, annual_payer')
+            .select('id, surname, initial, dob, treating_dentist, fee_category, discount_percent, net_due, upload_month, upload_year, mapped_plan_id, mapped_plan_name, location_id, patient_id, title, pay_grp_size, pay_grp_id, explanatory_text, annual_payer')
             .eq('organization_id', organizationId)
             .or(orFilter)
             .is('deleted_at', null)
@@ -703,13 +630,10 @@ export function useMembershipUploadData() {
             .order('surname')
             .range(from, from + PAGE_SIZE - 1);
           if (locationId) {
-            // The UPLOAD location owns the row (client rule 2026-08-20: a
-            // location must never show another location's data — the old
-            // home-OR-upload match made a member registered at site A but
-            // uploaded under site B visible from both). Patient-home
-            // matching only remains for legacy rows imported before
-            // upload-location stamping existed (upload_location_id null).
-            q = q.or(`upload_location_id.eq.${locationId},and(upload_location_id.is.null,location_id.eq.${locationId})`);
+            // Match the patients' home location OR the location the file was
+            // uploaded for — a member registered at site A but uploaded under
+            // site B should be visible from either.
+            q = q.or(`location_id.eq.${locationId},upload_location_id.eq.${locationId}`);
           }
           const { data, error } = await q;
           if (error) throw error;
@@ -720,20 +644,29 @@ export function useMembershipUploadData() {
         return out;
       };
 
-      const all = await fetchRows(selectedLocationId);
-      // NO location fallback (removed 2026-08-20, client: "make sure other
-      // location data not show in other location") — a location with no
-      // rows shows the informative "saved under a different location" empty
-      // state (driven by the separate all-locations query), never another
-      // location's numbers.
+      let all = await fetchRows(selectedLocationId);
+      let usedLocationFallback = false;
+      // Location fallback: the org HAS data for the effective month but none
+      // of it matches the header-selected location (this org has two
+      // near-identically named locations, and persisted filters can hold a
+      // stale id). Blanking the whole module over that reads as "the upload
+      // failed" — show the saved data and label the fallback instead.
+      if (all.length === 0 && selectedLocationId) {
+        const anyLocation = await fetchRows(null);
+        if (anyLocation.length > 0) {
+          all = anyLocation;
+          usedLocationFallback = true;
+        }
+      }
       const enriched = await enrichWithCurrentPlan(all, organizationId);
-      return { rows: dedupeMembers(enriched), fallbackMonth };
+      return { rows: dedupeMembers(enriched), fallbackMonth, usedLocationFallback };
     },
     enabled: !!user?.id && !!organizationId,
     staleTime: 5 * 60 * 1000,
   });
   const members = membersData?.rows ?? [];
   const fallbackMonth = membersData?.fallbackMonth ?? null;
+  const isShowingFallbackLocation = membersData?.usedLocationFallback ?? false;
   // The month/year the page is ACTUALLY showing (header selection, or the
   // latest-upload fallback). The location-split modal title and Clear both
   // follow this, so they always refer to the visible data.
@@ -766,7 +699,7 @@ export function useMembershipUploadData() {
       while (hasMore) {
         const { data, error } = await (supabase as any)
           .from('membership_upload_members')
-          .select('id, surname, initial, dob, treating_dentist, fee_category, discount_percent, net_due, upload_month, upload_year, mapped_plan_id, mapped_plan_name, location_id, upload_location_id, patient_id, title, pay_grp_size, pay_grp_id, explanatory_text, annual_payer')
+          .select('id, surname, initial, dob, treating_dentist, fee_category, discount_percent, net_due, upload_month, upload_year, mapped_plan_id, mapped_plan_name, location_id, patient_id, title, pay_grp_size, pay_grp_id, explanatory_text, annual_payer')
           .eq('organization_id', organizationId)
           .or(orFilter)
           .is('deleted_at', null)
@@ -784,24 +717,6 @@ export function useMembershipUploadData() {
     staleTime: 5 * 60 * 1000,
   });
 
-  // Members whose statement row could NOT be matched to any Dentally
-  // patient (patient_id null). Since uploads stamp every row with the
-  // upload's location, these no longer surface as an "Unassigned" location
-  // bucket — they get their own explicit list in the location-split modal
-  // so unmatched members are never invisible.
-  const unmatchedMembers = useMemo(
-    () =>
-      membersAllLocations.filter(
-        (m) =>
-          !m.patient_id &&
-          // Ownership rule (2026-08-20): scoped to the header location when
-          // one is selected — the modal must not list another location's
-          // unmatched rows.
-          (!selectedLocationId || (m.upload_location_id ?? m.location_id) === selectedLocationId),
-      ),
-    [membersAllLocations, selectedLocationId],
-  );
-
   // Group all-location members by their stored location_id. Unmatched rows
   // (location_id = null) land in the "Unassigned" bucket so the user can
   // see members that couldn't be linked to a DB patient.
@@ -811,27 +726,20 @@ export function useMembershipUploadData() {
     const groups = new Map<string, MembershipLocationGroup>();
     const unassignedKey = '__unassigned__';
     for (const m of membersAllLocations) {
-      // The OWNING location (upload location, patient home for legacy
-      // unstamped rows) — same ownership rule as every location-scoped
-      // read, so this split names the location whose page shows each row.
-      const ownerLocationId = m.upload_location_id ?? m.location_id;
-      const key = ownerLocationId ?? unassignedKey;
-      // Range-scoped £: the member's collected total across every month in
-      // range, not just the latest kept copy's month.
-      const memberNet = m.range_net_due ?? m.net_due;
+      const key = m.location_id ?? unassignedKey;
       const existing = groups.get(key);
       if (existing) {
         existing.members.push(m);
-        existing.totalNetDue += memberNet;
+        existing.totalNetDue += m.net_due;
       } else {
-        const name = ownerLocationId
-          ? (locMap.get(ownerLocationId)?.name ?? 'Unknown location')
+        const name = m.location_id
+          ? (locMap.get(m.location_id)?.name ?? 'Unknown location')
           : 'Unassigned';
         groups.set(key, {
-          locationId: ownerLocationId,
+          locationId: m.location_id,
           locationName: name,
           members: [m],
-          totalNetDue: memberNet,
+          totalNetDue: m.net_due,
         });
       }
     }
@@ -843,30 +751,9 @@ export function useMembershipUploadData() {
     });
   }, [membersAllLocations, practiceLocations]);
 
-  // The location-split modal's view of the groups, scoped to the header
-  // location when one is selected (client 2026-08-20: other location data
-  // must not show). The UNSCOPED membersByLocation stays exported — the
-  // "saved under a different location" empty state needs it to NAME where
-  // the data lives (names only, never the rows themselves).
-  const membersByLocationForModal = useMemo<MembershipLocationGroup[]>(
-    () =>
-      selectedLocationId
-        ? membersByLocation.filter((g) => g.locationId === selectedLocationId)
-        : membersByLocation,
-    [membersByLocation, selectedLocationId],
-  );
-
   // Saved data plan summary
   const planSummary = useMemo(() => buildPlanSummary(members), [members]);
-  // Header revenue tile: RANGE-scoped — each member's collected £ summed over
-  // every month in the selected range (range_net_due), so a multi-month
-  // custom range reports the whole range's revenue, matching the monthly
-  // reconciliation card's per-month sum. Identical to the plan-summary total
-  // for a single-month range. Per-plan cards stay on net_due (monthly view).
-  const totalRevenue = useMemo(
-    () => members.reduce((s, m) => s + (m.range_net_due ?? m.net_due ?? 0), 0),
-    [members],
-  );
+  const totalRevenue = useMemo(() => planSummary.reduce((s, p) => s + p.total_net_due, 0), [planSummary]);
   const totalMembers = useMemo(() => planSummary.reduce((s, p) => s + p.members, 0), [planSummary]);
 
   /**
@@ -954,6 +841,11 @@ export function useMembershipUploadData() {
         setIsValidating(false);
         return;
       }
+
+      // Stage CSV originals for Edge Function confirm; PDFs stay client-side.
+      const csvFiles = fileList.filter((f) => f.name.toLowerCase().endsWith('.csv'));
+      const hasPdf = fileList.some((f) => f.name.toLowerCase().endsWith('.pdf'));
+      pendingCsvFilesRef.current = !hasPdf && csvFiles.length > 0 ? csvFiles : [];
 
       // Route by file type: Practice Plan monthly statements arrive as PDFs
       // (parsed into the same row shape — dynamic import keeps pdf.js out of
@@ -1043,28 +935,11 @@ export function useMembershipUploadData() {
       // Normalize helper — strip zero-width / non-breaking whitespace and
       // lowercase. Used for both sides of the surname/firstName match so
       // whitespace quirks in DB values don't break equality with sheet keys.
-      // FOLD DIACRITICS on both sides of every name comparison (2026-08-20,
-      // Dominiak case: Dentally stores "Przemys\u0142aw" with the Polish \u0142, the
-      // Practice Plan statement prints an ASCII transliteration \u2014 the two
-      // must compare equal). NFD strips combining accents (\u00E9\u2192e); stroked
-      // letters aren't decomposable and need the explicit map.
-      const foldName = (v: string) =>
-        v
-          .normalize('NFD')
-          .replace(/[\u0300-\u036F]/g, '')
-          .replace(/[\u0142\u0141]/g, 'l')
-          .replace(/[\u00F8\u00D8]/g, 'o')
-          .replace(/[\u0111\u0110]/g, 'd')
-          .replace(/\u00DF/g, 'ss')
-          .replace(/[\u00E6\u00C6]/g, 'ae')
-          .replace(/[\u0153\u0152]/g, 'oe');
       const normName = (v: string | null | undefined) =>
-        foldName(
-          (v ?? '')
-            .replace(/[\u00A0\u200B\u200C\u200D\uFEFF]/g, ' ')
-            .trim()
-            .toLowerCase(),
-        );
+        (v ?? '')
+          .replace(/[\u00A0\u200B\u200C\u200D\uFEFF]/g, ' ')
+          .trim()
+          .toLowerCase();
 
       // Collect the set of values we care about from the sheet so we can
       // fetch only the patients that might match. A blanket `.range()`
@@ -1259,22 +1134,7 @@ export function useMembershipUploadData() {
       for (const r of result.data) {
         const rowDob = (r.dob || '').slice(0, 10);
         const legacyHit = r.patient_id != null && dbPatientsByLegacyId.has(String(r.patient_id).trim());
-        // A DOB hit only skips the surname scan when one of its candidates
-        // plausibly IS this member (surname or first-name token agreement).
-        // A bare date collision with strangers must still scan: the
-        // name-precedence stages below reject those candidates, and without
-        // the scan the row would have no surname pool left to match against.
-        const rowTokens = new Set(
-          (r.surname + ' ' + (r.initial || ''))
-            .toLowerCase()
-            .split(/\s+/)
-            .map(t => foldName(t).replace(/^[^a-z0-9]+/, ''))
-            .filter(t => t.length > 1),
-        );
-        const dobHit = !!rowDob && (dbPatientsByDob.get(rowDob) ?? []).some(c =>
-          c.lastName.split(/\s+/).some(t => rowTokens.has(t))
-          || rowTokens.has(c.firstName.split(/\s+/)[0] ?? ''),
-        );
+        const dobHit = !!rowDob && dbPatientsByDob.has(rowDob);
         if (legacyHit || dobHit) continue; // already matchable without a surname scan
         const cleaned = r.surname.trim().replace(/[ ​‌‍﻿]/g, ' ');
         const parts = cleaned.split(/\s+/).filter(Boolean);
@@ -1318,61 +1178,24 @@ export function useMembershipUploadData() {
         }
       }
 
-      // Per-row match — sequential stages:
+      // Per-row match — three sequential stages:
       //   Stage 1: CSV patient_id → patients.pt_legacy_id (Dentally legacy).
-      //   Stage 2: DOB match across all patients in the org, but ONLY among
-      //            candidates whose NAME corroborates (client rule
-      //            2026-08-19: the statement prints the member's full name;
-      //            when name and DOB disagree, the name wins — a stranger
-      //            sharing only the birthday must never match).
-      //   Stage 3: Surname + full-first-name match (falling back to initial
-      //            for sheet rows that only carry one), title + DOB as
-      //            tiebreaks. A full first name that CONTRADICTS a candidate
-      //            disqualifies it even when the surname agrees.
-      // If all stages fail → unmatched (row surfaces under "Unassigned").
+      //   Stage 2: DOB match across all patients in the org
+      //            (disambiguate by surname → initial → title).
+      //   Stage 3: Surname + initial + title match
+      //            (disambiguate remaining ties by DOB or firstName).
+      // If all three fail → unmatched (row surfaces under "Unassigned").
       const normTitle = (v: string) => v.trim().toLowerCase().replace(/\.$/, '');
       const matches: RowPlanMatch[] = result.data.map((r) => {
         const cleaned = r.surname.trim().replace(/[\u00A0\u200B\u200C\u200D\uFEFF]/g, ' ');
         const parts = cleaned.split(/\s+/).filter(Boolean);
-        // foldName on every row-side key \u2014 dbPatients / candidate names are
-        // indexed via normName (folded), so unfolded row keys would miss
-        // any candidate whose name carries a diacritic.
-        const lastNameRaw = parts.length ? foldName(parts[parts.length - 1].toLowerCase()) : '';
+        const lastNameRaw = parts.length ? parts[parts.length - 1].toLowerCase() : '';
         const lastName = lastNameRaw.replace(/^[^a-z0-9]+/, '');
-        const altKeys = [foldName(cleaned.toLowerCase()), lastNameRaw].filter(k => k && k !== lastName);
-        const firstName = parts.length > 1 ? foldName(parts[0].toLowerCase()) : '';
+        const altKeys = [cleaned.toLowerCase(), lastNameRaw].filter(k => k && k !== lastName);
+        const firstName = parts.length > 1 ? parts[0].toLowerCase() : '';
         const rowDob = (r.dob || '').slice(0, 10);
-        const rowInitial = foldName((r.initial || '').trim().charAt(0).toLowerCase());
+        const rowInitial = (r.initial || '').trim().charAt(0).toLowerCase();
         const rowTitle = normTitle(r.title || '');
-        // Full first name — Practice Plan statements print the member's whole
-        // given names (the parser stores them in `initial`, e.g. "Nicholas M");
-        // Denplan sheets may instead carry "First Last" in the surname blob.
-        // A single-letter value is a real initial, not a name — leave empty so
-        // the initial-only paths below keep handling sheet rows.
-        const givenFirst = foldName(((r.initial || '').trim().split(/\s+/)[0] ?? '').toLowerCase());
-        const rowFullFirst = givenFirst.length > 1 ? givenFirst : (firstName.length > 1 ? firstName : '');
-        const dbFirstToken = (c: DbPatientCandidate) => c.firstName.split(/\s+/)[0] ?? '';
-        // First-name compatibility: with a full first name, exact, prefix
-        // either way ("Nick" ↔ "Nicholas"), or a SINGLE-CHARACTER typo
-        // (edit distance 1 — the statement's own misspelling: "Premyslaw"
-        // for "Przemyslaw", Dominiak case 2026-08-20; same tolerance the
-        // dentist matcher has had since 2026-08-11). With only an initial,
-        // the initial must agree; with neither, any candidate is compatible.
-        const firstNameCompatible = (c: DbPatientCandidate) => {
-          const dbFirst = dbFirstToken(c);
-          if (rowFullFirst) {
-            return !!dbFirst && (
-              dbFirst === rowFullFirst
-              || dbFirst.startsWith(rowFullFirst)
-              || rowFullFirst.startsWith(dbFirst)
-              || isEditDistanceOne(dbFirst, rowFullFirst)
-            );
-          }
-          return rowInitial ? dbFirst.charAt(0) === rowInitial : true;
-        };
-        const surnameAgrees = (c: DbPatientCandidate) =>
-          (!!lastName && (c.lastName === lastName || altKeys.includes(c.lastName)))
-          || (!!lastName && c.lastName.split(/\s+/).includes(lastName));
 
         let chosen: DbPatientCandidate | undefined;
 
@@ -1382,26 +1205,20 @@ export function useMembershipUploadData() {
           if (byLegacy) chosen = byLegacy;
         }
 
-        // Stage 2: DOB lookup across the entire org — but a shared birthday
-        // alone is NOT a match: the candidate's name must also corroborate
-        // (surname agreement covers the normal case; first-name compatibility
-        // alone still allows a married/maiden surname change). Candidates that
-        // share only the date are strangers — they're filtered out and the
-        // row falls through to the name stages below, where the name wins.
+        // Stage 2: DOB lookup across the entire org.
         if (!chosen && rowDob) {
-          const dobCandidates = (dbPatientsByDob.get(rowDob) ?? [])
-            .filter(c => surnameAgrees(c) || firstNameCompatible(c));
+          const dobCandidates = dbPatientsByDob.get(rowDob) ?? [];
           if (dobCandidates.length === 1) {
             chosen = dobCandidates[0];
           } else if (dobCandidates.length > 1) {
-            // Disambiguate by surname → full first name → initial → title.
+            // Disambiguate by surname → initial → title.
             const bySurname = lastName
               ? dobCandidates.filter(c => c.lastName === lastName
                   || altKeys.includes(c.lastName))
               : dobCandidates;
             const pool = bySurname.length ? bySurname : dobCandidates;
-            chosen = (rowFullFirst ? pool.find(c => dbFirstToken(c) === rowFullFirst) : undefined)
-              ?? (rowInitial ? pool.find(c => c.firstName.charAt(0) === rowInitial) : undefined)
+            chosen = (rowInitial ? pool.find(c => c.firstName.charAt(0) === rowInitial) : undefined)
+              ?? (firstName ? pool.find(c => c.firstName === firstName) : undefined)
               ?? (rowTitle ? pool.find(c => c.title === rowTitle) : undefined)
               ?? pool[0];
           }
@@ -1418,28 +1235,11 @@ export function useMembershipUploadData() {
           }
           if (candidates && candidates.length > 0) {
             if (candidates.length === 1) {
-              // Surname-only agreement isn't enough when the statement gives
-              // a full first name that CONTRADICTS the only candidate ("Mrs
-              // Marilynn Wake" must not match the org's only other Wake,
-              // Elizabeth) — require a compatible first name or an agreeing
-              // DOB before accepting.
-              const only = candidates[0];
-              if (firstNameCompatible(only) || (!!rowDob && only.dob === rowDob)) {
-                chosen = only;
-              }
+              chosen = candidates[0];
             } else {
-              // Narrow by full first name first (statements print it), else
-              // initial; then title; DOB and exact first name break remaining
-              // ties. A row with a full first name never falls back to a
-              // candidate that contradicts it — if no candidate's first name
-              // is compatible, only an exact-DOB candidate may still match.
+              // Require initial to narrow; then title; then DOB as tiebreak.
               let pool = candidates;
-              if (rowFullFirst) {
-                const byFullFirst = pool.filter(c => firstNameCompatible(c));
-                pool = byFullFirst.length > 0
-                  ? byFullFirst
-                  : (rowDob ? pool.filter(c => c.dob === rowDob) : []);
-              } else if (rowInitial) {
+              if (rowInitial) {
                 const byInitial = pool.filter(c => c.firstName.charAt(0) === rowInitial);
                 if (byInitial.length > 0) pool = byInitial;
               }
@@ -1451,7 +1251,7 @@ export function useMembershipUploadData() {
                 chosen = pool[0];
               } else if (pool.length > 1) {
                 chosen = (rowDob ? pool.find(c => c.dob === rowDob) : undefined)
-                  ?? (rowFullFirst ? pool.find(c => dbFirstToken(c) === rowFullFirst) : undefined)
+                  ?? (firstName ? pool.find(c => c.firstName === firstName) : undefined)
                   ?? pool[0];
               }
             }
@@ -1475,9 +1275,7 @@ export function useMembershipUploadData() {
               fuzzy.push(c);
             }
           }
-          // firstNameCompatible is stricter than a bare initial when the row
-          // carries a full first name (PP statements always do).
-          let pool = fuzzy.filter(c => c.firstName.charAt(0) === rowInitial && firstNameCompatible(c));
+          let pool = fuzzy.filter(c => c.firstName.charAt(0) === rowInitial);
           if (rowTitle) pool = pool.filter(c => c.title === rowTitle);
           if (pool.length === 1) {
             chosen = pool[0];
@@ -1658,21 +1456,10 @@ export function useMembershipUploadData() {
       const isPracticePlanBatch =
         result.data.length > 0 &&
         result.data.every(r => r.explanatory_text === 'Practice Plan statement');
-      // The location this import is tagged to: the preview dialog's own pick
-      // when one was made, else the header's currently selected location.
-      // The MANUAL path marks Location as REQUIRED (Confirm stays disabled
-      // without one) — auto-import must honour the same rule, not bypass it:
-      // it previously passed importLocationId (null unless the dialog had
-      // opened), importing whole statements with NO location, which the
-      // header's location filter then hid (client-flagged "99 instead of
-      // 144" — 42 of 141 members invisible under the selected location).
-      const resolvedImportLocationId = importLocationId ?? selectedLocationId ?? null;
-      if (resolvedImportLocationId && !importLocationId) setImportLocationId(resolvedImportLocationId);
       if (
         isPracticePlanBatch &&
         statementParsed &&
-        combinedErrors.length === 0 &&
-        resolvedImportLocationId
+        combinedErrors.length === 0
       ) {
         toast.info(`Statement parsed — importing ${result.data.length} members for ${MONTH_NAMES[statementParsed.statementMonth - 1]} ${statementParsed.statementYear}…`);
         confirmMutation.mutate({
@@ -1680,7 +1467,7 @@ export function useMembershipUploadData() {
           rowMatches: matches,
           month: statementParsed.statementMonth,
           year: statementParsed.statementYear,
-          locationId: resolvedImportLocationId,
+          locationId: importLocationId,
         });
         return;
       }
@@ -1699,6 +1486,7 @@ export function useMembershipUploadData() {
     setRowPlanMatches([]);
     setDetectedFacilities([]);
     ppStatementsRef.current = [];
+    pendingCsvFilesRef.current = [];
   }, []);
 
   const setFeeCategoryPlan = useCallback((feeCategory: string, planId: string | null) => {
@@ -1826,54 +1614,6 @@ export function useMembershipUploadData() {
         }
       }
 
-      // Matched patients WITHOUT a pt_legacy_id (newer Dentally records never
-      // got one) may fall back to pt_id as the row's patient_id join key —
-      // but ONLY when that pt_id is unambiguous org-wide: unique among this
-      // org's patients AND not colliding with any patient's legacy id, since
-      // the read path (enrichWithCurrentPlan) resolves patient_id against
-      // BOTH keyspaces. pt_id repeats across this org's Dentally sites, so an
-      // unguarded fallback would mis-attribute members (same failure class as
-      // the legacy-card-number collision — see the dedupe key comment above).
-      const fallbackPtIds = Array.from(new Set(
-        dedupedIndices
-          .map(i => rowMatches[i])
-          .filter(m => m && !m.legacy_id && m.pt_id)
-          .map(m => String(m!.pt_id)),
-      ));
-      const safePtIds = new Set<string>();
-      if (fallbackPtIds.length > 0) {
-        const CHUNK_IDS = 150;
-        const ptIdRowCount = new Map<string, number>();
-        const legacyCollisions = new Set<string>();
-        for (let i = 0; i < fallbackPtIds.length; i += CHUNK_IDS) {
-          const chunk = fallbackPtIds.slice(i, i + CHUNK_IDS);
-          const { data: ptRows, error: ptErr } = await (supabase as any)
-            .from('patients')
-            .select('id, pt_id')
-            .eq('organization_id', organizationId)
-            .is('deleted_at', null)
-            .in('pt_id', chunk);
-          if (ptErr) throw ptErr;
-          for (const p of (ptRows ?? [])) {
-            const k = String(p.pt_id);
-            ptIdRowCount.set(k, (ptIdRowCount.get(k) ?? 0) + 1);
-          }
-          const { data: legRows, error: legErr } = await (supabase as any)
-            .from('patients')
-            .select('id, pt_legacy_id')
-            .eq('organization_id', organizationId)
-            .is('deleted_at', null)
-            .in('pt_legacy_id', chunk);
-          if (legErr) throw legErr;
-          for (const p of (legRows ?? [])) {
-            if (p.pt_legacy_id != null) legacyCollisions.add(String(p.pt_legacy_id).trim());
-          }
-        }
-        for (const k of fallbackPtIds) {
-          if ((ptIdRowCount.get(k) ?? 0) === 1 && !legacyCollisions.has(k)) safePtIds.add(k);
-        }
-      }
-
       const dbRows = dedupedIndices.map(i => rows[i]).map((r, j) => {
         const origIdx = dedupedIndices[j];
         const match = rowMatches[origIdx];
@@ -1888,21 +1628,12 @@ export function useMembershipUploadData() {
         // Dentally's numeric row key, reused across integrations, so writing
         // it here silently mis-attributes membership revenue to whichever
         // unrelated patient happens to share that number.
-        const resolvedPatientId = r.patient_id
-          ?? match?.legacy_id
-          ?? (match?.pt_id && safePtIds.has(String(match.pt_id)) ? String(match.pt_id) : null);
+        const resolvedPatientId = r.patient_id ?? match?.legacy_id ?? null;
 
         return {
           organization_id: organizationId,
-          // Client rule 2026-08-19: every member in an uploaded statement
-          // belongs to the location the file was uploaded FOR — never
-          // scattered to each patient's own registered home location (a
-          // patient registered at site A but on site B's statement was
-          // splitting one statement's members across sites). The matched
-          // patient's home location is only a fallback for an upload made
-          // with no location selected ("All").
-          location_id: locationId ?? match?.location_id ?? null,
-          // The location this file was uploaded for (whole-file scope).
+          location_id: match?.location_id ?? null,
+          // The location this DenPlan file was uploaded for (whole-file scope).
           upload_location_id: locationId ?? null,
           surname: r.surname,
           initial: r.initial || null,
@@ -2063,23 +1794,89 @@ export function useMembershipUploadData() {
   // from the matched patient's pt_payment_plan_id.
   const unmappedFeeCategories = useMemo(() => [] as string[], []);
 
-  const confirmImport = useCallback(() => {
-    if (previewRows && previewRows.length > 0) {
-      // Import every row in the sheet, including ones whose patient could not
-      // be auto-matched in the DB — we don't want silently-dropped members.
-      // Unmatched rows are still inserted; mapped_plan_id/pt_id stay null so
-      // the UI can flag them for manual review later.
-      const emptyMatch: RowPlanMatch = { pt_id: null, legacy_id: null, plan_id: null, plan_name: null, dob: null, location_id: null };
-      const rowMatches = previewRows.map((_, i) => rowPlanMatches[i] ?? emptyMatch);
-      confirmMutation.mutate({
-        rows: previewRows,
-        rowMatches,
-        month: importMonth,
-        year: importYear,
-        locationId: importLocationId,
-      });
+  const confirmImport = useCallback(async () => {
+    if (!previewRows || previewRows.length === 0) return;
+
+    // Denplan CSV → Storage + Edge Function (no Dentally secret; practice-scoped).
+    const csvFiles = pendingCsvFilesRef.current;
+    if (csvFiles.length > 0 && organizationId) {
+      setIsEdgeImporting(true);
+      try {
+        let totalInserted = 0;
+        let totalMatched = 0;
+        let totalUnmatched = 0;
+        let totalDupes = 0;
+        const allErrors: string[] = [];
+
+        for (const file of csvFiles) {
+          const result = await importMembershipCsvViaEdgeFunction({
+            file,
+            organizationId,
+            locationId: importLocationId,
+            uploadMonth: importMonth,
+            uploadYear: importYear,
+          });
+          totalInserted += result.inserted ?? 0;
+          totalMatched += result.matched ?? 0;
+          totalUnmatched += result.unmatchedCount ?? 0;
+          totalDupes += result.duplicatesDropped ?? 0;
+          for (const e of result.errors ?? []) {
+            allErrors.push(e.row ? `Row ${e.row}: ${e.message}` : e.message);
+          }
+          if (result.unmatched?.length) {
+            for (const u of result.unmatched.slice(0, 5)) {
+              allErrors.push(
+                `Unmatched row ${u.row} (${u.surname}${u.exportPatientId ? `, id ${u.exportPatientId}` : ''}): ${u.reason}`,
+              );
+            }
+            if ((result.unmatchedCount ?? 0) > 5) {
+              allErrors.push(`…and ${(result.unmatchedCount ?? 0) - 5} more unmatched`);
+            }
+          }
+        }
+
+        const dupNote = totalDupes > 0 ? ` (${totalDupes} in-file duplicates skipped)` : '';
+        toast.success(
+          `Imported ${totalInserted} records for ${MONTH_NAMES[importMonth - 1]} ${importYear} — ${totalMatched} matched, ${totalUnmatched} unmatched${dupNote}`,
+        );
+        if (allErrors.length > 0) {
+          setParseErrors(allErrors.slice(0, 20));
+        }
+        setPreviewRows(null);
+        pendingCsvFilesRef.current = [];
+        queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
+        queryClient.invalidateQueries({ queryKey: ['membership_upload_has_any_v2'] });
+        queryClient.invalidateQueries({ queryKey: ['membership_statement_insights'] });
+        queryClient.invalidateQueries({ queryKey: ['membership_trends_src'] });
+        setImportSummaryOpen(true);
+      } catch (err) {
+        toast.error(`Import failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setIsEdgeImporting(false);
+      }
+      return;
     }
-  }, [previewRows, importMonth, importYear, importLocationId, confirmMutation, rowPlanMatches]);
+
+    // Practice Plan PDF / Excel — existing client-side insert path
+    const emptyMatch: RowPlanMatch = { pt_id: null, legacy_id: null, plan_id: null, plan_name: null, dob: null, location_id: null };
+    const rowMatches = previewRows.map((_, i) => rowPlanMatches[i] ?? emptyMatch);
+    confirmMutation.mutate({
+      rows: previewRows,
+      rowMatches,
+      month: importMonth,
+      year: importYear,
+      locationId: importLocationId,
+    });
+  }, [
+    previewRows,
+    importMonth,
+    importYear,
+    importLocationId,
+    confirmMutation,
+    rowPlanMatches,
+    organizationId,
+    queryClient,
+  ]);
 
   // Clear saved data for the selected month/year across ALL locations in
   // the org. Rows are stored per-patient-location now, so a single upload
@@ -2118,112 +1915,6 @@ export function useMembershipUploadData() {
     },
   });
 
-  // ── Manage uploaded data: what's stored, sliced by month × statement
-  // dentist, and targeted removal of one slice (a specific practitioner's
-  // statement, or a whole month) without touching anything else — the
-  // existing Clear only removes the currently displayed month wholesale.
-  const { data: uploadSlices = [], isLoading: isLoadingUploadSlices } = useQuery<UploadSlice[]>({
-    queryKey: ['membership_upload_slices', organizationId, selectedLocationId ?? 'all'],
-    enabled: !!user?.id && !!organizationId,
-    queryFn: async () => {
-      const rows: Array<{ upload_month: number; upload_year: number; treating_dentist: string | null; net_due: number | null }> = [];
-      let from = 0;
-      let hasMore = true;
-      while (hasMore) {
-        let q = (supabase as any)
-          .from('membership_upload_members')
-          .select('upload_month, upload_year, treating_dentist, net_due')
-          .eq('organization_id', organizationId)
-          .is('deleted_at', null)
-          .order('id')
-          .range(from, from + PAGE_SIZE - 1);
-        if (selectedLocationId) {
-          // Ownership rule (2026-08-20): the Manage dialog lists only the
-          // selected location's uploads.
-          q = q.or(`upload_location_id.eq.${selectedLocationId},and(upload_location_id.is.null,location_id.eq.${selectedLocationId})`);
-        }
-        const { data, error } = await q;
-        if (error) throw error;
-        rows.push(...(data ?? []));
-        hasMore = (data?.length ?? 0) === PAGE_SIZE;
-        from += PAGE_SIZE;
-      }
-      const byKey = new Map<string, UploadSlice>();
-      for (const r of rows) {
-        const dentist = r.treating_dentist?.trim() || null;
-        const key = `${r.upload_year}-${r.upload_month}|${dentist ?? ''}`;
-        const cur = byKey.get(key) ?? {
-          month: r.upload_month,
-          year: r.upload_year,
-          treatingDentist: dentist,
-          memberCount: 0,
-          totalNetDue: 0,
-        };
-        cur.memberCount += 1;
-        cur.totalNetDue += Number(r.net_due) || 0;
-        byKey.set(key, cur);
-      }
-      return Array.from(byKey.values()).sort(
-        (a, b) => b.year - a.year || b.month - a.month || (a.treatingDentist ?? '').localeCompare(b.treatingDentist ?? ''),
-      );
-    },
-  });
-
-  const deleteUploadSliceMutation = useMutation({
-    mutationFn: async ({ month, year, treatingDentist }: { month: number; year: number; treatingDentist: string | null }) => {
-      // Soft-delete, same as Clear — reversible in the DB, invisible to every
-      // deleted_at-filtered read. treatingDentist null = the whole month.
-      // Scoped to the selected location's OWNED rows when a location is
-      // chosen — removing a slice from one location's Manage dialog must
-      // never touch another location's uploads.
-      let q = (supabase as any)
-        .from('membership_upload_members')
-        .update({ deleted_at: new Date().toISOString() })
-        .eq('organization_id', organizationId)
-        .eq('upload_month', month)
-        .eq('upload_year', year)
-        .is('deleted_at', null);
-      if (treatingDentist != null) q = q.eq('treating_dentist', treatingDentist);
-      if (selectedLocationId) {
-        q = q.or(`upload_location_id.eq.${selectedLocationId},and(upload_location_id.is.null,location_id.eq.${selectedLocationId})`);
-      }
-      const { error } = await q;
-      if (error) throw error;
-      // Statement headers (+ their event rows) follow: a dentist-specific
-      // removal takes only that dentist's statement summary; a whole-month
-      // removal takes every summary for the month.
-      let sq = (supabase as any)
-        .from('membership_statement_summaries')
-        .update({ deleted_at: new Date().toISOString() })
-        .eq('organization_id', organizationId)
-        .eq('statement_month', month)
-        .eq('statement_year', year)
-        .is('deleted_at', null);
-      if (treatingDentist != null) sq = sq.eq('treating_dentist', treatingDentist);
-      if (selectedLocationId) {
-        // Summaries have no patient-home fallback — the upload stamp is the
-        // only location they carry; unstamped legacy summaries are left
-        // alone under a location-scoped removal.
-        sq = sq.eq('upload_location_id', selectedLocationId);
-      }
-      const { error: stmtErr } = await sq;
-      if (stmtErr) throw stmtErr;
-    },
-    onSuccess: (_d, vars) => {
-      toast.success(
-        vars.treatingDentist
-          ? `Removed ${vars.treatingDentist}'s data for ${MONTH_NAMES[vars.month - 1]} ${vars.year}`
-          : `Removed all data for ${MONTH_NAMES[vars.month - 1]} ${vars.year}`,
-      );
-      queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
-      queryClient.invalidateQueries({ queryKey: ['membership_upload_slices'] });
-      queryClient.invalidateQueries({ queryKey: ['membership_upload_has_any_v2'] });
-      queryClient.invalidateQueries({ queryKey: ['membership_statement_insights'] });
-      queryClient.invalidateQueries({ queryKey: ['membership_trends_src'] });
-    },
-    onError: (e: any) => toast.error(`Couldn't remove data: ${e.message}`),
-  });
-
   return {
     // Saved data
     members,
@@ -2256,6 +1947,7 @@ export function useMembershipUploadData() {
     isShowingFallbackMonth: !!fallbackMonth,
     /** True when the header-selected location had no rows for the effective
      *  month, so the card is showing the org's saved rows instead. */
+    isShowingFallbackLocation,
 
     // Preview (before confirm)
     previewRows,
@@ -2279,7 +1971,7 @@ export function useMembershipUploadData() {
 
     // Confirm import
     confirmImport,
-    isImporting: confirmMutation.isPending,
+    isImporting: confirmMutation.isPending || isEdgeImporting,
 
     // Fee category → plan mapping (preview) — manual UI currently disabled
     availablePlans,
@@ -2294,20 +1986,8 @@ export function useMembershipUploadData() {
     clearData: clearMutation.mutate,
     isClearing: clearMutation.isPending,
 
-    // Manage uploaded data — per-month × per-dentist slices + targeted removal
-    uploadSlices,
-    isLoadingUploadSlices,
-    deleteUploadSlice: deleteUploadSliceMutation.mutate,
-    isDeletingUploadSlice: deleteUploadSliceMutation.isPending,
-
     // Location-split modal
     membersByLocation,
-    /** The modal's own view of the split — scoped to the header-selected
-     *  location; equals membersByLocation when no location is selected. */
-    membersByLocationForModal,
-    /** Rows with no matching Dentally patient — the modal's "Not found in
-     *  Dentally" list. */
-    unmatchedMembers,
     /** True while the all-locations rows are (re)loading — the modal shows a
      *  spinner instead of a false "No imported members" during the refetch
      *  that immediately follows an import. */

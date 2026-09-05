@@ -49,9 +49,6 @@ export interface SettingsData {
   planMappingLabels: string[];
   planMappingMappedCount: number;
   planMappingRows: PlanMappingRow[];
-  /** Distinct statement provider names (treating_dentist) across every
-   *  uploaded month — the rows of the Provider mapping editor. */
-  providerMappingLabels: string[];
   patientMatchedCount: number;
   patientTotalCount: number;
   patientMatchedPct: number | null;
@@ -67,40 +64,24 @@ export interface SettingsData {
 export function useSettingsData(): SettingsData {
   const { organizationId } = useOrganization();
   const { allAvailableLocations, isLoading: locLoading } = useLocations();
-  const { members: uploadedMembers, planSummary: uploadPlanSummary, isLoading: uploadLoading, displayMonth, uploadSlices } =
+  const { members: uploadedMembers, planSummary: uploadPlanSummary, isLoading: uploadLoading, displayMonth } =
     useMembershipUploadData();
   const { mappings, isLoading: mappingsLoading } = useMembershipPlanMappings();
   const accounting = useConnectedIntegration();
 
   const dentallyQ = useQuery({
-    queryKey: ["insights_dentally_connection_v2", organizationId],
+    queryKey: ["insights_dentally_connection", organizationId],
     enabled: !!organizationId,
     queryFn: async (): Promise<boolean> => {
-      // Dentally connections live in `integrations` (integration_name,
-      // api_key — the PMS sync config), NOT `platform_integrations` (which
-      // holds the ACCOUNTING OAuth connections: Xero/QuickBooks/…). The
-      // original platform_integrations check always read "Not connected"
-      // for orgs with a live Dentally sync (client-flagged 2026-08-20).
-      // Both tables are checked so either storage counts as connected.
       const { data, error } = await (supabase as any)
-        .from("integrations")
-        .select("id")
-        .eq("organization_id", organizationId)
-        .ilike("integration_name", "dentally")
-        .eq("is_connected", true)
-        .is("deleted_at", null)
-        .limit(1);
-      if (error) throw error;
-      if ((data ?? []).length > 0) return true;
-      const { data: legacy, error: legacyErr } = await (supabase as any)
         .from("platform_integrations")
         .select("is_connected")
         .eq("organization_id", organizationId)
         .ilike("platform_name", "dentally")
         .eq("is_connected", true)
         .limit(1);
-      if (legacyErr) throw legacyErr;
-      return (legacy ?? []).length > 0;
+      if (error) throw error;
+      return (data ?? []).length > 0;
     },
   });
 
@@ -193,18 +174,6 @@ export function useSettingsData(): SettingsData {
     });
   }, [planMappingLabels, mappings, paymentPlansQ.data]);
 
-  // Every statement dentist ever uploaded (uploadSlices is org-wide across
-  // months, unlike `uploadedMembers` which is the displayed month only) —
-  // a provider mapped once must stay visible even in a month they have no
-  // statement for.
-  const providerMappingLabels = useMemo(() => {
-    const names = new Set<string>();
-    for (const s of uploadSlices) {
-      if (s.treatingDentist) names.add(s.treatingDentist);
-    }
-    return [...names].sort((a, b) => a.localeCompare(b));
-  }, [uploadSlices]);
-
   const patientTotalCount = uploadedMembers.length;
   const patientMatchedCount = uploadedMembers.filter((m) => m.patient_id != null).length;
 
@@ -222,7 +191,6 @@ export function useSettingsData(): SettingsData {
     planMappingLabels,
     planMappingMappedCount,
     planMappingRows,
-    providerMappingLabels,
     patientMatchedCount,
     patientTotalCount,
     patientMatchedPct: patientTotalCount > 0 ? Math.round((patientMatchedCount / patientTotalCount) * 100) : null,

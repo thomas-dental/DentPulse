@@ -123,25 +123,12 @@ export function OverviewTab() {
             tone={d.hasStatementData && cashDelta != null ? (cashDelta >= 0 ? "up" : "down") : undefined}
             tooltip={
               d.hasStatementData
-                ? undefined
+                ? `${gbpExact(d.netCash)} = the Total Collected line${d.isMultiMonth ? "s" : ""} summed across your ${d.monthLabel} statement${d.isMultiMonth ? "s" : ""}${
+                    cashDelta != null && prevLabel
+                      ? ` · vs ${prevLabel}: ${gbpExact(d.netCash)} − ${gbpExact(d.netCash - cashDelta)} = ${cashDelta >= 0 ? "+" : "−"}${gbpExact(Math.abs(cashDelta))}`
+                      : ""
+                  }`
                 : "Upload a Practice Plan PDF statement on the Plan Revenue tab to see net cash collected."
-            }
-            calc={
-              d.hasStatementData
-                ? [
-                    {
-                      label: `Total Collected, ${d.monthLabel} statement${d.isMultiMonth ? "s" : ""}`,
-                      value: gbpExact(d.netCash),
-                      isTotal: true,
-                    },
-                    ...(cashDelta != null && prevLabel
-                      ? [
-                          { label: prevLabel, value: gbpExact(d.netCash - cashDelta) },
-                          { label: "= Change", value: `${cashDelta >= 0 ? "+" : "−"}${gbpExact(Math.abs(cashDelta))}` },
-                        ]
-                      : []),
-                  ]
-                : undefined
             }
           />
           <Stat
@@ -153,20 +140,11 @@ export function OverviewTab() {
                 : "this month"
             }
             tone={d.monthNetMembers != null ? (d.monthNetMembers >= 0 ? "up" : "down") : undefined}
-            calc={[
-              {
-                label: `Members collected ${d.isMultiMonth ? "across" : "on"} the ${d.monthLabel} statement${d.isMultiMonth ? "s" : ""}`,
-                value: nn(d.activeMembers),
-                isTotal: true,
-              },
-              ...(d.monthNetMembers != null
-                ? [
-                    { label: "Joined this month", value: nn(d.monthJoined ?? 0) },
-                    { label: "− Cancelled", value: nn(d.monthLeft ?? 0) },
-                    { label: "= Net change", value: `${d.monthNetMembers >= 0 ? "+" : ""}${d.monthNetMembers}` },
-                  ]
-                : []),
-            ]}
+            tooltip={`${nn(d.activeMembers)} members collected ${d.isMultiMonth ? "across" : "on"} the ${d.monthLabel} statement${d.isMultiMonth ? "s" : ""}${
+              d.monthNetMembers != null
+                ? ` · ${d.monthJoined} joined − ${d.monthLeft} cancelled = ${d.monthNetMembers >= 0 ? "+" : ""}${d.monthNetMembers} net`
+                : ""
+            }`}
           />
           <Stat
             k="Gross to net gap"
@@ -174,29 +152,15 @@ export function OverviewTab() {
             note={d.hasStatementData ? `${gbp(gap * 12)} a year at this rate` : "no Practice Plan statement uploaded yet"}
             tooltip={
               d.hasStatementData
-                ? undefined
+                ? `${gbpExact(d.practicePlanFeeValue)} (Practice Plan fee) + ${gbpExact(d.failedValue)} (failed collections) = ${gbpExact(gap)} · × 12 = ${gbp(gap * 12)} a year`
                 : "Upload a Practice Plan PDF statement on the Plan Revenue tab to see the gross-to-net gap."
-            }
-            calc={
-              d.hasStatementData
-                ? [
-                    { label: "Practice Plan fee", value: gbpExact(d.practicePlanFeeValue) },
-                    { label: "+ Failed collections", value: gbpExact(d.failedValue) },
-                    { label: "= Gap this month", value: gbpExact(gap), isTotal: true },
-                    { label: "× 12 months", value: gbpExact(gap * 12) },
-                  ]
-                : undefined
             }
           />
           <Stat
             k="Plan share of revenue"
             v={d.planSharePct != null ? `${d.planSharePct}%` : "—"}
             note={d.planSharePct != null ? `of ${gbp(d.totalRevenue)} total` : "no practice revenue for this period"}
-            calc={[
-              { label: "Membership net cash", value: gbpExact(d.netCash) },
-              { label: "÷ Total practice revenue, selected period", value: gbpExact(d.totalRevenue) },
-              { label: "= Plan share", value: d.planSharePct != null ? `${d.planSharePct}%` : "—", isTotal: true },
-            ]}
+            tooltip={`${gbpExact(d.netCash)} (membership) ÷ ${gbp(d.totalRevenue)} (total practice revenue for the selected period) = ${d.planSharePct != null ? `${d.planSharePct}%` : "—"}`}
           />
         </div>
         );
@@ -206,20 +170,13 @@ export function OverviewTab() {
         <div className="mpi-two mpi-mb">
           {d.cashTrendData.length >= 2 && (
             <div className="mpi-card">
-              {/* Labelled by the actual charted window — a hardcoded
-                  "12 months" read as wrong whenever fewer months have data
-                  or a custom range is selected. */}
-              <p className="mpi-eyebrow">
-                Net plan cash by month · {d.cashTrendData[0].label} – {d.cashTrendData[d.cashTrendData.length - 1].label}
-              </p>
+              <p className="mpi-eyebrow">Net plan cash · 12 months</p>
               <TrendChart data={d.cashTrendData} formatter={gbp} />
             </div>
           )}
           {d.memberTrendData.length >= 2 && (
             <div className="mpi-card">
-              <p className="mpi-eyebrow">
-                Active members by month · {d.memberTrendData[0].label} – {d.memberTrendData[d.memberTrendData.length - 1].label}
-              </p>
+              <p className="mpi-eyebrow">Active members · 12 months</p>
               <TrendChart data={d.memberTrendData} formatter={nn} />
             </div>
           )}
@@ -443,19 +400,9 @@ export function OverviewTab() {
               No treating dentist recorded on uploaded members.
             </p>
           ) : (
-            <>
-              {d.clinicianBreakdown.map((r) => (
-                <Kv key={r.name} label={r.name} value={`${nn(r.members)} · ${gbp(r.value)}`} />
-              ))}
-              <div className="mpi-kv" style={{ borderTop: "1px solid var(--mpi-line)", fontWeight: 600 }}>
-                <span>Total</span>
-                <span className="num">
-                  {nn(d.clinicianBreakdown.reduce((s, r) => s + r.members, 0))}
-                  {" · "}
-                  {gbp(d.clinicianBreakdown.reduce((s, r) => s + r.value, 0))}
-                </span>
-              </div>
-            </>
+            d.clinicianBreakdown.map((r) => (
+              <Kv key={r.name} label={r.name} value={`${nn(r.members)} · ${gbp(r.value)}`} />
+            ))
           )}
         </div>
       </div>

@@ -6,6 +6,10 @@
 const { supabaseAdmin } = require('../../config/supabase');
 const { transformRecord } = require('../transformers/dentally');
 const { TABLE_MAP, ON_CONFLICT_MAP, ENTITIES_NEEDING_LOCATION_MAP } = require('../../api/dentally/config');
+const {
+  preloadLegacySyncLedgerState,
+  writeLegacySyncLedgerAfterUpsert,
+} = require('../patientEconomics/sync/legacySyncLedgerHook');
 
 // In-memory caches (per org, refreshed every 5 min) to avoid repeated DB queries across jobs
 const treatmentCategoryCache = new Map(); // orgId -> { map, timestamp }
@@ -13,6 +17,7 @@ const locationMapCache = new Map();       // orgId -> { map, timestamp }
 const categoryMapCache = new Map();       // orgId -> { map, timestamp }
 const orgRoutingMapCache = new Map();     // orgId -> { map, allOrgIds, timestamp }
 const cancellationReasonCache = new Map(); // orgId -> { map, timestamp }
+const acquisitionSourceCache = new Map();  // orgId -> { map, timestamp }
 const CACHE_TTL = 5 * 60 * 1000;         // 5 minutes
 
 /**
@@ -81,6 +86,41 @@ async function getCancellationReasonMap(organizationId) {
   }
   cancellationReasonCache.set(organizationId, { map, timestamp: Date.now() });
   console.log(`[UpsertService] Cancellation reason map loaded: ${map.size} reasons`);
+  return map;
+}
+
+/**
+ * Build an acquisition source map: Dentally as_id -> as_name.
+ * Used to denormalize the source name into patients during sync.
+ */
+async function getAcquisitionSourceMap(organizationId) {
+  const cached = acquisitionSourceCache.get(organizationId);
+  if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
+    return cached.map;
+  }
+
+  const { data: sources, error } = await supabaseAdmin
+    .from('acquisition_sources')
+    .select('as_id, as_name')
+    .eq('organization_id', organizationId)
+    .is('deleted_at', null)
+    .not('as_id', 'is', null);
+
+  if (error) {
+    console.error('[UpsertService] Error fetching acquisition source map:', error.message);
+    return new Map();
+  }
+
+  const map = new Map();
+  if (sources) {
+    for (const s of sources) {
+      if (s.as_id && s.as_name) {
+        map.set(String(s.as_id), s.as_name);
+      }
+    }
+  }
+  acquisitionSourceCache.set(organizationId, { map, timestamp: Date.now() });
+  console.log(`[UpsertService] Acquisition source map loaded: ${map.size} sources`);
   return map;
 }
 
@@ -256,7 +296,14 @@ async function upsertEntityData(entityAlias, organizationId, userId, rawRecords,
 
   // Filter records by selected site IDs (if configured)
   // Entities without site_id (global data) are never filtered
-  const NO_SITE_ID_ENTITIES = ['treatment_category', 'treatments', 'sundries', 'appointment_cancellation_reasons', 'accounts'];
+  const NO_SITE_ID_ENTITIES = [
+    'treatment_category',
+    'treatments',
+    'sundries',
+    'appointment_cancellation_reasons',
+    'acquisition_sources',
+    'accounts',
+  ];
   const allowedSiteIds = syncedSiteIds && syncedSiteIds.length > 0 ? new Set(syncedSiteIds.map(String)) : null;
 
   if (allowedSiteIds && !NO_SITE_ID_ENTITIES.includes(entityAlias) && entityAlias !== 'locations') {
@@ -293,6 +340,7 @@ async function upsertEntityData(entityAlias, organizationId, userId, rawRecords,
   let categoryMap = maps.categoryMap || new Map();
   let locationMap = maps.locationMap || new Map();
   let cancellationReasonMap = maps.cancellationReasonMap || new Map();
+  let acquisitionSourceMap = maps.acquisitionSourceMap || new Map();
 
   if (entityAlias === 'treatments' && categoryMap.size === 0) {
     categoryMap = await getCategoryMap(organizationId);
@@ -302,6 +350,9 @@ async function upsertEntityData(entityAlias, organizationId, userId, rawRecords,
   }
   if ((entityAlias === 'appointments' || entityAlias === 'appointments_current_month') && cancellationReasonMap.size === 0) {
     cancellationReasonMap = await getCancellationReasonMap(organizationId);
+  }
+  if (entityAlias === 'patients' && acquisitionSourceMap.size === 0) {
+    acquisitionSourceMap = await getAcquisitionSourceMap(organizationId);
   }
 
   // Load org routing map (practice_locations.api_record_unique_id -> organization_id)
@@ -372,7 +423,14 @@ async function upsertEntityData(entityAlias, organizationId, userId, rawRecords,
 
   // Process each org's records
   for (const [targetOrgId, orgRecords] of recordsByOrg) {
-    const ctx = { organizationId: targetOrgId, userId, locationMap, categoryMap, cancellationReasonMap };
+    const ctx = {
+      organizationId: targetOrgId,
+      userId,
+      locationMap,
+      categoryMap,
+      cancellationReasonMap,
+      acquisitionSourceMap,
+    };
 
     const transformedRecords = [];
     for (const record of orgRecords) {
@@ -400,24 +458,69 @@ async function upsertEntityData(entityAlias, organizationId, userId, rawRecords,
 
     // Special handling for invoices: upsert invoices then process line items
     if (entityAlias === 'invoices') {
-      const result = await upsertInvoicesWithLineItems(tableName, onConflict, transformedRecords, targetOrgId, integrationId);
+      const ledgerPreload = await preloadLegacySyncLedgerState(
+        entityAlias,
+        targetOrgId,
+        transformedRecords,
+      );
+      const result = await upsertInvoicesWithLineItems(
+        tableName,
+        onConflict,
+        transformedRecords,
+        targetOrgId,
+        integrationId,
+      );
       processed += result.processed;
       failed += result.failed;
+      await writeLegacySyncLedgerAfterUpsert({
+        entityAlias,
+        practiceId: targetOrgId,
+        preload: ledgerPreload,
+        processed: result.processed,
+      });
       continue;
     }
 
     // Special handling for payments: upsert payments then process explanations
     if (entityAlias === 'payments') {
-      const result = await upsertPaymentsWithExplanations(tableName, onConflict, transformedRecords, targetOrgId);
+      const ledgerPreload = await preloadLegacySyncLedgerState(
+        entityAlias,
+        targetOrgId,
+        transformedRecords,
+      );
+      const result = await upsertPaymentsWithExplanations(
+        tableName,
+        onConflict,
+        transformedRecords,
+        targetOrgId,
+      );
       processed += result.processed;
       failed += result.failed;
+      await writeLegacySyncLedgerAfterUpsert({
+        entityAlias,
+        practiceId: targetOrgId,
+        preload: ledgerPreload,
+        processed: result.processed,
+      });
       continue;
     }
 
-    // Standard batch upsert
+    // Standard batch upsert (+ PE event_ledger for treatment_plans, TAs, TPIs, patients)
+    const ledgerPreload = await preloadLegacySyncLedgerState(
+      entityAlias,
+      targetOrgId,
+      transformedRecords,
+    );
     const result = await batchUpsert(tableName, onConflict, transformedRecords);
     processed += result.processed;
     failed += result.failed;
+    await writeLegacySyncLedgerAfterUpsert({
+      entityAlias,
+      practiceId: targetOrgId,
+      preload: ledgerPreload,
+      processed: result.processed,
+      failed: result.failed,
+    });
   }
 
   return { processed, failed };
@@ -857,6 +960,7 @@ async function upsertInvoicesWithLineItems(tableName, onConflict, records, organ
         treatment_id: treatmentIdNum,
         treatment_category: treatmentCategory,
         practitioner_id: item.practitioner_id ? String(item.practitioner_id) : null,
+        is_nhs: item.nhs_charge === true || item.nhs_charge === 'true',
         sundry_id: item.sundry_id ? String(item.sundry_id) : null,
         treatment_plan_id: item.treatment_plan_id ? String(item.treatment_plan_id) : null,
         treatment_plan_item_id: item.treatment_plan_item_id ? String(item.treatment_plan_item_id) : null,
@@ -1002,6 +1106,17 @@ function invalidateMapCaches(organizationId) {
   treatmentCategoryCache.delete(organizationId);
   orgRoutingMapCache.delete(organizationId);
   cancellationReasonCache.delete(organizationId);
+  acquisitionSourceCache.delete(organizationId);
 }
 
-module.exports = { upsertEntityData, getCategoryMap, getLocationMap, getCancellationReasonMap, invalidateMapCaches };
+module.exports = {
+  upsertEntityData,
+  upsertAppointments,
+  upsertInvoicesWithLineItems,
+  upsertPaymentsWithExplanations,
+  getCategoryMap,
+  getLocationMap,
+  getCancellationReasonMap,
+  getAcquisitionSourceMap,
+  invalidateMapCaches,
+};

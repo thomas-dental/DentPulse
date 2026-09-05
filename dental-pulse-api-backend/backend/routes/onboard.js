@@ -3,12 +3,10 @@
  *
  * POST /api/onboard/dentally
  *   Body: { api_key, api_endpoint?, start_date?, end_date? }
- *   start_date/end_date (YYYY-MM-DD) scope the initial sync window for
- *   date-chunked entities (appointments, invoices, treatment plans, treatment
- *   plan items, NHS claims, payments). Reference data (locations, treatments,
- *   practitioners, etc.) and patients always sync in full regardless, since
- *   patients are looked up by date-scoped entities. Omit both to fall back to
- *   the default 365-day window (see triggerSyncForIntegration).
+ *   start_date/end_date (YYYY-MM-DD) scope the initial sync window from the
+ *   user's picker (both bounds). Persisted per practice for later PE syncs.
+ *   Omit both to fall back to the default 365-day window
+ *   (see triggerSyncForIntegration).
  *
  * Does everything the frontend onboarding used to do:
  *   1. Validate the API key (GET /v1/user)
@@ -30,6 +28,7 @@ const syncAuthMiddleware = require('../middleware/syncAuth');
 const authMiddleware = require('../middleware/auth');
 const { triggerSync, iplicit: iplicitQueue } = require('../queue');
 const { createSession: createIplicitSession } = require('../api/iplicit/client');
+const { encryptPatForStorage, buildPatHint, descriptionFromDentallyUser } = require('../services/patientEconomics/integrationPat');
 
 const router = express.Router();
 
@@ -48,7 +47,7 @@ const DEFAULT_SYNC_ENTITIES = [
   { alias: 'appointments',           label: 'Appointments',           description: 'Sync appointment records from Dentally',          is_sync: true, is_available: true },
   { alias: 'invoices',               label: 'Invoices',               description: 'Sync invoices and billing data from Dentally',    is_sync: true, is_available: true },
   { alias: 'nhs_claims',             label: 'NHS Claims',             description: 'Sync NHS claim records from Dentally',            is_sync: true, is_available: true },
-  { alias: 'payments',               label: 'Payments',               description: 'Sync payment transactions from Dentally',         is_sync: false, is_available: false },
+  { alias: 'payments',               label: 'Payments',               description: 'Sync payment transactions from Dentally',         is_sync: true, is_available: true },
   { alias: 'accounts',               label: 'Accounts',               description: 'Sync chart of accounts from Dentally',            is_sync: false, is_available: false },
   { alias: 'users',                  label: 'Users',                  description: 'Sync staff and user accounts from Dentally',      is_sync: false, is_available: false },
 ];
@@ -280,18 +279,20 @@ router.post('/dentally', syncAuthMiddleware, async (req, res) => {
       console.log(`[Onboard] Created integration (${integrationId})`);
     }
 
-    // Set API key on the integration
+    // Set encrypted PAT on the integration (never store plaintext api_key)
     await supabaseAdmin
       .from('integrations')
       .update({
-        api_key: api_key,
+        ...encryptPatForStorage(api_key),
         api_endpoints: baseEndpoint,
+        integration_description: descriptionFromDentallyUser(userData),
         is_connected: true,
+        validated_at: new Date().toISOString(),
         user_id: userId,
       })
       .eq('id', integrationId);
 
-    console.log(`[Onboard] Set API key on integration`);
+    console.log(`[Onboard] Set encrypted PAT on integration`);
 
     // ── 8. Initialize sync entities ────────────────────────────────────────────
     const { data: existingEntities } = await supabaseAdmin
@@ -342,6 +343,20 @@ router.post('/dentally', syncAuthMiddleware, async (req, res) => {
         if (missErr) console.error(`[Onboard] Failed to add missing sync entities:`, missErr.message);
         else console.log(`[Onboard] Added ${missingRows.length} new sync entities:`, missingRows.map(e => e.entity_alias).join(', '));
       }
+
+      // Enable payments if an older onboard left it disabled.
+      if (existingAliases.has('payments')) {
+        const { error: payErr } = await supabaseAdmin
+          .from('integration_sync_entities')
+          .update({ is_sync: true, is_available: true })
+          .eq('integration_id', integrationId)
+          .eq('entity_alias', 'payments');
+        if (payErr) {
+          console.error(`[Onboard] Failed to enable payments entity:`, payErr.message);
+        } else {
+          console.log(`[Onboard] Enabled payments sync entity`);
+        }
+      }
     }
 
     // ── 9. Trigger sync ────────────────────────────────────────────────────────
@@ -351,9 +366,17 @@ router.post('/dentally', syncAuthMiddleware, async (req, res) => {
       .map(e => e.alias);
 
     const syncOptions = { entities: enabledAliases };
+    // Use the user's picker range as-is. Persist so PE syncs can reuse start_date.
     if (start_date && end_date) {
       syncOptions.startDate = start_date;
       syncOptions.endDate = end_date;
+      try {
+        const { savePracticeSyncRange } = require('../services/patientEconomics/sync/practiceSyncRange');
+        await savePracticeSyncRange(orgId, start_date, end_date);
+        console.log(`[Onboard] Saved practice sync range: ${start_date} → ${end_date}`);
+      } catch (err) {
+        console.warn(`[Onboard] Could not persist sync range:`, err.message);
+      }
       console.log(`[Onboard] Using requested sync date range: ${start_date} to ${end_date}`);
     }
 
@@ -408,7 +431,7 @@ router.post('/dentally', syncAuthMiddleware, async (req, res) => {
  *
  * Returns: { success, integrationId, sitesFound, locationsCreated, jobCount }
  */
-router.post('/dentally/add-account/:orgId', authMiddleware, async (req, res) => {
+router.post('/dentally/add-account/:orgId', syncAuthMiddleware, async (req, res) => {
   try {
     const { orgId } = req.params;
     const { api_key, api_endpoint, label } = req.body || {};
@@ -418,6 +441,20 @@ router.post('/dentally/add-account/:orgId', authMiddleware, async (req, res) => 
       return res.status(400).json({ error: 'api_key is required' });
     }
     const apiKey = api_key.trim();
+
+    const { data: membership, error: membershipErr } = await supabaseAdmin
+      .from('user_roles')
+      .select('user_id')
+      .eq('user_id', req.user.id)
+      .eq('organization_id', orgId)
+      .maybeSingle();
+
+    if (membershipErr) {
+      return res.status(500).json({ error: 'Failed to verify organization access' });
+    }
+    if (!membership) {
+      return res.status(403).json({ error: 'Not authorized for this organization' });
+    }
 
     // ── 1. Verify org + resolve owner (synced records get a real user_id) ──────
     const { data: org, error: orgErr } = await supabaseAdmin
@@ -431,14 +468,15 @@ router.post('/dentally/add-account/:orgId', authMiddleware, async (req, res) => 
     const ownerUserId = org.user_id || req.user.id;
 
     // ── 2. Duplicate guard: same key already connected to this org? ────────────
+    const incomingHint = buildPatHint(apiKey);
     const { data: existingDentally } = await supabaseAdmin
       .from('integrations')
-      .select('id, api_key')
+      .select('id, pat_hint')
       .eq('organization_id', orgId)
       .ilike('integration_name', 'dentally')
       .is('deleted_at', null);
 
-    if ((existingDentally || []).some(i => i.api_key === apiKey)) {
+    if ((existingDentally || []).some((i) => i.pat_hint && i.pat_hint === incomingHint)) {
       return res.status(409).json({ error: 'This Dentally account is already connected to the organization.' });
     }
 
@@ -530,10 +568,11 @@ router.post('/dentally/add-account/:orgId', authMiddleware, async (req, res) => 
         user_id: ownerUserId,
         created_by: ownerUserId,
         integration_name: 'Dentally',
-        integration_description: (label && label.trim()) || 'Cloud-based dental practice management software',
+        integration_description: descriptionFromDentallyUser(userData, label),
         is_connected: true,
         api_endpoints: baseEndpoint,
-        api_key: apiKey,
+        ...encryptPatForStorage(apiKey),
+        validated_at: new Date().toISOString(),
         sync_frequency: '15min',
       })
       .select('id')

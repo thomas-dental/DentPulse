@@ -1,0 +1,4 @@
+Surname,Initial,DOB,Treating Dentist,Plan name,Discount %,Net Due,Pay Grp ID,Patient ID,Title
+Smith,J,15/01/1980,Dr Jones,Essential,0,25.50,1001,LEGACY001,Mr
+Jones,A,22/03/1992,Dr Jones,Essential,10,22.95,1002,LEGACY002,Ms
+Unknown,X,01/01/1970,Dr Jones,Comprehensive,0,40.00,1003,,Mr

@@ -1,0 +1,117 @@
+import { useQuery } from '@tanstack/react-query';
+import { fetchInvoiceContributionSummaryApi } from '@/services/integrations/patientEconomicsService';
+import { usePeScopedRead } from '@/hooks/usePeScopedRead';
+import { PE_READ_STALE_MS } from '@/lib/peReadStaleTime';
+
+/** Practice rollup from invoice-grained v_invoice_contribution + UDA lens. */
+export type InvoiceContributionSummary = {
+  invoiceCount: number;
+  invoicesWithRevenue: number;
+  patientCount: number;
+  patientsWithRevenue: number;
+  totalContribution: number;
+  /** Sum of paid invoice £ from platform_integration_invoices (private + plan, NHS excluded). */
+  totalPaidValue: number;
+  /** Private + plan (contribution engine scope). */
+  totalRevenue: number;
+  /** @deprecated Prefer revenueNhs */
+  totalNhsExcluded: number;
+  revenuePrivate: number;
+  revenuePlan: number;
+  revenueNhs: number;
+  /** Delivered UDAs / obligation × 100, or null when no NHS contract. */
+  udaDeliveryPct: number | null;
+  udaClawbackGbp: number | null;
+  udaOnTarget: boolean | null;
+  hasNhsContract: boolean;
+  nhsContractValue: number;
+  udaDelivered: number;
+  udaObligation: number;
+  /** Invoices with no dominant practitioner (contribution excluded). */
+  invoicesMissingPractitioner: number;
+  /** Invoices with a practitioner but no configured private-share rate. */
+  invoicesMissingRate: number;
+  /** Private/plan £ on invoices with no practitioner (excluded from contribution). */
+  revenueNoPractitioner: number;
+  /** Private/plan £ on invoices where rate is missing (rate treated as 0%). */
+  revenueMissingRate: number;
+  hasMissingPractitioner: boolean;
+  hasMissingRate: boolean;
+  hasPartialData: boolean;
+  /** Step 1a tier tags for UI chips (from view / derived flags). */
+  revenueTier: 'Dentally';
+  contributionTier: 'Derived';
+  clinicianCostTier: 'Derived' | 'External';
+  dominantProvenanceStatus: 'complete' | 'partial_no_practitioner' | 'partial_missing_rate';
+};
+
+/** @deprecated Prefer InvoiceContributionSummary */
+export type PatientContributionSummary = InvoiceContributionSummary;
+
+function num(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+export function mapInvoiceContributionSummary(raw: Record<string, unknown>): InvoiceContributionSummary {
+  const dominant = String(raw.dominantProvenanceStatus || 'complete');
+  return {
+    invoiceCount: num(raw.invoiceCount),
+    invoicesWithRevenue: num(raw.invoicesWithRevenue),
+    patientCount: num(raw.patientCount),
+    patientsWithRevenue: num(raw.patientsWithRevenue),
+    totalContribution: num(raw.totalContribution),
+    totalPaidValue: num(raw.totalPaidValue),
+    totalRevenue: num(raw.totalRevenue),
+    totalNhsExcluded: num(raw.totalNhsExcluded),
+    revenuePrivate: num(raw.revenuePrivate),
+    revenuePlan: num(raw.revenuePlan),
+    revenueNhs: num(raw.revenueNhs),
+    udaDeliveryPct: raw.udaDeliveryPct == null ? null : num(raw.udaDeliveryPct),
+    udaClawbackGbp: raw.udaClawbackGbp == null ? null : num(raw.udaClawbackGbp),
+    udaOnTarget: raw.udaOnTarget == null ? null : raw.udaOnTarget === true,
+    hasNhsContract: raw.hasNhsContract === true,
+    nhsContractValue: num(raw.nhsContractValue),
+    udaDelivered: num(raw.udaDelivered),
+    udaObligation: num(raw.udaObligation),
+    invoicesMissingPractitioner: num(raw.invoicesMissingPractitioner),
+    invoicesMissingRate: num(raw.invoicesMissingRate),
+    revenueNoPractitioner: num(raw.revenueNoPractitioner),
+    revenueMissingRate: num(raw.revenueMissingRate),
+    hasMissingPractitioner: raw.hasMissingPractitioner === true,
+    hasMissingRate: raw.hasMissingRate === true,
+    hasPartialData: raw.hasPartialData === true,
+    revenueTier: 'Dentally',
+    contributionTier: 'Derived',
+    clinicianCostTier:
+      dominant === 'complete' ? 'Derived' : 'External',
+    dominantProvenanceStatus:
+      dominant === 'partial_no_practitioner' || dominant === 'partial_missing_rate'
+        ? dominant
+        : 'complete',
+  };
+}
+
+async function fetchInvoiceContributionSummary(
+  practiceId: string,
+  scope?: import('@/services/integrations/patientEconomicsService').PeApiScope,
+): Promise<InvoiceContributionSummary> {
+  const { summary } = await fetchInvoiceContributionSummaryApi(practiceId, scope);
+  return mapInvoiceContributionSummary(summary);
+}
+
+export function useInvoiceContributionSummary(options?: { enabled?: boolean }) {
+  const { organizationId, scopeKey, apiScope, enabled: scopeEnabled } = usePeScopedRead();
+
+  return useQuery({
+    queryKey: ['invoice-contribution-summary', organizationId, scopeKey],
+    enabled: scopeEnabled && (options?.enabled ?? true),
+    staleTime: PE_READ_STALE_MS,
+    queryFn: () => fetchInvoiceContributionSummary(organizationId!, apiScope),
+  });
+}
+
+/** @deprecated Prefer useInvoiceContributionSummary */
+export function usePatientContributionSummary() {
+  return useInvoiceContributionSummary();
+}

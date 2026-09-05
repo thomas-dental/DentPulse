@@ -113,10 +113,6 @@ export interface CapacityData {
    *  thing (surfaced honestly in the UI). null when there's no recent
    *  hygienist booking activity to measure from. */
   waitWeeks: number | null;
-  /** How many hygienist appointments the waitWeeks median was measured over
-   *  (bookings in the last 8 weeks, loss states excluded) — the sample-size
-   *  line for the stat's worked-sum tooltip. */
-  waitSampleCount: number;
   /** Hygiene capacity vs leavers, trailing 12 months (client ask 2026-08-14:
    *  "the plan promises hygiene; if the wait is ten weeks, patients cancel —
    *  I need that plotted against leavers"). leavers reuses the exact real
@@ -288,7 +284,7 @@ export function useCapacityData(): CapacityData {
   const waitTimeQ = useQuery({
     queryKey: ["insights_capacity_wait_time", organizationId, selectedLocationId ?? "all"],
     enabled: !!organizationId,
-    queryFn: async (): Promise<{ overall: number | null; byLocation: Map<string, number>; sampleCount: number }> => {
+    queryFn: async (): Promise<{ overall: number | null; byLocation: Map<string, number> }> => {
       const { data: hygienistRows, error: provErr } = await (supabase as any)
         .from("providers")
         .select("external_id")
@@ -298,7 +294,7 @@ export function useCapacityData(): CapacityData {
         .not("external_id", "is", null);
       if (provErr) throw provErr;
       const hygienistIds = Array.from(new Set((hygienistRows ?? []).map((p: any) => Number(p.external_id))));
-      if (hygienistIds.length === 0) return { overall: null, byLocation: new Map(), sampleCount: 0 };
+      if (hygienistIds.length === 0) return { overall: null, byLocation: new Map() };
 
       const bookedSince = new Date();
       bookedSince.setDate(bookedSince.getDate() - 56); // last 8 weeks
@@ -345,7 +341,7 @@ export function useCapacityData(): CapacityData {
         const w = median(arr);
         if (w != null) byLocation.set(locId, w);
       }
-      return { overall: median(leadDaysOverall), byLocation, sampleCount: leadDaysOverall.length };
+      return { overall: median(leadDaysOverall), byLocation };
     },
   });
 
@@ -755,7 +751,6 @@ export function useCapacityData(): CapacityData {
     seenPct6m: redemptionQ.data?.seenPct6m ?? null,
     seenPct12m: redemptionQ.data?.seenPct12m ?? null,
     waitWeeks: waitTimeQ.data?.overall ?? null,
-    waitSampleCount: waitTimeQ.data?.sampleCount ?? 0,
     hygieneChurnTrend,
   };
 }

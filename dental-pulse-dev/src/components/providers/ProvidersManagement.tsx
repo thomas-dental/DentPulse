@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { MainLayout } from "@/components/layout/MainLayout";
-import { usePlanAccess } from "@/hooks/usePlanAccess";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
@@ -95,21 +94,17 @@ import {
   Area,
 } from "recharts";
 import { cn } from "@/lib/utils";
-import {
-  providerMatchesManagementType,
-  providerMatchesSelectedLocation,
-} from "@/lib/providerRosterFilters";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProviders } from "@/hooks/useProviders";
 import {
   providerPerformsNhs,
   providerPerformsMos,
-  providerPerformsUoa,
   type Provider,
 } from "@/types/provider";
 import { useLocations } from "@/hooks/useLocations";
 import { useProviderTypes } from "@/hooks/useProviderTypes";
 import { useProductionMetrics } from "@/hooks/useProductionMetrics";
+import { useProfitMetrics } from "@/hooks/useProfitMetrics";
 import { useAssociatePerformanceMetrics } from "@/hooks/useAssociatePerformanceMetrics";
 import {
   useAllProvidersNetProduction,
@@ -123,6 +118,8 @@ import {
 } from "@/hooks/useAllProvidersCounts";
 import { useQueryClient } from "@tanstack/react-query";
 import { useOrganization } from "@/hooks/useOrganization";
+import { usePractitionerPrivateShareRatesMap } from "@/hooks/usePractitionerPrivateShareRates";
+import { PePrivateShareListCell } from "@/components/patient-economics/PePractitionerPrivateShareUi";
 import { useOrganizationSettings } from "@/hooks/useOrganizationSettings";
 import { useFilters } from "@/contexts/FilterContext";
 import { EntitySyncButton } from "@/components/sync/EntitySyncButton";
@@ -148,7 +145,7 @@ import { DatePicker, ConfigProvider } from "antd";
 import dayjs from "dayjs";
 import "antd/dist/reset.css";
 import { supabase } from "@/integrations/supabase/client";
-import { getOperationalExpense } from "@/services/integrations/plCostService";
+import { getOpCostByPlatform } from "@/services/integrations/plCostService";
 import { resolveBusinessInfoLocationId } from "@/lib/businessInfoLocation";
 import {
   loadProviderCostInputs,
@@ -156,9 +153,9 @@ import {
   type ProviderCostInputsResult,
 } from "@/lib/providerCostInputs";
 import {
-  buildAssociateProfitGoalRows,
-  rankAssociatePeriodicProfit,
-} from "@/lib/associatePracticeProfit";
+  resolveProviderCost,
+  isProductionScaledBasis,
+} from "@/lib/providerCostResolution";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import {
@@ -193,6 +190,46 @@ const PRODUCTION_PROVIDER_STATUS_OPTIONS: {
   { value: "all", label: "All" },
   { value: "inactive", label: "Inactive" },
 ];
+
+function providerMatchesManagementType(
+  provider: Provider,
+  providerType: ProvidersManagementProps["providerType"],
+): boolean {
+  if (!provider.provider_role) return false;
+  const role = provider.provider_role.toLowerCase();
+  if (providerType === "Dentist") {
+    return (
+      role === "dentist" ||
+      role === "dental surgeon" ||
+      role === "principal dentist"
+    );
+  }
+  if (providerType === "Hygienist") {
+    return (
+      role === "hygienist" ||
+      role === "dental hygienist" ||
+      role === "hygiene"
+    );
+  }
+  if (providerType === "Therapist") {
+    return (
+      role === "therapist" ||
+      role === "dental therapist" ||
+      role === "therapy"
+    );
+  }
+  return ![
+    "dentist",
+    "dental surgeon",
+    "principal dentist",
+    "hygienist",
+    "dental hygienist",
+    "hygiene",
+    "therapist",
+    "dental therapist",
+    "therapy",
+  ].includes(role);
+}
 
 function productionStatusMatches(
   isActive: boolean,
@@ -231,9 +268,7 @@ function emptyCountMonths(months: string[]): { [month: string]: number } {
 }
 
 function visibleCountProvidersForStatus(
-  countData:
-    | { providers: ProviderMonthlyCount[]; months: string[] }
-    | undefined,
+  countData: { providers: ProviderMonthlyCount[]; months: string[] } | undefined,
   roster: Provider[],
   status: ProductionProviderStatus,
   fallbackMonths: string[],
@@ -264,10 +299,7 @@ function visibleCountProvidersForStatus(
       monthlyData,
       total: existing.total + row.total,
       externalIds: [
-        ...new Set([
-          ...(existing.externalIds ?? []),
-          ...(row.externalIds ?? []),
-        ]),
+        ...new Set([...(existing.externalIds ?? []), ...(row.externalIds ?? [])]),
       ],
     });
   }
@@ -284,8 +316,7 @@ function visibleCountProvidersForStatus(
   );
   const missingByKey = new Map<string, Provider>();
   for (const provider of roster) {
-    if (!productionStatusMatches(provider.is_active !== false, status))
-      continue;
+    if (!productionStatusMatches(provider.is_active !== false, status)) continue;
     const key = productionPersonKey(provider.name);
     if (covered.has(key)) continue;
     const existing = missingByKey.get(key);
@@ -309,7 +340,9 @@ function visibleCountProvidersForStatus(
     });
   }
 
-  return result.sort((a, b) => a.providerName.localeCompare(b.providerName));
+  return result.sort((a, b) =>
+    a.providerName.localeCompare(b.providerName),
+  );
 }
 
 function mergeProductionBreakdown(
@@ -338,7 +371,7 @@ function ProductionIncomeBreakdown({
   rawTotal: number;
   formatCurrency: (value: number) => string;
 }) {
-  const other = tpiUnmappedAmount(rawTotal, privateAmt, membershipAmt, nhsAmt);
+  const other = tpiUnmappedAmount(rawTotal, privateAmt);
   const row = (label: string, value: number) => (
     <div className="flex justify-between gap-6 items-center">
       <span className="text-xs font-medium text-slate-600 uppercase tracking-wide">
@@ -368,7 +401,9 @@ function foldProductionPerson(
     return {
       ...incoming,
       monthlyData: { ...incoming.monthlyData },
-      allProviderIds: [...(incoming.allProviderIds ?? [incoming.providerId])],
+      allProviderIds: [
+        ...(incoming.allProviderIds ?? [incoming.providerId]),
+      ],
       externalIds: [...(incoming.externalIds ?? [])],
     };
   }
@@ -390,9 +425,7 @@ function foldProductionPerson(
   return {
     ...existing,
     providerId: preferIncoming ? incoming.providerId : existing.providerId,
-    providerName: preferIncoming
-      ? incoming.providerName
-      : existing.providerName,
+    providerName: preferIncoming ? incoming.providerName : existing.providerName,
     locationId: preferIncoming ? incoming.locationId : existing.locationId,
     isActive: existing.isActive || incoming.isActive,
     allProviderIds: [
@@ -669,10 +702,7 @@ function formatSplitGbpRate(
 function getAssociateSplitRate(provider: Provider): string | null {
   switch (provider.split_source_method) {
     case "per-case":
-      return formatSplitGbpRate(
-        provider.associate_split_per_case_rate,
-        "/case",
-      );
+      return formatSplitGbpRate(provider.associate_split_per_case_rate, "/case");
     case "per-hour":
       return formatSplitGbpRate(provider.associate_split_per_hour_rate, "/hr");
     default:
@@ -720,10 +750,6 @@ export function ProvidersManagement({
 }: ProvidersManagementProps) {
   const { can } = usePermissions();
   const { showDecimals } = useOrganizationSettings();
-  const { planTier } = usePlanAccess();
-  // Basic plan only includes the Associate/Dentist tab; the rest of the
-  // provider-type tabs are shown but locked behind an upgrade prompt.
-  const lockedForPlan = planTier === "basic" && providerType !== "Dentist";
   // Helper function to format currency — respects the org's Show Decimals setting.
   const formatCurrency = (value: number): string => {
     return new Intl.NumberFormat("en-GB", {
@@ -763,9 +789,9 @@ export function ProvidersManagement({
   >([{ month: "", data: {} }]);
   const [isLoadingWHDialog, setIsLoadingWHDialog] = useState(false);
 
-  // NHS Count / MOS Count / UOA Count dialog state — same "add a month row"
-  // pattern as Working Hours, but each edits a single appointment_summary
-  // column (uda_count for NHS, mos_count for MOS, uoa_count for UOA).
+  // NHS Count / MOS Count dialog state — same "add a month row" pattern as
+  // Working Hours, but each edits a single appointment_summary column
+  // (uda_count for NHS, mos_count for MOS).
   const [showNhsCountDialog, setShowNhsCountDialog] = useState(false);
   const [nhsCountRows, setNhsCountRows] = useState<
     { month: string; data: Record<string, { count: string }> }[]
@@ -777,12 +803,6 @@ export function ProvidersManagement({
     { month: string; data: Record<string, { count: string }> }[]
   >([{ month: "", data: {} }]);
   const [isLoadingMosCountDialog, setIsLoadingMosCountDialog] = useState(false);
-
-  const [showUoaCountDialog, setShowUoaCountDialog] = useState(false);
-  const [uoaCountRows, setUoaCountRows] = useState<
-    { month: string; data: Record<string, { count: string }> }[]
-  >([{ month: "", data: {} }]);
-  const [isLoadingUoaCountDialog, setIsLoadingUoaCountDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("revenue");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
@@ -969,24 +989,18 @@ export function ProvidersManagement({
     ...buildColumnVisibilityDefaults([...columnVisibilityOptions], true),
   });
 
-  const {
-    selectedLocationId,
-    dateRange: globalDateRange,
-    selectedDateRangeId,
-    customDateRange: filterContextCustomDateRange,
-  } = useFilters();
-
-  // Fetch providers and provider types (include inactive so the List can toggle them in).
-  // Pass the top-bar location so email-dedupe prefers the row at that clinic —
-  // otherwise a multi-site person is represented by another site's row and then
-  // filtered out of List and Profit Goals.
+  // Fetch providers and provider types (include inactive so the List can toggle them in)
   const {
     providers,
     isLoading,
     refetch: refetchProviders,
-  } = useProviders(undefined, selectedLocationId, { includeInactive: true });
+  } = useProviders(undefined, undefined, { includeInactive: true });
   const { activeProviderTypes } = useProviderTypes();
   const { organizationId } = useOrganization();
+  const {
+    data: pePrivateShareRatesMap,
+    isLoading: isPePrivateShareRatesLoading,
+  } = usePractitionerPrivateShareRatesMap(organizationId);
   const { allAvailableLocations } = useLocations();
   const locationMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -1046,6 +1060,12 @@ export function ProvidersManagement({
     });
     return map;
   }, [allAvailableLocations]);
+  const {
+    selectedLocationId,
+    dateRange: globalDateRange,
+    selectedDateRangeId,
+    customDateRange: filterContextCustomDateRange,
+  } = useFilters();
 
   // Sync local globalDateFilter from the header's FilterContext whenever it changes
   useEffect(() => {
@@ -1156,31 +1176,25 @@ export function ProvidersManagement({
     selectedLocationId,
   );
 
-  // Build provider name → net production total map. Uses `total` (private +
-  // membership + NHS, where NHS already includes the DentPulse NHS/MOS/UOA
-  // rate×count overlay — see useAllProvidersNetProduction/dentpulseNhsIncome)
-  // rather than `totalRaw` (the unconditional Dentally-reconciling SUM(tpi_price))
-  // so Overview's Production/Ranking reflect earned NHS/MOS/UOA contract income
-  // even when those treatments are priced £0 in Dentally itself.
-  // SUM rather than overwrite: Dentally sync leaves behind inactive duplicate
-  // provider records (distinct email, e.g. an "import+..." placeholder) that
-  // share the same real display name as the active record — e.g. a real
-  // "Aurea Bond" plus a leftover inactive duplicate also named "Aurea Bond".
-  // overviewNetProduction.providers is grouped by email, so both appear as
-  // separate entries with the same name; `.set()` silently let the
-  // duplicate's £0 clobber the real total.
+  // Build provider name → net production total map. SUM rather than overwrite:
+  // Dentally sync leaves behind inactive duplicate provider records (distinct
+  // email, e.g. an "import+..." placeholder) that share the same real display
+  // name as the active record — e.g. a real "Aurea Bond" plus a leftover
+  // inactive duplicate also named "Aurea Bond". overviewNetProduction.providers
+  // is grouped by email, so both appear as separate entries with the same
+  // name; `.set()` silently let the duplicate's £0 clobber the real total.
   const overviewNetProductionMap = useMemo(() => {
     const map = new Map<string, number>();
     (overviewNetProduction?.providers || []).forEach((p) => {
       const key = p.providerName.toLowerCase();
-      map.set(key, (map.get(key) ?? 0) + p.total);
+      map.set(key, (map.get(key) ?? 0) + p.totalRaw);
     });
     return map;
   }, [overviewNetProduction]);
 
   const totalNetProduction = useMemo(() => {
     return (overviewNetProduction?.providers || []).reduce(
-      (sum, p) => sum + p.total,
+      (sum, p) => sum + p.totalRaw,
       0,
     );
   }, [overviewNetProduction]);
@@ -1242,39 +1256,24 @@ export function ProvidersManagement({
   // Get date range for profit chart (synced with global, but can be overridden)
   const profitDateRange = getDateRange(profitDateFilter, profitCustomRange);
 
-  // Same production / hours sources as Profit Goals Settings so Overview
-  // Periodic Profit uses that formula instead of chart_get_profit_metrics.
-  const {
-    data: overviewProfitProduction,
-    isLoading: isLoadingOverviewProfitProd,
-  } = useAllProvidersNetProduction(
-    providerType,
-    profitDateRange.startDate,
-    profitDateRange.endDate,
-    selectedLocationId,
-  );
-  const { data: overviewProfitHours, isLoading: isLoadingOverviewProfitHours } =
-    useAllProvidersWorkingHours(
-      providerType,
-      profitDateRange.startDate,
-      profitDateRange.endDate,
-      selectedLocationId,
-    );
+  // Fetch profit metrics from database
+  const { data: profitMetrics, isLoading: isLoadingProfit } = useProfitMetrics({
+    startDate: profitDateRange.startDate,
+    endDate: profitDateRange.endDate,
+    organizationId: organizationId || "",
+    providerType: providerType,
+    locationId: selectedLocationId,
+  });
 
-  const overviewProfitPeriodMatchesGoals = useMemo(() => {
-    if (!profitGoalsDateRange.from || !profitGoalsDateRange.to) return false;
-    return (
-      format(profitDateRange.startDate, "yyyy-MM-dd") ===
-        format(profitGoalsDateRange.from, "yyyy-MM-dd") &&
-      format(profitDateRange.endDate, "yyyy-MM-dd") ===
-        format(profitGoalsDateRange.to, "yyyy-MM-dd")
-    );
-  }, [
-    profitDateRange.startDate,
-    profitDateRange.endDate,
-    profitGoalsDateRange.from,
-    profitGoalsDateRange.to,
-  ]);
+  // Calculate totals for profit
+  const totalPeriodicProfit = (profitMetrics || []).reduce(
+    (sum, m) => sum + m.periodic_profit,
+    0,
+  );
+  const totalPlPerDay = (profitMetrics || []).reduce(
+    (sum, m) => sum + m.pl_per_day,
+    0,
+  );
 
   // Get date range for associate performance chart (synced with global, but can be overridden)
   const associateDateRange = getDateRange(
@@ -1331,15 +1330,15 @@ export function ProvidersManagement({
     isError: isProductionError,
     refetch: refetchAllProduction,
   } = useAllProvidersNetProduction(
-    providerType,
-    productionDataDateRange.from,
-    productionDataDateRange.to,
-    selectedLocationId,
-  );
+      providerType,
+      productionDataDateRange.from,
+      productionDataDateRange.to,
+      selectedLocationId,
+    );
 
-  // Net Production table — private + membership + nhs (the mapped buckets)
-  // when no payer filter is set. A filter narrows the sum to just the
-  // selected bucket(s).
+  // Net Production table — Dentally-matching raw TPI total when no payer
+  // filter is set. Private / Membership / NHS filters still use the mapped
+  // buckets (those need not sum to the Dentally figure).
   const getFilteredMonthAmount = (monthData: {
     amount: number;
     private: number;
@@ -1348,7 +1347,7 @@ export function ProvidersManagement({
     rawTotal?: number;
   }) => {
     if (productionTreatmentTypes.length === 0) {
-      return monthData.private + monthData.membership + monthData.nhs;
+      return monthData.rawTotal ?? monthData.amount;
     }
     return productionTreatmentTypes.reduce(
       (sum, type) => sum + (monthData[type as keyof typeof monthData] || 0),
@@ -1364,9 +1363,7 @@ export function ProvidersManagement({
     totalNhs: number;
   }) => {
     if (productionTreatmentTypes.length === 0) {
-      return (
-        provider.totalPrivate + provider.totalMembership + provider.totalNhs
-      );
+      return provider.totalRaw ?? provider.total;
     }
     let sum = 0;
     if (productionTreatmentTypes.includes("private"))
@@ -1380,9 +1377,12 @@ export function ProvidersManagement({
   const productionRoster = useMemo(
     () =>
       providers.filter((provider) => {
-        if (!providerMatchesManagementType(provider, providerType))
-          return false;
-        return providerMatchesSelectedLocation(provider, selectedLocationId);
+        if (!providerMatchesManagementType(provider, providerType)) return false;
+        if (!selectedLocationId || selectedLocationId === "all") return true;
+        return (
+          provider.location_id === selectedLocationId ||
+          provider.practice_id === selectedLocationId
+        );
       }),
     [providers, providerType, selectedLocationId],
   );
@@ -1488,9 +1488,9 @@ export function ProvidersManagement({
   );
   const isLoadingWorkingHoursTable = isLoadingAllHours || isFetchingAllHours;
 
-  // Fetch all providers NHS Count (uda_count), MOS Count (mos_count), and UOA
-  // Count (uoa_count) — manually entered, no location dimension on
-  // appointment_summary, so unlike working hours these aren't location-filtered.
+  // Fetch all providers NHS Count (uda_count) and MOS Count (mos_count) —
+  // manually entered, no location dimension on appointment_summary, so unlike
+  // working hours these aren't location-filtered.
   const { data: allProvidersNhsCounts, isLoading: isLoadingNhsCounts } =
     useAllProvidersCounts(
       providerType,
@@ -1504,13 +1504,6 @@ export function ProvidersManagement({
       productionDataDateRange.from,
       productionDataDateRange.to,
       "mos_count",
-    );
-  const { data: allProvidersUoaCounts, isLoading: isLoadingUoaCounts } =
-    useAllProvidersCounts(
-      providerType,
-      productionDataDateRange.from,
-      productionDataDateRange.to,
-      "uoa_count",
     );
 
   const visibleHoursProviders = useMemo(() => {
@@ -1559,32 +1552,14 @@ export function ProvidersManagement({
     ],
   );
 
-  const visibleUoaCountProviders = useMemo(
-    () =>
-      visibleCountProvidersForStatus(
-        allProvidersUoaCounts,
-        productionRoster,
-        productionProviderStatus,
-        allProvidersHours?.months ?? allProvidersProduction?.months ?? [],
-      ),
-    [
-      allProvidersUoaCounts,
-      productionRoster,
-      productionProviderStatus,
-      allProvidersHours?.months,
-      allProvidersProduction?.months,
-    ],
-  );
-
-  const nhsCountMonths = allProvidersNhsCounts?.months?.length
-    ? allProvidersNhsCounts.months
-    : (allProvidersHours?.months ?? allProvidersProduction?.months ?? []);
-  const mosCountMonths = allProvidersMosCounts?.months?.length
-    ? allProvidersMosCounts.months
-    : (allProvidersHours?.months ?? allProvidersProduction?.months ?? []);
-  const uoaCountMonths = allProvidersUoaCounts?.months?.length
-    ? allProvidersUoaCounts.months
-    : (allProvidersHours?.months ?? allProvidersProduction?.months ?? []);
+  const nhsCountMonths =
+    allProvidersNhsCounts?.months?.length
+      ? allProvidersNhsCounts.months
+      : (allProvidersHours?.months ?? allProvidersProduction?.months ?? []);
+  const mosCountMonths =
+    allProvidersMosCounts?.months?.length
+      ? allProvidersMosCounts.months
+      : (allProvidersHours?.months ?? allProvidersProduction?.months ?? []);
 
   // Fetch profit goals data - net production for all providers
   const {
@@ -1756,10 +1731,11 @@ export function ProvidersManagement({
       const endDateStr = toLocalDateStr(profitGoalsDateRange.to);
       let opCosts = 0;
       try {
-        const { amount } = await getOperationalExpense(
+        const { amount } = await getOpCostByPlatform(
           organizationId,
           startDateStr,
           endDateStr,
+          "TC",
           selectedLocationId,
         );
         if (amount != null) opCosts = amount;
@@ -1868,10 +1844,12 @@ export function ProvidersManagement({
       // Default: active only. "Show inactive" clears onlyActive → active + inactive.
       const matchesActive = !tableFilters.onlyActive || provider.is_active;
 
-      const matchesLocation = providerMatchesSelectedLocation(
-        provider,
-        selectedLocationId,
-      );
+      // Optional home-location scope from the top bar (not production-based).
+      const matchesLocation =
+        !selectedLocationId ||
+        selectedLocationId === "all" ||
+        provider.location_id === selectedLocationId ||
+        provider.practice_id === selectedLocationId;
 
       return (
         matchesType &&
@@ -1908,24 +1886,11 @@ export function ProvidersManagement({
       return sortOrder === "asc" ? comparison : -comparison;
     });
 
-  // Profit Goals Settings lists everyone in this role bucket (including
-  // inactive and blank-role Other) so Last Quarter producers are not hidden
-  // behind the List tab's "active only" toggle.
-  const profitGoalsProviders = useMemo(
-    () =>
-      providers.filter(
-        (provider) =>
-          providerMatchesManagementType(provider, providerType) &&
-          providerMatchesSelectedLocation(provider, selectedLocationId),
-      ),
-    [providers, providerType, selectedLocationId],
-  );
-
   // Stable string key for the current filtered provider set — used as an
   // effect dependency instead of the filteredProviders array itself, which
   // is a new reference every render (not memoized) and would otherwise
   // re-trigger the cost-inputs fetch below on every render.
-  const filteredProviderIdsKey = profitGoalsProviders
+  const filteredProviderIdsKey = filteredProviders
     .map((p) => p.id)
     .sort()
     .join(",");
@@ -1938,7 +1903,7 @@ export function ProvidersManagement({
     const load = async () => {
       if (
         !organizationId ||
-        profitGoalsProviders.length === 0 ||
+        filteredProviders.length === 0 ||
         !profitGoalsDateRange.from ||
         !profitGoalsDateRange.to
       ) {
@@ -1946,7 +1911,7 @@ export function ProvidersManagement({
         return;
       }
       try {
-        const rows: ProviderCostInputRow[] = profitGoalsProviders.map((p) => ({
+        const rows: ProviderCostInputRow[] = filteredProviders.map((p) => ({
           id: p.id,
           location_id: (p as any).location_id ?? null,
           lab_cost_source_method: (p as any).lab_cost_source_method ?? null,
@@ -2082,21 +2047,189 @@ export function ProvidersManagement({
       return [];
     }
 
-    return buildAssociateProfitGoalRows({
-      providers: profitGoalsProviders,
-      productionProviders: profitGoalsAllProduction.providers,
-      hoursProviders: profitGoalsAllHours.providers,
-      hoursPerDay: profitGoalsMetrics.openHoursPerDay || 8,
-      ocpspd: profitGoalsMetrics.ocpspd,
-      dateFrom: profitGoalsDateRange.from,
-      dateTo: profitGoalsDateRange.to,
-      plannedByProvider: providersPlannedProduction,
-      costInputs: providerCostInputsData,
-      fallbackLabPercent: profitGoalsMetrics.associateCostLabsPercent,
-      fallbackMaterialsPercent: profitGoalsMetrics.practiceCostMaterialsPercent,
+    return filteredProviders.map((provider) => {
+      // Match by any of the provider's external_ids — useProviders deduplicates by email
+      // and may pick a different "first" row than useAllProvidersNetProduction, causing
+      // provider.external_id to differ from the stored externalId. Checking all externalIds
+      // in the hook result ensures the match always succeeds for multi-location providers.
+      const providerExtId = provider.external_id
+        ? Number(provider.external_id)
+        : null;
+      const productionData =
+        profitGoalsAllProduction.providers.find(
+          (p) =>
+            providerExtId !== null && p.externalIds.includes(providerExtId),
+        ) ??
+        profitGoalsAllProduction.providers.find(
+          (p) => p.providerName.toLowerCase() === provider.name.toLowerCase(),
+        );
+      const hoursData =
+        profitGoalsAllHours.providers.find(
+          (p) =>
+            providerExtId !== null && p.externalIds.includes(providerExtId),
+        ) ??
+        profitGoalsAllHours.providers.find(
+          (p) => p.providerName.toLowerCase() === provider.name.toLowerCase(),
+        );
+
+      const totalProduction = productionData?.total || 0;
+      // Use totalExact (unrounded) when available — avoids 1dp rounding before the
+      // hours→days division, matching Overview's single-query SUM/60/hours_per_day.
+      const totalWorkingHours = hoursData?.totalExact ?? hoursData?.total ?? 0;
+
+      // Calculate working days
+      const hoursPerDay = profitGoalsMetrics.openHoursPerDay || 8;
+      const workingDays = hoursPerDay > 0 ? totalWorkingHours / hoursPerDay : 0;
+
+      // Calculate average daily production
+      const avgDailyProduction =
+        workingDays > 0 ? totalProduction / workingDays : 0;
+
+      // Get provider's split percentages
+      const associateSplitPercent =
+        (provider as any).associate_split_percentage || 30;
+      const associateLabSplitPercent =
+        (provider as any).lab_split_percentage || 50;
+
+      // Resolve this provider's own lab/material cost — location flat
+      // percentage unless their location is Associate Wise and they've been
+      // configured with their own cost source.
+      const providerLocationId = (provider as any).location_id ?? null;
+      const gate = providerLocationId
+        ? providerCostInputsData?.locationGateByLocationId.get(
+            providerLocationId,
+          )
+        : undefined;
+      const labGateActive =
+        gate?.associate_cost_lab_source === "associate_wise";
+      const materialGateActive =
+        gate?.material_cost_source === "associate_wise";
+      const labResolved = resolveProviderCost({
+        sourceMethod: labGateActive
+          ? ((provider as any).lab_cost_source_method ?? null)
+          : null,
+        flatPercentage: (provider as any).lab_cost_percentage ?? null,
+        production: totalProduction,
+        accountAmount:
+          providerCostInputsData?.accountAmountByProviderId.get(provider.id)
+            ?.lab ?? null,
+        monthlyValues:
+          providerCostInputsData?.monthlyValuesByProviderId.get(provider.id)
+            ?.lab ?? [],
+        monthlyBillByMonth: providerLocationId
+          ? (providerCostInputsData?.monthlyBillByLocationId.get(
+              providerLocationId,
+            )?.lab ?? [])
+          : [],
+        bands:
+          providerCostInputsData?.bandsByProviderId.get(provider.id)?.lab ?? [],
+        fallbackLocationPercent:
+          gate?.associate_cost_labs_percent ??
+          profitGoalsMetrics.associateCostLabsPercent,
+      });
+      const materialResolved = resolveProviderCost({
+        sourceMethod: materialGateActive
+          ? ((provider as any).material_cost_source_method ?? null)
+          : null,
+        flatPercentage: (provider as any).material_cost_percentage ?? null,
+        production: totalProduction,
+        accountAmount:
+          providerCostInputsData?.accountAmountByProviderId.get(provider.id)
+            ?.material ?? null,
+        monthlyValues:
+          providerCostInputsData?.monthlyValuesByProviderId.get(provider.id)
+            ?.material ?? [],
+        monthlyBillByMonth: providerLocationId
+          ? (providerCostInputsData?.monthlyBillByLocationId.get(
+              providerLocationId,
+            )?.material ?? [])
+          : [],
+        bands:
+          providerCostInputsData?.bandsByProviderId.get(provider.id)
+            ?.material ?? [],
+        fallbackLocationPercent:
+          gate?.practice_cost_materials_percent ??
+          profitGoalsMetrics.practiceCostMaterialsPercent,
+      });
+
+      const costOfLabs = labResolved.amount;
+      const materialsCosts = materialResolved.amount;
+
+      // Calculate associate metrics
+      const associateGrossShare =
+        totalProduction * (associateSplitPercent / 100);
+      const labCostDeduction = costOfLabs * (associateLabSplitPercent / 100);
+      const associateNetPay = associateGrossShare - labCostDeduction;
+
+      // Calculate number of months
+      const startDate = profitGoalsDateRange.from;
+      const endDate = profitGoalsDateRange.to;
+      const numberOfMonths =
+        startDate && endDate
+          ? (endDate.getFullYear() - startDate.getFullYear()) * 12 +
+            (endDate.getMonth() - startDate.getMonth()) +
+            1
+          : 12;
+      const avgLabCostPerMonth =
+        numberOfMonths > 0 ? costOfLabs / numberOfMonths : 0;
+
+      const ocpspaContribution = profitGoalsMetrics.ocpspd * workingDays;
+      const practicePL =
+        totalProduction -
+        (associateNetPay + costOfLabs + materialsCosts + ocpspaContribution);
+      const plPercentOnOCPSPD =
+        ocpspaContribution > 0 ? (practicePL / ocpspaContribution) * 100 : 0;
+      const plOnRoomPerDay = workingDays > 0 ? practicePL / workingDays : 0;
+
+      // Get planned values
+      const plannedAvgDaily = providersPlannedProduction[provider.id] || 0;
+      const plannedTotalProduction = plannedAvgDaily * workingDays;
+      // Absolute-£ sources (accounting application / sliding scale / monthly)
+      // have no defined "planned" variant that scales with planned production
+      // — the actual resolved figure is the honest number to use as the plan too.
+      const plannedCostOfLabs = isProductionScaledBasis(labResolved.basis)
+        ? plannedTotalProduction *
+          (totalProduction > 0 ? costOfLabs / totalProduction : 0)
+        : costOfLabs;
+      const plannedMaterials = isProductionScaledBasis(materialResolved.basis)
+        ? plannedTotalProduction *
+          (totalProduction > 0 ? materialsCosts / totalProduction : 0)
+        : materialsCosts;
+      const plannedAssociateGrossShare =
+        plannedTotalProduction * (associateSplitPercent / 100);
+      const plannedLabCostDeduction =
+        plannedCostOfLabs * (associateLabSplitPercent / 100);
+      const plannedAssociateNetPay =
+        plannedAssociateGrossShare - plannedLabCostDeduction;
+      const plannedPracticePL =
+        plannedTotalProduction -
+        (associateNetPay + costOfLabs + plannedMaterials + ocpspaContribution);
+
+      return {
+        provider,
+        avgDailyProduction,
+        totalProduction,
+        workingDays,
+        associateSplitPercent,
+        associateLabSplitPercent,
+        associateNetPay,
+        costOfLabs,
+        avgLabCostPerMonth,
+        materialsCosts,
+        ocpspaContribution,
+        practicePL,
+        plPercentOnOCPSPD,
+        plOnRoomPerDay,
+        plannedAvgDaily,
+        plannedTotalProduction,
+        plannedAssociateNetPay,
+        plannedCostOfLabs,
+        plannedMaterials,
+        plannedPracticePL,
+      };
     });
   }, [
-    profitGoalsProviders,
+    filteredProviders,
     profitGoalsAllProduction,
     profitGoalsAllHours,
     profitGoalsMetrics,
@@ -2104,175 +2237,6 @@ export function ProvidersManagement({
     providersPlannedProduction,
     providerCostInputsData,
   ]);
-
-  const [overviewProfitCostInputs, setOverviewProfitCostInputs] =
-    useState<ProviderCostInputsResult | null>(null);
-  const [overviewProfitOcpspd, setOverviewProfitOcpspd] = useState<
-    number | null
-  >(null);
-
-  useEffect(() => {
-    const load = async () => {
-      if (overviewProfitPeriodMatchesGoals) {
-        setOverviewProfitCostInputs(null);
-        return;
-      }
-      if (
-        !organizationId ||
-        profitGoalsProviders.length === 0 ||
-        !profitDateRange.startDate ||
-        !profitDateRange.endDate
-      ) {
-        setOverviewProfitCostInputs(null);
-        return;
-      }
-      try {
-        const rows: ProviderCostInputRow[] = profitGoalsProviders.map((p) => ({
-          id: p.id,
-          location_id: (p as any).location_id ?? null,
-          lab_cost_source_method: (p as any).lab_cost_source_method ?? null,
-          lab_cost_percentage: (p as any).lab_cost_percentage ?? null,
-          lab_cost_account_id: (p as any).lab_cost_account_id ?? null,
-          lab_cost_account_platform:
-            (p as any).lab_cost_account_platform ?? null,
-          material_cost_source_method:
-            (p as any).material_cost_source_method ?? null,
-          material_cost_percentage: (p as any).material_cost_percentage ?? null,
-          material_cost_account_id: (p as any).material_cost_account_id ?? null,
-          material_cost_account_platform:
-            (p as any).material_cost_account_platform ?? null,
-        }));
-        const result = await loadProviderCostInputs({
-          organizationId,
-          providers: rows,
-          dateFrom: profitDateRange.startDate,
-          dateTo: profitDateRange.endDate,
-        });
-        setOverviewProfitCostInputs(result);
-      } catch (error) {
-        console.error(
-          "[ProvidersManagement] Error loading overview profit cost inputs:",
-          error,
-        );
-        setOverviewProfitCostInputs(null);
-      }
-    };
-    load();
-  }, [
-    overviewProfitPeriodMatchesGoals,
-    organizationId,
-    filteredProviderIdsKey,
-    profitDateRange.startDate,
-    profitDateRange.endDate,
-  ]);
-
-  useEffect(() => {
-    const calculate = async () => {
-      if (overviewProfitPeriodMatchesGoals) {
-        setOverviewProfitOcpspd(null);
-        return;
-      }
-      if (!organizationData || !organizationId) return;
-
-      let workingDays = 0;
-      const current = new Date(profitDateRange.startDate);
-      const end = new Date(profitDateRange.endDate);
-      while (current <= end) {
-        const dayOfWeek = current.getDay();
-        if (dayOfWeek !== 0 && dayOfWeek !== 6) workingDays++;
-        current.setDate(current.getDate() + 1);
-      }
-      const surgeryDays =
-        workingDays * (organizationData.number_of_surgeries || 0);
-
-      const toLocalDateStr = (d: Date) => {
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, "0");
-        const day = String(d.getDate()).padStart(2, "0");
-        return `${y}-${m}-${day}`;
-      };
-
-      let opCosts = 0;
-      try {
-        const { amount } = await getOperationalExpense(
-          organizationId,
-          toLocalDateStr(profitDateRange.startDate),
-          toLocalDateStr(profitDateRange.endDate),
-          selectedLocationId,
-        );
-        if (amount != null) opCosts = amount;
-      } catch (plError) {
-        console.error(
-          "[ProvidersManagement] Error fetching overview profit op costs:",
-          plError,
-        );
-      }
-
-      setOverviewProfitOcpspd(surgeryDays > 0 ? opCosts / surgeryDays : 0);
-    };
-    calculate();
-  }, [
-    overviewProfitPeriodMatchesGoals,
-    organizationData,
-    organizationId,
-    selectedLocationId,
-    profitDateRange.startDate,
-    profitDateRange.endDate,
-  ]);
-
-  const overviewProfitRows = useMemo(() => {
-    if (
-      !overviewProfitProduction?.providers ||
-      !overviewProfitHours?.providers
-    ) {
-      return [];
-    }
-
-    return buildAssociateProfitGoalRows({
-      providers: profitGoalsProviders,
-      productionProviders: overviewProfitProduction.providers,
-      hoursProviders: overviewProfitHours.providers,
-      hoursPerDay: profitGoalsMetrics.openHoursPerDay || 8,
-      ocpspd: overviewProfitOcpspd ?? profitGoalsMetrics.ocpspd,
-      dateFrom: profitDateRange.startDate,
-      dateTo: profitDateRange.endDate,
-      plannedByProvider: providersPlannedProduction,
-      costInputs: overviewProfitPeriodMatchesGoals
-        ? providerCostInputsData
-        : (overviewProfitCostInputs ?? providerCostInputsData),
-      fallbackLabPercent: profitGoalsMetrics.associateCostLabsPercent,
-      fallbackMaterialsPercent: profitGoalsMetrics.practiceCostMaterialsPercent,
-    });
-  }, [
-    overviewProfitProduction,
-    overviewProfitHours,
-    profitGoalsProviders,
-    profitGoalsMetrics,
-    overviewProfitOcpspd,
-    profitDateRange.startDate,
-    profitDateRange.endDate,
-    providersPlannedProduction,
-    overviewProfitPeriodMatchesGoals,
-    providerCostInputsData,
-    overviewProfitCostInputs,
-  ]);
-
-  // Periodic Profit on Overview = Practice P/L from Profit Goals Settings.
-  const profitMetrics = useMemo(() => {
-    const source =
-      overviewProfitPeriodMatchesGoals && providersMetrics.length > 0
-        ? providersMetrics
-        : overviewProfitRows;
-    return rankAssociatePeriodicProfit(source);
-  }, [overviewProfitPeriodMatchesGoals, providersMetrics, overviewProfitRows]);
-
-  const isLoadingProfit =
-    isLoadingOverviewProfitProd || isLoadingOverviewProfitHours;
-  const totalPeriodicProfit = profitMetrics.reduce(
-    (sum, m) => sum + m.periodic_profit,
-    0,
-  );
-  const totalPlPerDay = profitMetrics.reduce((sum, m) => sum + m.pl_per_day, 0);
 
   // Copy planned production value to clipboard
   const copyPlannedValue = async (providerId: string) => {
@@ -2674,13 +2638,19 @@ export function ProvidersManagement({
   };
 
   // Associates filtered by role for Working Hours dialog
-  const whDialogAssociates = useMemo(
-    () =>
-      providers.filter((p: any) =>
-        providerMatchesManagementType(p, providerType),
-      ),
-    [providers, providerType],
-  );
+  const whDialogAssociates = useMemo(() => {
+    const roleMap: Record<string, string[]> = {
+      Dentist: ["dentist", "dental surgeon", "principal dentist"],
+      Hygienist: ["hygienist", "dental hygienist", "hygiene"],
+      Therapist: ["therapist", "dental therapist", "therapy"],
+    };
+    const allowed = roleMap[providerType];
+    return providers.filter((p: any) => {
+      if (!allowed) return true;
+      if (!p.provider_role) return false;
+      return allowed.includes(p.provider_role.toLowerCase());
+    });
+  }, [providers, providerType]);
 
   // NHS / MOS count dialogs only show providers who opted into that treatment type.
   const nhsCountDialogAssociates = useMemo(
@@ -2697,22 +2667,9 @@ export function ProvidersManagement({
       ),
     [whDialogAssociates],
   );
-  const uoaCountDialogAssociates = useMemo(
-    () =>
-      whDialogAssociates.filter((p: any) =>
-        providerPerformsUoa(p.additional_options),
-      ),
-    [whDialogAssociates],
-  );
 
-  const countDialogAssociatesFor = (
-    field: "uda_count" | "mos_count" | "uoa_count",
-  ) =>
-    field === "uda_count"
-      ? nhsCountDialogAssociates
-      : field === "mos_count"
-        ? mosCountDialogAssociates
-        : uoaCountDialogAssociates;
+  const countDialogAssociatesFor = (field: "uda_count" | "mos_count") =>
+    field === "uda_count" ? nhsCountDialogAssociates : mosCountDialogAssociates;
 
   const openWHEditDialog = async (monthLabel: string) => {
     const monthValue = dayjs(monthLabel, "MMM-YY").format("YYYY-MM");
@@ -2840,68 +2797,52 @@ export function ProvidersManagement({
     }
     toast.success("Working hours saved successfully.");
     queryClient.invalidateQueries({
-      queryKey: ["all-providers-working-hours-v3"],
+      queryKey: ["all-providers-working-hours"],
     });
     // This dialog also writes uda_count — keep Production Data + UDA Goals in sync.
     queryClient.invalidateQueries({
-      queryKey: ["all-providers-counts-v3", "uda_count"],
+      queryKey: ["all-providers-counts-v2", "uda_count"],
     });
     queryClient.invalidateQueries({ queryKey: ["uda-actuals"] });
     setShowWorkingHoursDialog(false);
     setWorkingHoursRows([{ month: "", data: {} }]);
   };
 
-  // Fetches this contract type's saved counts for one month, keyed by
-  // provider_id — shared by openCountEditDialog (opened from a table cell,
-  // month already known) and the "Add ... Count" dialogs' month picker
-  // (month chosen fresh inside the dialog), so both paths show previously
-  // saved values instead of the picker resetting to blank/0. Queries against
-  // whDialogAssociates (every associate of this provider type), matching the
-  // dialog's own column list and saveCountRows's save scope — NOT the
-  // treatment-flag-filtered countDialogAssociatesFor list, which would silently
-  // miss anyone with historical data but no "Does Perform X Treatments?" flag.
-  const loadCountDataForMonth = async (
-    monthValue: string,
-    field: "uda_count" | "mos_count" | "uoa_count",
-  ): Promise<Record<string, { count: string }>> => {
-    if (!organizationId || !monthValue) return {};
-    const monthDate = monthValue + "-01";
-    const providerIds = whDialogAssociates
-      .map((p: any) => p.id)
-      .filter(Boolean);
-    if (providerIds.length === 0) return {};
-    const { data: summaryRows } = await (supabase as any)
-      .from("appointment_summary")
-      .select(`provider_id, ${field}`)
-      .eq("organization_id", organizationId)
-      .eq("month", monthDate)
-      .in("provider_id", providerIds);
-
-    const rowData: Record<string, { count: string }> = {};
-    for (const row of summaryRows ?? []) {
-      rowData[row.provider_id] = {
-        count: row[field] != null ? String(row[field]) : "",
-      };
-    }
-    return rowData;
-  };
-
-  // NHS Count (uda_count), MOS Count (mos_count), and UOA Count (uoa_count)
-  // dialogs — same "add a month row" pattern as Working Hours, but each
-  // writes only its own single column so neither clobbers Working Hours' own
-  // uda_count field or the other counts' columns on save.
+  // NHS Count (uda_count) and MOS Count (mos_count) dialogs — same "add a
+  // month row" pattern as Working Hours, but each writes only its own single
+  // column so neither clobbers Working Hours' own uda_count field or the
+  // other count's column on save.
   const openCountEditDialog = async (
     monthLabel: string,
-    field: "uda_count" | "mos_count" | "uoa_count",
+    field: "uda_count" | "mos_count",
     setRows: typeof setNhsCountRows,
     setLoading: typeof setIsLoadingNhsCountDialog,
     setOpen: typeof setShowNhsCountDialog,
   ) => {
     const monthValue = dayjs(monthLabel, "MMM-YY").format("YYYY-MM");
+    const monthDate = monthValue + "-01";
     setLoading(true);
     setOpen(true);
     try {
-      const rowData = await loadCountDataForMonth(monthValue, field);
+      const associates = countDialogAssociatesFor(field);
+      const providerIds = associates.map((p: any) => p.id).filter(Boolean);
+      if (providerIds.length === 0) {
+        setRows([{ month: monthValue, data: {} }]);
+        return;
+      }
+      const { data: summaryRows } = await (supabase as any)
+        .from("appointment_summary")
+        .select(`provider_id, ${field}`)
+        .eq("organization_id", organizationId)
+        .eq("month", monthDate)
+        .in("provider_id", providerIds);
+
+      const rowData: Record<string, { count: string }> = {};
+      for (const row of summaryRows ?? []) {
+        rowData[row.provider_id] = {
+          count: row[field] != null ? String(row[field]) : "",
+        };
+      }
       setRows([{ month: monthValue, data: rowData }]);
     } finally {
       setLoading(false);
@@ -2910,7 +2851,7 @@ export function ProvidersManagement({
 
   const saveCountRows = async (
     rows: typeof nhsCountRows,
-    field: "uda_count" | "mos_count" | "uoa_count",
+    field: "uda_count" | "mos_count",
     setOpen: typeof setShowNhsCountDialog,
     setRows: typeof setNhsCountRows,
     successMessage: string,
@@ -2956,7 +2897,7 @@ export function ProvidersManagement({
     }
     toast.success(successMessage);
     queryClient.invalidateQueries({
-      queryKey: ["all-providers-counts-v3", field],
+      queryKey: ["all-providers-counts-v2", field],
     });
     // Also refresh any remaining uda-actuals consumers.
     queryClient.invalidateQueries({ queryKey: ["uda-actuals"] });
@@ -3003,8 +2944,6 @@ export function ProvidersManagement({
         page: `providers-${providerType?.toLowerCase()}`,
         providerType,
       }}
-      locked={lockedForPlan}
-      lockedDescription={`${displayProviderType} provider management isn't included in your current plan. Upgrade to unlock it.`}
     >
       <div className="space-y-6 pt-4">
         {/* Header */}
@@ -3220,9 +3159,7 @@ export function ProvidersManagement({
                         Total Revenue
                       </p>
                       <p className="text-3xl font-extrabold text-gray-900 truncate">
-                        {formatCurrencyRound(
-                          totalNetProduction || totalProduction,
-                        )}
+                        {formatCurrencyRound(totalNetProduction || totalProduction)}
                       </p>
                       <p className="text-sm text-muted-foreground mt-1">
                         {format(productionDateRange.startDate, "d MMM yyyy")} –{" "}
@@ -3916,8 +3853,7 @@ export function ProvidersManagement({
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <div>
                     <CardTitle className="text-lg">
-                      {displayProviderType} Profit Performance (Actual vs
-                      Target)
+                      Associate Profit Performance (Actual vs Target)
                     </CardTitle>
                     <p className="text-sm text-muted-foreground mt-1">
                       <span className="inline-flex items-center gap-1 text-muted-foreground">
@@ -4721,12 +4657,17 @@ export function ProvidersManagement({
                                 )}
                               </td>
                             )}
-                            <ContractSplitCell
-                              method={getSplitMethodLabel(
-                                provider.split_source_method,
-                              )}
-                              rate={getAssociateSplitRate(provider)}
-                            />
+                            <td className="text-center">
+                              <PePrivateShareListCell
+                                rateConfigured={
+                                  pePrivateShareRatesMap?.get(provider.id)?.rateConfigured
+                                }
+                                currentRate={
+                                  pePrivateShareRatesMap?.get(provider.id)?.currentRate ?? null
+                                }
+                                isLoading={isPePrivateShareRatesLoading}
+                              />
+                            </td>
                             <ContractSplitCell
                               method={getSplitMethodLabel(
                                 provider.split_source_method,
@@ -4840,7 +4781,7 @@ export function ProvidersManagement({
                         }}
                       >
                         <SlidersHorizontal className="h-4 w-4" />
-                        Payor Type
+                        Filters
                         {productionFilterCount > 0 ? (
                           <Badge variant="secondary">
                             {productionFilterCount}
@@ -4863,9 +4804,7 @@ export function ProvidersManagement({
                       </div>
                     ) : isProductionError ? (
                       <div className="text-center text-muted-foreground py-8 space-y-3">
-                        <p>
-                          Production data failed to load for this date range.
-                        </p>
+                        <p>Production data failed to load for this date range.</p>
                         <Button
                           type="button"
                           variant="outline"
@@ -4903,76 +4842,83 @@ export function ProvidersManagement({
                           </thead>
                           <tbody>
                             {visibleProductionProviders.map((provider) => (
-                              <tr
-                                key={provider.providerId}
-                                className="border-b border-border hover:bg-muted/50"
-                              >
-                                <td className="p-3 font-medium">
-                                  {provider.providerName}
-                                </td>
-                                {allProvidersProduction.months.map((month) => {
-                                  const monthData = provider.monthlyData[
-                                    month
-                                  ] || {
-                                    amount: 0,
-                                    private: 0,
-                                    membership: 0,
-                                    nhs: 0,
-                                    rawTotal: 0,
-                                  };
-                                  return (
-                                    <td key={month} className="p-3 text-right">
-                                      <UITooltip>
-                                        <TooltipTrigger asChild>
-                                          <span className="cursor-default">
-                                            {formatCurrency(
-                                              getFilteredMonthAmount(monthData),
-                                            )}
-                                          </span>
-                                        </TooltipTrigger>
-                                        <TooltipContent
-                                          side="top"
-                                          className="bg-gradient-to-br from-slate-50 to-white border-2 border-slate-200 shadow-xl p-4 rounded-lg"
+                                <tr
+                                  key={provider.providerId}
+                                  className="border-b border-border hover:bg-muted/50"
+                                >
+                                  <td className="p-3 font-medium">
+                                    {provider.providerName}
+                                  </td>
+                                  {allProvidersProduction.months.map(
+                                    (month) => {
+                                      const monthData = provider.monthlyData[
+                                        month
+                                      ] || {
+                                        amount: 0,
+                                        private: 0,
+                                        membership: 0,
+                                        nhs: 0,
+                                        rawTotal: 0,
+                                      };
+                                      return (
+                                        <td
+                                          key={month}
+                                          className="p-3 text-right"
                                         >
-                                          <TooltipArrow className="fill-white" />
-                                          <ProductionIncomeBreakdown
-                                            privateAmt={monthData.private}
-                                            membershipAmt={monthData.membership}
-                                            nhsAmt={monthData.nhs}
-                                            rawTotal={monthData.rawTotal}
-                                            formatCurrency={formatCurrency}
-                                          />
-                                        </TooltipContent>
-                                      </UITooltip>
-                                    </td>
-                                  );
-                                })}
-                                <td className="p-3 text-right font-semibold">
-                                  <UITooltip>
-                                    <TooltipTrigger asChild>
-                                      <span className="cursor-default">
-                                        {formatCurrency(
-                                          getFilteredProviderTotal(provider),
-                                        )}
-                                      </span>
-                                    </TooltipTrigger>
-                                    <TooltipContent
-                                      side="top"
-                                      className="bg-gradient-to-br from-slate-50 to-white border-2 border-slate-200 shadow-xl p-4 rounded-lg"
-                                    >
-                                      <TooltipArrow className="fill-white" />
-                                      <ProductionIncomeBreakdown
-                                        privateAmt={provider.totalPrivate}
-                                        membershipAmt={provider.totalMembership}
-                                        nhsAmt={provider.totalNhs}
-                                        rawTotal={provider.totalRaw}
-                                        formatCurrency={formatCurrency}
-                                      />
-                                    </TooltipContent>
-                                  </UITooltip>
-                                </td>
-                              </tr>
-                            ))}
+                                          <UITooltip>
+                                            <TooltipTrigger asChild>
+                                              <span className="cursor-default">
+                                                {formatCurrency(
+                                                  getFilteredMonthAmount(
+                                                    monthData,
+                                                  ),
+                                                )}
+                                              </span>
+                                            </TooltipTrigger>
+                                            <TooltipContent
+                                              side="top"
+                                              className="bg-gradient-to-br from-slate-50 to-white border-2 border-slate-200 shadow-xl p-4 rounded-lg"
+                                            >
+                                              <TooltipArrow className="fill-white" />
+                                              <ProductionIncomeBreakdown
+                                                privateAmt={monthData.private}
+                                                membershipAmt={monthData.membership}
+                                                nhsAmt={monthData.nhs}
+                                                rawTotal={monthData.rawTotal}
+                                                formatCurrency={formatCurrency}
+                                              />
+                                            </TooltipContent>
+                                          </UITooltip>
+                                        </td>
+                                      );
+                                    },
+                                  )}
+                                  <td className="p-3 text-right font-semibold">
+                                    <UITooltip>
+                                      <TooltipTrigger asChild>
+                                        <span className="cursor-default">
+                                          {formatCurrency(
+                                            getFilteredProviderTotal(provider),
+                                          )}
+                                        </span>
+                                      </TooltipTrigger>
+                                      <TooltipContent
+                                        side="top"
+                                        className="bg-gradient-to-br from-slate-50 to-white border-2 border-slate-200 shadow-xl p-4 rounded-lg"
+                                      >
+                                        <TooltipArrow className="fill-white" />
+                                        <ProductionIncomeBreakdown
+                                          privateAmt={provider.totalPrivate}
+                                          membershipAmt={provider.totalMembership}
+                                          nhsAmt={provider.totalNhs}
+                                          rawTotal={provider.totalRaw}
+                                          formatCurrency={formatCurrency}
+                                        />
+                                      </TooltipContent>
+                                    </UITooltip>
+                                  </td>
+                                </tr>
+                              ))}
                             {/* Total Row */}
                             <tr className="border-t-2 border-border bg-muted/30">
                               <td className="p-3 font-semibold">Total</td>
@@ -5275,56 +5221,57 @@ export function ProvidersManagement({
                         </thead>
                         <tbody>
                           {visibleHoursProviders.map((provider) => (
-                            <tr
-                              key={provider.providerId}
-                              className="border-b border-border hover:bg-muted/50 cursor-pointer"
-                              onClick={() =>
-                                handleProviderClick(
-                                  provider.providerId,
-                                  providerType,
-                                )
-                              }
-                            >
-                              <td className="p-3 font-medium">
-                                {provider.providerName}
-                              </td>
-                              {allProvidersHours.months.map((month) => {
-                                const hours = provider.monthlyData[month];
-                                return (
-                                  <td
-                                    key={month}
-                                    className="p-3 text-right cursor-pointer hover:bg-primary/10 hover:text-primary transition-colors"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      openWHEditDialog(month);
-                                    }}
-                                  >
-                                    {hours > 0
-                                      ? Number.isInteger(hours)
-                                        ? hours.toString()
-                                        : hours.toFixed(1)
-                                      : "-"}
-                                  </td>
-                                );
-                              })}
-                              <td className="p-3 text-right font-semibold">
-                                {provider.total > 0
-                                  ? Number.isInteger(provider.total)
-                                    ? provider.total.toString()
-                                    : provider.total.toFixed(1)
-                                  : "-"}
-                              </td>
-                            </tr>
-                          ))}
+                              <tr
+                                key={provider.providerId}
+                                className="border-b border-border hover:bg-muted/50 cursor-pointer"
+                                onClick={() =>
+                                  handleProviderClick(
+                                    provider.providerId,
+                                    providerType,
+                                  )
+                                }
+                              >
+                                <td className="p-3 font-medium">
+                                  {provider.providerName}
+                                </td>
+                                {allProvidersHours.months.map((month) => {
+                                  const hours = provider.monthlyData[month];
+                                  return (
+                                    <td
+                                      key={month}
+                                      className="p-3 text-right cursor-pointer hover:bg-primary/10 hover:text-primary transition-colors"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openWHEditDialog(month);
+                                      }}
+                                    >
+                                      {hours > 0
+                                        ? Number.isInteger(hours)
+                                          ? hours.toString()
+                                          : hours.toFixed(1)
+                                        : "-"}
+                                    </td>
+                                  );
+                                })}
+                                <td className="p-3 text-right font-semibold">
+                                  {provider.total > 0
+                                    ? Number.isInteger(provider.total)
+                                      ? provider.total.toString()
+                                      : provider.total.toFixed(1)
+                                    : "-"}
+                                </td>
+                              </tr>
+                            ))}
                           {/* Total Row */}
                           <tr className="border-t-2 border-border bg-muted/30">
                             <td className="p-3 font-semibold">Total</td>
                             {allProvidersHours.months.map((month) => {
-                              const monthTotal = visibleHoursProviders.reduce(
-                                (sum, provider) =>
-                                  sum + (provider.monthlyData[month] || 0),
-                                0,
-                              );
+                              const monthTotal =
+                                visibleHoursProviders.reduce(
+                                  (sum, provider) =>
+                                    sum + (provider.monthlyData[month] || 0),
+                                  0,
+                                );
                               return (
                                 <td
                                   key={month}
@@ -5340,10 +5287,11 @@ export function ProvidersManagement({
                             })}
                             <td className="p-3 text-right font-semibold">
                               {(() => {
-                                const grandTotal = visibleHoursProviders.reduce(
-                                  (sum, provider) => sum + provider.total,
-                                  0,
-                                );
+                                const grandTotal =
+                                  visibleHoursProviders.reduce(
+                                    (sum, provider) => sum + provider.total,
+                                    0,
+                                  );
                                 return Number.isInteger(grandTotal)
                                   ? grandTotal.toString()
                                   : grandTotal.toFixed(1);
@@ -5419,47 +5367,47 @@ export function ProvidersManagement({
                         </thead>
                         <tbody>
                           {visibleNhsCountProviders.map((provider) => (
-                            <tr
-                              key={provider.providerId}
-                              className="border-b border-border hover:bg-muted/50 cursor-pointer"
-                              onClick={() =>
-                                handleProviderClick(
-                                  provider.providerId,
-                                  providerType,
-                                )
-                              }
-                            >
-                              <td className="p-3 font-medium">
-                                {provider.providerName}
-                              </td>
-                              {nhsCountMonths.map((month) => {
-                                const count = provider.monthlyData[month];
-                                return (
-                                  <td
-                                    key={month}
-                                    className="p-3 text-right cursor-pointer hover:bg-primary/10 hover:text-primary transition-colors"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      openCountEditDialog(
-                                        month,
-                                        "uda_count",
-                                        setNhsCountRows,
-                                        setIsLoadingNhsCountDialog,
-                                        setShowNhsCountDialog,
-                                      );
-                                    }}
-                                  >
-                                    {count > 0 ? count.toString() : "-"}
-                                  </td>
-                                );
-                              })}
-                              <td className="p-3 text-right font-semibold">
-                                {provider.total > 0
-                                  ? provider.total.toString()
-                                  : "-"}
-                              </td>
-                            </tr>
-                          ))}
+                              <tr
+                                key={provider.providerId}
+                                className="border-b border-border hover:bg-muted/50 cursor-pointer"
+                                onClick={() =>
+                                  handleProviderClick(
+                                    provider.providerId,
+                                    providerType,
+                                  )
+                                }
+                              >
+                                <td className="p-3 font-medium">
+                                  {provider.providerName}
+                                </td>
+                                {nhsCountMonths.map((month) => {
+                                  const count = provider.monthlyData[month];
+                                  return (
+                                    <td
+                                      key={month}
+                                      className="p-3 text-right cursor-pointer hover:bg-primary/10 hover:text-primary transition-colors"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openCountEditDialog(
+                                          month,
+                                          "uda_count",
+                                          setNhsCountRows,
+                                          setIsLoadingNhsCountDialog,
+                                          setShowNhsCountDialog,
+                                        );
+                                      }}
+                                    >
+                                      {count > 0 ? count.toString() : "-"}
+                                    </td>
+                                  );
+                                })}
+                                <td className="p-3 text-right font-semibold">
+                                  {provider.total > 0
+                                    ? provider.total.toString()
+                                    : "-"}
+                                </td>
+                              </tr>
+                            ))}
                           <tr className="border-t-2 border-border bg-muted/30">
                             <td className="p-3 font-semibold">Total</td>
                             {nhsCountMonths.map((month) => {
@@ -5560,47 +5508,47 @@ export function ProvidersManagement({
                         </thead>
                         <tbody>
                           {visibleMosCountProviders.map((provider) => (
-                            <tr
-                              key={provider.providerId}
-                              className="border-b border-border hover:bg-muted/50 cursor-pointer"
-                              onClick={() =>
-                                handleProviderClick(
-                                  provider.providerId,
-                                  providerType,
-                                )
-                              }
-                            >
-                              <td className="p-3 font-medium">
-                                {provider.providerName}
-                              </td>
-                              {mosCountMonths.map((month) => {
-                                const count = provider.monthlyData[month];
-                                return (
-                                  <td
-                                    key={month}
-                                    className="p-3 text-right cursor-pointer hover:bg-primary/10 hover:text-primary transition-colors"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      openCountEditDialog(
-                                        month,
-                                        "mos_count",
-                                        setMosCountRows,
-                                        setIsLoadingMosCountDialog,
-                                        setShowMosCountDialog,
-                                      );
-                                    }}
-                                  >
-                                    {count > 0 ? count.toString() : "-"}
-                                  </td>
-                                );
-                              })}
-                              <td className="p-3 text-right font-semibold">
-                                {provider.total > 0
-                                  ? provider.total.toString()
-                                  : "-"}
-                              </td>
-                            </tr>
-                          ))}
+                              <tr
+                                key={provider.providerId}
+                                className="border-b border-border hover:bg-muted/50 cursor-pointer"
+                                onClick={() =>
+                                  handleProviderClick(
+                                    provider.providerId,
+                                    providerType,
+                                  )
+                                }
+                              >
+                                <td className="p-3 font-medium">
+                                  {provider.providerName}
+                                </td>
+                                {mosCountMonths.map((month) => {
+                                  const count = provider.monthlyData[month];
+                                  return (
+                                    <td
+                                      key={month}
+                                      className="p-3 text-right cursor-pointer hover:bg-primary/10 hover:text-primary transition-colors"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openCountEditDialog(
+                                          month,
+                                          "mos_count",
+                                          setMosCountRows,
+                                          setIsLoadingMosCountDialog,
+                                          setShowMosCountDialog,
+                                        );
+                                      }}
+                                    >
+                                      {count > 0 ? count.toString() : "-"}
+                                    </td>
+                                  );
+                                })}
+                                <td className="p-3 text-right font-semibold">
+                                  {provider.total > 0
+                                    ? provider.total.toString()
+                                    : "-"}
+                                </td>
+                              </tr>
+                            ))}
                           <tr className="border-t-2 border-border bg-muted/30">
                             <td className="p-3 font-semibold">Total</td>
                             {mosCountMonths.map((month) => {
@@ -5623,147 +5571,6 @@ export function ProvidersManagement({
                               {(() => {
                                 const grandTotal =
                                   visibleMosCountProviders.reduce(
-                                    (sum, provider) => sum + provider.total,
-                                    0,
-                                  );
-                                return grandTotal > 0
-                                  ? grandTotal.toString()
-                                  : "-";
-                              })()}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* UOA Count Section */}
-            <Card>
-              <CardContent className="pt-6">
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xl font-bold text-foreground">
-                      {displayProviderType} UOA Completed
-                    </h3>
-                    <div className="flex items-center gap-2">
-                      {can("providers", "add", cardKey) && (
-                        <Button
-                          className="bg-sidebar hover:bg-sidebar hover:text-sidebar-foreground text-white gap-2"
-                          onClick={() => {
-                            setUoaCountRows([{ month: "", data: {} }]);
-                            setShowUoaCountDialog(true);
-                          }}
-                        >
-                          <Plus className="w-4 h-4" />
-                          Add UOA Count
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                  <div
-                    className="overflow-x-auto"
-                    style={
-                      visibleUoaCountProviders.length > 10
-                        ? { maxHeight: "520px", overflowY: "auto" }
-                        : undefined
-                    }
-                  >
-                    {isLoadingUoaCounts ? (
-                      <div className="flex items-center justify-center py-8">
-                        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                      </div>
-                    ) : visibleUoaCountProviders.length === 0 ? (
-                      <div className="text-center text-muted-foreground py-8">
-                        No UOA count data available
-                      </div>
-                    ) : (
-                      <table className="w-full border-collapse">
-                        <thead>
-                          <tr className="bg-sidebar text-white">
-                            <th className="text-left p-3 font-semibold text-sm">
-                              Name
-                            </th>
-                            {uoaCountMonths.map((month) => (
-                              <th
-                                key={month}
-                                className="text-right p-3 font-semibold text-sm"
-                              >
-                                {month}
-                              </th>
-                            ))}
-                            <th className="text-right p-3 font-semibold text-sm">
-                              Total
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {visibleUoaCountProviders.map((provider) => (
-                            <tr
-                              key={provider.providerId}
-                              className="border-b border-border hover:bg-muted/50 cursor-pointer"
-                              onClick={() =>
-                                handleProviderClick(
-                                  provider.providerId,
-                                  providerType,
-                                )
-                              }
-                            >
-                              <td className="p-3 font-medium">
-                                {provider.providerName}
-                              </td>
-                              {uoaCountMonths.map((month) => {
-                                const count = provider.monthlyData[month];
-                                return (
-                                  <td
-                                    key={month}
-                                    className="p-3 text-right cursor-pointer hover:bg-primary/10 hover:text-primary transition-colors"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      openCountEditDialog(
-                                        month,
-                                        "uoa_count",
-                                        setUoaCountRows,
-                                        setIsLoadingUoaCountDialog,
-                                        setShowUoaCountDialog,
-                                      );
-                                    }}
-                                  >
-                                    {count > 0 ? count.toString() : "-"}
-                                  </td>
-                                );
-                              })}
-                              <td className="p-3 text-right font-semibold">
-                                {provider.total > 0
-                                  ? provider.total.toString()
-                                  : "-"}
-                              </td>
-                            </tr>
-                          ))}
-                          <tr className="border-t-2 border-border bg-muted/30">
-                            <td className="p-3 font-semibold">Total</td>
-                            {uoaCountMonths.map((month) => {
-                              const monthTotal =
-                                visibleUoaCountProviders.reduce(
-                                  (sum, provider) =>
-                                    sum + (provider.monthlyData[month] || 0),
-                                  0,
-                                );
-                              return (
-                                <td
-                                  key={month}
-                                  className="p-3 text-right font-semibold"
-                                >
-                                  {monthTotal > 0 ? monthTotal.toString() : "-"}
-                                </td>
-                              );
-                            })}
-                            <td className="p-3 text-right font-semibold">
-                              {(() => {
-                                const grandTotal =
-                                  visibleUoaCountProviders.reduce(
                                     (sum, provider) => sum + provider.total,
                                     0,
                                   );
@@ -6337,12 +6144,12 @@ export function ProvidersManagement({
                                         <thead>
                                           <tr>
                                             <th className="px-3 pt-2 pb-1 text-xs font-normal text-muted-foreground text-center">
-                                              {displayProviderType}
+                                              Associate
                                               <br />
                                               Net Pay
                                             </th>
                                             <th className="px-3 pt-2 pb-1 text-xs font-normal text-muted-foreground text-center">
-                                              {displayProviderType} Split
+                                              Associate Split
                                               <br />
                                               (%)
                                             </th>
@@ -6352,7 +6159,7 @@ export function ProvidersManagement({
                                               of Labs
                                             </th>
                                             <th className="px-3 pt-2 pb-1 text-xs font-normal text-muted-foreground text-center">
-                                              {displayProviderType} Lab Split
+                                              Associate Lab Split
                                               <br />
                                               (%)
                                             </th>
@@ -6478,7 +6285,7 @@ export function ProvidersManagement({
                       <tbody>
                         {(() => {
                           // Filter records to only show current provider type
-                          const filteredProviderIds = profitGoalsProviders.map(
+                          const filteredProviderIds = filteredProviders.map(
                             (p) => p.id,
                           );
                           const filteredRecords = allSavedPlannedRecords.filter(
@@ -6686,13 +6493,9 @@ export function ProvidersManagement({
                           `${days(workingDays)} days`,
                           "bg-slate-100",
                         ],
+                        ["Associate Split %", pct(assocSplit), "bg-slate-100"],
                         [
-                          `${displayProviderType} Split %`,
-                          pct(assocSplit),
-                          "bg-slate-100",
-                        ],
-                        [
-                          `${displayProviderType} Lab Split %`,
+                          "Associate Lab Split %",
                           pct(assocLabSplit),
                           "bg-slate-100",
                         ],
@@ -6808,7 +6611,7 @@ export function ProvidersManagement({
                     </div>
                     <div className="bg-amber-100 rounded-lg p-2.5 border border-amber-300">
                       <div className="font-medium text-slate-700 mb-1">
-                        ★ {displayProviderType} Net Pay
+                        ★ Associate Net Pay
                       </div>
                       <div className="text-slate-400 font-mono">
                         Gross Share − Lab Deduction
@@ -7388,28 +7191,20 @@ export function ProvidersManagement({
                             <DatePicker
                               picker="month"
                               value={row.month ? dayjs(row.month) : null}
-                              onChange={(date) => {
-                                const monthValue = date
-                                  ? date.format("YYYY-MM")
-                                  : "";
+                              onChange={(date) =>
                                 setNhsCountRows((prev) =>
                                   prev.map((r, i) =>
-                                    i === rowIdx ? { ...r, month: monthValue } : r,
+                                    i === rowIdx
+                                      ? {
+                                          ...r,
+                                          month: date
+                                            ? date.format("YYYY-MM")
+                                            : "",
+                                        }
+                                      : r,
                                   ),
-                                );
-                                if (monthValue) {
-                                  loadCountDataForMonth(
-                                    monthValue,
-                                    "uda_count",
-                                  ).then((rowData) =>
-                                    setNhsCountRows((prev) =>
-                                      prev.map((r, i) =>
-                                        i === rowIdx ? { ...r, data: rowData } : r,
-                                      ),
-                                    ),
-                                  );
-                                }
-                              }}
+                                )
+                              }
                               format="MMM YYYY"
                               style={{ width: "100%", height: "34px" }}
                               placeholder="Select month"
@@ -7578,28 +7373,20 @@ export function ProvidersManagement({
                             <DatePicker
                               picker="month"
                               value={row.month ? dayjs(row.month) : null}
-                              onChange={(date) => {
-                                const monthValue = date
-                                  ? date.format("YYYY-MM")
-                                  : "";
+                              onChange={(date) =>
                                 setMosCountRows((prev) =>
                                   prev.map((r, i) =>
-                                    i === rowIdx ? { ...r, month: monthValue } : r,
+                                    i === rowIdx
+                                      ? {
+                                          ...r,
+                                          month: date
+                                            ? date.format("YYYY-MM")
+                                            : "",
+                                        }
+                                      : r,
                                   ),
-                                );
-                                if (monthValue) {
-                                  loadCountDataForMonth(
-                                    monthValue,
-                                    "mos_count",
-                                  ).then((rowData) =>
-                                    setMosCountRows((prev) =>
-                                      prev.map((r, i) =>
-                                        i === rowIdx ? { ...r, data: rowData } : r,
-                                      ),
-                                    ),
-                                  );
-                                }
-                              }}
+                                )
+                              }
                               format="MMM YYYY"
                               style={{ width: "100%", height: "34px" }}
                               placeholder="Select month"
@@ -7674,196 +7461,6 @@ export function ProvidersManagement({
                   setShowMosCountDialog,
                   setMosCountRows,
                   "MOS count saved successfully.",
-                )
-              }
-            >
-              Save
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showUoaCountDialog} onOpenChange={setShowUoaCountDialog}>
-        <DialogContent className="sm:max-w-[90vw] max-h-[90vh] flex flex-col gap-0 p-0">
-          <DialogHeader className="flex-shrink-0 px-6 pt-6 pb-4 border-b">
-            <DialogTitle className="text-lg font-semibold">
-              Associates UOA Count
-            </DialogTitle>
-          </DialogHeader>
-          <div className="flex-1 overflow-auto">
-            {isLoadingUoaCountDialog ? (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-              </div>
-            ) : (
-              !isLoadingUoaCountDialog &&
-              (() => {
-                const associates = whDialogAssociates;
-                const updateCell = (
-                  rowIdx: number,
-                  pid: string,
-                  value: string,
-                ) => {
-                  setUoaCountRows((prev) =>
-                    prev.map((row, i) =>
-                      i !== rowIdx
-                        ? row
-                        : {
-                            ...row,
-                            data: { ...row.data, [pid]: { count: value } },
-                          },
-                    ),
-                  );
-                };
-                const addRow = () =>
-                  setUoaCountRows((prev) => [...prev, { month: "", data: {} }]);
-                const removeRow = (idx: number) =>
-                  setUoaCountRows((prev) =>
-                    prev.length === 1
-                      ? [{ month: "", data: {} }]
-                      : prev.filter((_, i) => i !== idx),
-                  );
-                return (
-                  <table
-                    className="border-collapse text-sm"
-                    style={{
-                      minWidth: `${180 + associates.length * 120 + 80}px`,
-                    }}
-                  >
-                    <thead className="sticky top-0 z-10">
-                      <tr>
-                        <th
-                          className="sticky left-0 z-20 border border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide whitespace-nowrap w-[160px] min-w-[160px]"
-                          style={{ background: "hsl(var(--muted))" }}
-                        >
-                          Month
-                        </th>
-                        {associates.map((p: any) => (
-                          <th
-                            key={p.id}
-                            className="border border-border px-3 py-3 text-center text-sm font-semibold whitespace-nowrap"
-                            style={{ background: "hsl(var(--muted))" }}
-                          >
-                            {p.name}
-                          </th>
-                        ))}
-                        <th
-                          className="border border-border px-3 py-3 text-center text-xs font-semibold uppercase tracking-wide whitespace-nowrap w-[80px]"
-                          style={{ background: "hsl(var(--muted))" }}
-                        >
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {uoaCountRows.map((row, rowIdx) => (
-                        <tr
-                          key={rowIdx}
-                          className="group hover:bg-muted/20 transition-colors"
-                        >
-                          <td
-                            className="sticky left-0 z-10 border border-border px-3 py-2"
-                            style={{ background: "hsl(var(--background))" }}
-                          >
-                            <DatePicker
-                              picker="month"
-                              value={row.month ? dayjs(row.month) : null}
-                              onChange={(date) => {
-                                const monthValue = date
-                                  ? date.format("YYYY-MM")
-                                  : "";
-                                setUoaCountRows((prev) =>
-                                  prev.map((r, i) =>
-                                    i === rowIdx ? { ...r, month: monthValue } : r,
-                                  ),
-                                );
-                                if (monthValue) {
-                                  loadCountDataForMonth(
-                                    monthValue,
-                                    "uoa_count",
-                                  ).then((rowData) =>
-                                    setUoaCountRows((prev) =>
-                                      prev.map((r, i) =>
-                                        i === rowIdx ? { ...r, data: rowData } : r,
-                                      ),
-                                    ),
-                                  );
-                                }
-                              }}
-                              format="MMM YYYY"
-                              style={{ width: "100%", height: "34px" }}
-                              placeholder="Select month"
-                            />
-                          </td>
-                          {associates.map((p: any) => {
-                            const pid = p.id;
-                            const cell = row.data[pid] ?? { count: "" };
-                            return (
-                              <td
-                                key={pid}
-                                className="border border-border px-2 py-2"
-                              >
-                                <input
-                                  type="number"
-                                  placeholder="0"
-                                  value={cell.count}
-                                  onChange={(e) =>
-                                    updateCell(rowIdx, pid, e.target.value)
-                                  }
-                                  className="h-8 w-full min-w-[90px] rounded-md border border-input bg-background px-2 text-sm text-center focus:outline-none focus:ring-1 focus:ring-ring"
-                                />
-                              </td>
-                            );
-                          })}
-                          <td className="border border-border px-2 py-2">
-                            <div className="flex items-center justify-center gap-1">
-                              <button
-                                type="button"
-                                onClick={addRow}
-                                className="w-7 h-7 rounded-full bg-primary text-white flex items-center justify-center hover:bg-primary/80 transition-colors shadow-sm"
-                                title="Add row"
-                              >
-                                <Plus className="w-3.5 h-3.5" />
-                              </button>
-                              {uoaCountRows.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => removeRow(rowIdx)}
-                                  className="w-7 h-7 rounded-full bg-destructive text-white flex items-center justify-center hover:bg-destructive/80 transition-colors shadow-sm"
-                                  title="Remove row"
-                                >
-                                  <Minus className="w-3.5 h-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                );
-              })()
-            )}
-          </div>
-          <div className="flex justify-end gap-3 px-6 py-4 border-t flex-shrink-0">
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowUoaCountDialog(false);
-                setUoaCountRows([{ month: "", data: {} }]);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              className="bg-sidebar hover:bg-sidebar/90 text-white px-8"
-              onClick={() =>
-                saveCountRows(
-                  uoaCountRows,
-                  "uoa_count",
-                  setShowUoaCountDialog,
-                  setUoaCountRows,
-                  "UOA count saved successfully.",
                 )
               }
             >
@@ -8122,7 +7719,7 @@ export function ProvidersManagement({
             {/* Row 1: Periodic Profit */}
             <div>
               <p className="text-xs text-muted-foreground mb-2 font-medium uppercase tracking-wide">
-                Periodic Profit (same as Profit Goals Settings)
+                Periodic Profit
               </p>
               <div className="flex items-center gap-2">
                 <div className="flex-1 bg-muted rounded-lg p-3 text-center">
@@ -8130,16 +7727,16 @@ export function ProvidersManagement({
                     Production
                   </p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Net production for period
+                    TPI total for period
                   </p>
                 </div>
                 <span className="text-muted-foreground font-bold">−</span>
                 <div className="flex-1 bg-muted rounded-lg p-3 text-center">
                   <p className="font-semibold text-xs text-foreground">
-                    Net Pay + Labs + Materials + OCPSPA
+                    Associate Pay
                   </p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Net Pay = (Prod × Split %) − (Labs × Lab Split %)
+                    Production × Split %
                   </p>
                 </div>
                 <span className="text-muted-foreground font-bold">=</span>
@@ -8147,7 +7744,9 @@ export function ProvidersManagement({
                   <p className="font-semibold text-xs text-blue-800">
                     Periodic Profit
                   </p>
-                  <p className="text-xs text-blue-600 mt-0.5">Practice P/L</p>
+                  <p className="text-xs text-blue-600 mt-0.5">
+                    Practice keeps this
+                  </p>
                 </div>
               </div>
             </div>
@@ -8192,16 +7791,18 @@ export function ProvidersManagement({
             </div>
             {/* Example */}
             {(() => {
-              const source =
-                overviewProfitPeriodMatchesGoals && providersMetrics.length > 0
-                  ? providersMetrics
-                  : overviewProfitRows;
-              const ex = profitMetrics[0];
-              const exRow =
-                source.find((r) => r.provider.name === ex?.provider_name) ??
-                source.find((r) => r.totalProduction > 0) ??
-                source[0];
-              if (!ex || !exRow) return null;
+              const ex = (profitMetrics || [])[0];
+              if (!ex) return null;
+              const exNetProd =
+                overviewNetProductionMap.get(ex.provider_name.toLowerCase()) ??
+                (productionMetrics || []).find(
+                  (p) => p.provider_name === ex.provider_name,
+                )?.production_amount ??
+                0;
+              const exDays =
+                Number(ex.pl_per_day) !== 0
+                  ? Math.abs(Number(ex.periodic_profit) / Number(ex.pl_per_day))
+                  : 0;
               return (
                 <div className="bg-muted/50 border rounded-lg p-3">
                   <p className="text-xs font-semibold text-foreground mb-2">
@@ -8210,24 +7811,28 @@ export function ProvidersManagement({
                   <div className="grid grid-cols-3 gap-2 text-xs">
                     <div className="bg-background rounded p-2 text-center">
                       <p className="text-muted-foreground">
-                        {formatCurrency(exRow.totalProduction)} production
+                        £
+                        {exNetProd.toLocaleString("en-GB", {
+                          maximumFractionDigits: 0,
+                        })}{" "}
+                        production
                       </p>
                       <p className="font-bold text-foreground">
-                        Profit = {formatCurrency(ex.periodic_profit)}
+                        Profit = {formatCurrency(Number(ex.periodic_profit))}
                       </p>
                     </div>
                     <div className="bg-background rounded p-2 text-center">
                       <p className="text-muted-foreground">
-                        ÷ {exRow.workingDays.toFixed(1)} days
+                        ÷ {exDays.toFixed(1)} days
                       </p>
                       <p className="font-bold text-foreground">
-                        P/L Day = {formatCurrency(ex.pl_per_day)}
+                        P/L Day = {formatCurrency(Number(ex.pl_per_day))}
                       </p>
                     </div>
                     <div className="bg-blue-100 rounded p-2 text-center">
                       <p className="text-blue-600">÷ production × 100</p>
                       <p className="font-bold text-blue-800">
-                        Profit % = {ex.profit_percent.toFixed(2)}%
+                        Profit % = {Number(ex.profit_percent).toFixed(2)}%
                       </p>
                     </div>
                   </div>
@@ -8247,7 +7852,7 @@ export function ProvidersManagement({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
               <Info className="w-4 h-4 text-blue-500" />
-              How {displayProviderType} Performance is Calculated
+              How Associate Performance is Calculated
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 text-sm">

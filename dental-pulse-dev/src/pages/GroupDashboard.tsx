@@ -1,7 +1,5 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Helmet } from "react-helmet-async";
-import { Link } from "react-router-dom";
-import { Lock } from "lucide-react";
 import { MainLayout } from "@/components/layout/MainLayout";
 import {
   Tooltip,
@@ -691,9 +689,9 @@ export default function GroupDashboard() {
       costs: round2(vm.costs),
       marginPct: round2(vm.opMargin ?? vm.margin),
       netCashFlow: round2(vm.safeToDraw),
-      estimatedValueMid: vm.valuationAllowed
-        ? round2(vm.groupValue?.enterpriseValue ?? vm.estValue?.mid ?? null)
-        : null,
+      estimatedValueMid: round2(
+        vm.groupValue?.enterpriseValue ?? vm.estValue?.mid ?? null,
+      ),
     },
     sites: vm.sites.map((s) => ({
       name: s.name,
@@ -926,80 +924,64 @@ export default function GroupDashboard() {
                 </div>
               </div>
 
-              {vm.valuationAllowed ? (
-                <div className="card tile">
-                  <div
-                    className={`rag ${vm.groupValue || vm.estValue ? "g" : "a"}`}
-                  />
-                  <div className="tlabel">
-                    Estimated group value
-                    <InfoTip>
-                      <div className="text-xs leading-relaxed">
-                        {vm.groupValue
-                          ? `EBITDA × your final multiple (${Math.round(vm.groupValue.multiple)}×) — the same enterprise value as the EBITDA Impact tab.`
-                          : "Indicative range: operating profit annualised × a typical dental sector multiple (4.5–6.5×). Not a formal valuation."}
-                      </div>
-                    </InfoTip>
-                  </div>
-                  {vm.valueLoading && !vm.groupValue ? (
-                    <div className="tval">…</div>
-                  ) : vm.groupValue ? (
-                    <TileValue v={vm.groupValue.enterpriseValue} />
-                  ) : vm.estValue ? (
-                    <div className="tval">
-                      {fmtCompactWhole(vm.estValue.low)}–
-                      {fmtCompactWhole(vm.estValue.high).replace(/^£/, "")}
+              <div className="card tile">
+                <div
+                  className={`rag ${vm.groupValue || vm.estValue ? "g" : "a"}`}
+                />
+                <div className="tlabel">
+                  Estimated group value
+                  <InfoTip>
+                    <div className="text-xs leading-relaxed">
+                      {vm.groupValue
+                        ? `EBITDA × your final multiple (${Math.round(vm.groupValue.multiple)}×) — the same enterprise value as the EBITDA Impact tab.`
+                        : "Indicative range: operating profit annualised × a typical dental sector multiple (4.5–6.5×). Not a formal valuation."}
                     </div>
+                  </InfoTip>
+                </div>
+                {vm.valueLoading && !vm.groupValue ? (
+                  <div className="tval">…</div>
+                ) : vm.groupValue ? (
+                  <TileValue v={vm.groupValue.enterpriseValue} />
+                ) : vm.estValue ? (
+                  <div className="tval">
+                    {fmtCompactWhole(vm.estValue.low)}–
+                    {fmtCompactWhole(vm.estValue.high).replace(/^£/, "")}
+                  </div>
+                ) : (
+                  <div className="tval">—</div>
+                )}
+                <div className="tmeta">
+                  {vm.groupValue ? (
+                    <>
+                      <span className="pill ind">EBITDA Impact</span>{" "}
+                      {fmtCompactWhole(vm.groupValue.ebitda)} EBITDA ×{" "}
+                      {Math.round(vm.groupValue.multiple)}×
+                    </>
                   ) : (
-                    <div className="tval">—</div>
+                    <>
+                      <span className="pill ind">Indicative</span>{" "}
+                      {vm.estValue
+                        ? `mid ${fmtCompactWhole(vm.estValue.mid)}`
+                        : "needs a positive profit"}
+                    </>
                   )}
-                  <div className="tmeta">
-                    {vm.groupValue ? (
-                      <>
-                        <span className="pill ind">EBITDA Impact</span>{" "}
-                        {fmtCompactWhole(vm.groupValue.ebitda)} EBITDA ×{" "}
-                        {Math.round(vm.groupValue.multiple)}×
-                      </>
-                    ) : (
-                      <>
-                        <span className="pill ind">Indicative</span>{" "}
-                        {vm.estValue
-                          ? `mid ${fmtCompactWhole(vm.estValue.mid)}`
-                          : "needs a positive profit"}
-                      </>
+                </div>
+                <div className="meter">
+                  <div className="mtrack">
+                    <div className="mfill band" style={{ width: "100%" }} />
+                    {(vm.groupValue || vm.estValue) && (
+                      <div className="tick" style={{ left: "55%" }} />
                     )}
                   </div>
-                  <div className="meter">
-                    <div className="mtrack">
-                      <div className="mfill band" style={{ width: "100%" }} />
-                      {(vm.groupValue || vm.estValue) && (
-                        <div className="tick" style={{ left: "55%" }} />
-                      )}
-                    </div>
-                    <div className="mcap">
-                      {vm.groupValue
-                        ? `enterprise value · equity ${fmtCompactWhole(vm.groupValue.equityValue)} after net debt`
-                        : vm.estValue
-                          ? `range ${fmtCompactWhole(vm.estValue.low)} – ${fmtCompactWhole(vm.estValue.high)} · profit × 4.5–6.5`
-                          : "profit × sector multiple"}
-                    </div>
+                  <div className="mcap">
+                    {vm.groupValue
+                      ? `enterprise value · equity ${fmtCompactWhole(vm.groupValue.equityValue)} after net debt`
+                      : vm.estValue
+                        ? `range ${fmtCompactWhole(vm.estValue.low)} – ${fmtCompactWhole(vm.estValue.high)} · profit × 4.5–6.5`
+                        : "profit × sector multiple"}
                   </div>
                 </div>
-              ) : (
-                <div className="card tile">
-                  <div className="tlabel">Estimated group value</div>
-                  <div className="tval locked">
-                    <Lock className="w-4 h-4" />
-                  </div>
-                  <div className="tmeta">
-                    <span className="pill ind">Accelerate</span> Business
-                    Valuation isn't included in your current plan.
-                  </div>
-                  <Link to="/organization" className="locked-link">
-                    Upgrade Plan →
-                  </Link>
-                </div>
-              )}
+              </div>
             </div>
           </section>
 
@@ -1227,73 +1209,53 @@ export default function GroupDashboard() {
 
                 <div className="stage">
                   <div className="sname">Owner wealth</div>
-                  {vm.valuationAllowed ? (
-                    <>
-                      <div className="sval">
-                        {equityValue != null ? fmtCompact(equityValue) : "—"}
-                      </div>
-                      <div className="sdelta">
-                        <span className="smuted">
-                          {vm.groupValue
-                            ? "EBITDA valuation · equity"
-                            : "indicative · profit × sector multiple"}
-                        </span>
-                      </div>
-                      <div className="bars">
-                        {(() => {
-                          const t = pulseTargets.draw;
-                          const d = Math.max(0, vm.safeToDraw ?? 0);
-                          const max = Math.max(d, t ?? 0, 1);
-                          return (
-                            <>
-                              <div className="barrow">
-                                <span>Draw MTD</span>
-                                <div className="track">
-                                  <div
-                                    className="fill actual"
-                                    style={{ width: pctW((d / max) * 100) }}
-                                  />
-                                </div>
-                                <span className="bval">
-                                  {vm.safeToDraw != null
-                                    ? fmtCompact(vm.safeToDraw)
-                                    : "—"}
-                                </span>
-                              </div>
-                              <div className="barrow">
-                                <span>Target</span>
-                                <div className="track">
-                                  <div
-                                    className="fill target"
-                                    style={{
-                                      width: pctW(((t ?? 0) / max) * 100),
-                                    }}
-                                  />
-                                </div>
-                                <span className="bval">
-                                  {t != null ? fmtCompact(t) : "—"}
-                                </span>
-                              </div>
-                            </>
-                          );
-                        })()}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="sval locked">
-                        <Lock className="w-4 h-4" />
-                      </div>
-                      <div className="sdelta">
-                        <span className="smuted">
-                          Business Valuation — Accelerate plan
-                        </span>
-                      </div>
-                      <Link to="/organization" className="locked-link">
-                        Upgrade Plan →
-                      </Link>
-                    </>
-                  )}
+                  <div className="sval">
+                    {equityValue != null ? fmtCompact(equityValue) : "—"}
+                  </div>
+                  <div className="sdelta">
+                    <span className="smuted">
+                      {vm.groupValue
+                        ? "EBITDA valuation · equity"
+                        : "indicative · profit × sector multiple"}
+                    </span>
+                  </div>
+                  <div className="bars">
+                    {(() => {
+                      const t = pulseTargets.draw;
+                      const d = Math.max(0, vm.safeToDraw ?? 0);
+                      const max = Math.max(d, t ?? 0, 1);
+                      return (
+                        <>
+                          <div className="barrow">
+                            <span>Draw MTD</span>
+                            <div className="track">
+                              <div
+                                className="fill actual"
+                                style={{ width: pctW((d / max) * 100) }}
+                              />
+                            </div>
+                            <span className="bval">
+                              {vm.safeToDraw != null
+                                ? fmtCompact(vm.safeToDraw)
+                                : "—"}
+                            </span>
+                          </div>
+                          <div className="barrow">
+                            <span>Target</span>
+                            <div className="track">
+                              <div
+                                className="fill target"
+                                style={{ width: pctW(((t ?? 0) / max) * 100) }}
+                              />
+                            </div>
+                            <span className="bval">
+                              {t != null ? fmtCompact(t) : "—"}
+                            </span>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
                 </div>
               </div>
               {vm.verdict && (
@@ -1455,7 +1417,6 @@ export default function GroupDashboard() {
           </section>
 
           {/* ZONE 3 — OPERATIONAL EFFICIENCY · SITE LEAGUE */}
-          {vm.operationalEfficiencyAllowed && (
           <section>
             <div className="sec-head">
               <h2>Operational Efficiency</h2>
@@ -1712,7 +1673,6 @@ export default function GroupDashboard() {
               </div>
             )}
           </section>
-          )}
 
           {/* ZONE 3a — STAFFING & CAPACITY */}
           {staffing.rows.length > 0 && (

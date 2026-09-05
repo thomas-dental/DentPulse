@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DentPulse Enterprise, Patient Economics Engine (Mockup)</title>
+<style>
+:root{
+  --background:210 20% 98%;--foreground:246 79% 20%;--card:0 0% 100%;
+  --primary:246 79% 62%;--secondary:246 79% 88%;--muted:246 79% 93%;--muted-foreground:246 30% 55%;
+  --success:145 50% 42%;--success-muted:145 50% 94%;--warning:38 92% 45%;--warning-muted:45 93% 94%;
+  --danger:0 72% 55%;--danger-muted:0 72% 96%;--border:246 40% 90%;--ring:246 79% 62%;
+  --sidebar-bg:246 79% 62%;--sidebar-border:246 79% 54%;--sidebar-ring:246 79% 78%;
+  --chart-1:246 79% 62%;--chart-2:145 50% 46%;--chart-3:38 92% 52%;--chart-4:0 72% 62%;--chart-5:200 75% 50%;
+  --shadow-sm:0 1px 2px 0 hsl(220 25% 14% / .06);
+  --shadow-md:0 4px 6px -1px hsl(220 25% 14% / .09),0 2px 4px -2px hsl(220 25% 14% / .06);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px}
+body{background:hsl(var(--background));color:hsl(var(--foreground));-webkit-font-smoothing:antialiased}
+.app{display:flex;min-height:100vh}
+.sidebar{width:17.5rem;background:hsl(var(--sidebar-bg));color:#fff;position:fixed;left:0;top:0;height:100vh;display:flex;flex-direction:column;z-index:50}
+.main{margin-left:17.5rem;flex:1;min-width:0}
+.topbar{height:64px;background:hsl(var(--card));border-bottom:1px solid hsl(var(--border));position:sticky;top:0;z-index:40;display:flex;align-items:center;justify-content:space-between;padding:0 24px}
+.content{padding:24px 28px 60px;max-width:1460px}
+.sb-logo{height:64px;display:flex;align-items:center;gap:10px;padding:0 20px;border-bottom:1px solid hsl(var(--sidebar-border))}
+.sb-logo .mark{width:34px;height:34px;border-radius:9px;background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;color:hsl(var(--primary));font-size:18px}
+.sb-logo .txt{font-weight:700;font-size:16px;letter-spacing:-.01em}
+.sb-logo .txt small{display:block;font-weight:500;font-size:10.5px;opacity:.8;letter-spacing:.06em;text-transform:uppercase}
+.sb-nav{flex:1;overflow-y:auto;padding:14px 12px}
+.sb-nav::-webkit-scrollbar{width:6px}.sb-nav::-webkit-scrollbar-thumb{background:hsl(0 0% 100% / .25);border-radius:3px}
+.sb-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:9px;font-size:13.5px;color:hsl(0 0% 100% / .82);border-left:3px solid transparent;cursor:pointer;transition:.15s}
+.sb-item:hover{background:hsl(0 0% 100% / .1);color:#fff}
+.sb-item.active{background:hsl(0 0% 100% / .16);color:#fff;font-weight:600;border-left-color:hsl(var(--sidebar-ring));box-shadow:var(--shadow-sm)}
+.sb-item .ico{width:18px;height:18px;flex-shrink:0}.sb-item .chev{margin-left:auto;width:15px;height:15px}
+.sb-sub{margin:4px 0 6px 14px;padding-left:6px;border-left:1px solid hsl(0 0% 100% / .18);display:flex;flex-direction:column;gap:2px}
+.sb-sub a{font-size:12.5px;color:hsl(0 0% 100% / .72);padding:6px 10px 6px 18px;border-radius:7px;cursor:pointer;border-left:3px solid transparent;margin-left:-9px}
+.sb-sub a:hover{background:hsl(0 0% 100% / .1);color:#fff}
+.sb-sub a.active{background:hsl(0 0% 100% / .16);color:#fff;font-weight:600;border-left-color:hsl(var(--sidebar-ring))}
+.sb-collapse{padding:12px;border-top:1px solid hsl(var(--sidebar-border));font-size:13px;color:hsl(0 0% 100% / .82);display:flex;align-items:center;gap:8px}
+.tb-left{display:flex;align-items:center;gap:10px}
+.pill-btn{height:36px;display:inline-flex;align-items:center;gap:7px;padding:0 12px;border:1px solid hsl(var(--border));border-radius:8px;background:#fff;font-size:13px;cursor:pointer}
+.pill-btn .k{color:hsl(var(--muted-foreground))}.pill-btn .v{font-weight:600}
+.tb-search{flex:1;max-width:360px;margin:0 24px;position:relative}
+.tb-search input{width:100%;height:36px;border:none;background:hsl(var(--secondary));border-radius:8px;padding:0 12px 0 34px;font-size:13px}
+.tb-search .si{position:absolute;left:11px;top:9px;opacity:.5}
+.tb-right{display:flex;align-items:center;gap:10px}
+.sync-chip{height:36px;display:inline-flex;align-items:center;gap:7px;padding:0 11px;border-radius:8px;background:hsl(var(--success-muted));color:hsl(var(--success));font-size:12.5px;font-weight:600}
+.sync-chip .d{width:8px;height:8px;border-radius:50%;background:hsl(var(--success))}
+.icon-btn{width:36px;height:36px;border-radius:8px;border:1px solid hsl(var(--border));background:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;position:relative;color:hsl(var(--muted-foreground))}
+.icon-btn .dot{position:absolute;top:6px;right:7px;width:7px;height:7px;border-radius:50%;background:hsl(var(--danger));border:1.5px solid #fff}
+.avatar{width:30px;height:30px;border-radius:50%;background:hsl(var(--primary));color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.user-chip{height:36px;display:inline-flex;align-items:center;gap:8px;padding:0 8px 0 6px;border-radius:8px;cursor:pointer}
+.user-chip .nm{font-size:13px;font-weight:600}
+.page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px}
+.page-head h1{font-size:24px;font-weight:800;letter-spacing:-.02em}
+.page-head p{color:hsl(var(--muted-foreground));font-size:14px;margin-top:3px}
+.head-actions{display:flex;gap:8px}
+.btn{height:36px;display:inline-flex;align-items:center;gap:7px;padding:0 14px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid transparent}
+.btn-primary{background:hsl(var(--primary));color:#fff}
+.btn-outline{background:#fff;border-color:hsl(var(--border));color:hsl(var(--foreground))}
+.btn-outline:hover{background:hsl(var(--muted))}
+.ctx-banner{display:flex;align-items:center;gap:10px;background:linear-gradient(90deg,hsl(var(--primary)/.08),hsl(var(--primary)/.02));border:1px solid hsl(var(--primary)/.18);border-radius:10px;padding:10px 14px;margin-bottom:18px;font-size:13px}
+.ctx-banner b{color:hsl(var(--primary))}
+.tabs{display:flex;flex-wrap:wrap;gap:4px;background:hsl(var(--muted));padding:4px;border-radius:10px;margin-bottom:20px}
+.tab{padding:8px 13px;border-radius:7px;font-size:13px;font-weight:600;color:hsl(var(--muted-foreground));cursor:pointer;border:none;background:transparent}
+.tab:hover{color:hsl(var(--foreground))}
+.tab.active{background:#fff;color:hsl(var(--primary));box-shadow:var(--shadow-sm)}
+.panel{display:none;animation:fade .3s ease}.panel.active{display:block}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.card{background:#fff;border:1px solid hsl(var(--border));border-radius:14px;box-shadow:var(--shadow-sm)}
+.card-p{padding:18px 20px}
+.card h3.ct{font-size:15px;font-weight:700}.card .cs{font-size:12.5px;color:hsl(var(--muted-foreground));margin-top:2px}
+.grid{display:grid;gap:16px}.g5{grid-template-columns:repeat(5,1fr)}.g4{grid-template-columns:repeat(4,1fr)}.g3{grid-template-columns:repeat(3,1fr)}.g2{grid-template-columns:repeat(2,1fr)}
+.section-label{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:hsl(var(--primary));margin:26px 0 12px}
+@media(max-width:1200px){.g5,.g4{grid-template-columns:repeat(2,1fr)}.g3,.g2{grid-template-columns:1fr}}
+/* hero economic tile */
+.hero{background:#fff;border:1px solid hsl(var(--border));border-radius:14px;padding:16px 16px 15px;box-shadow:var(--shadow-sm);position:relative;overflow:hidden}
+.hero:before{content:"";position:absolute;top:0;left:0;width:100%;height:3px;background:hsl(var(--primary))}
+.hero.risk:before{background:hsl(var(--danger))}.hero.opp:before{background:hsl(var(--chart-5))}.hero.conv:before{background:hsl(var(--warning))}.hero.qual:before{background:hsl(var(--success))}
+.hero .q{font-size:11px;font-weight:600;color:hsl(var(--muted-foreground));text-transform:uppercase;letter-spacing:.04em;margin-bottom:9px;min-height:26px}
+.hero .val{font-size:28px;font-weight:800;letter-spacing:-.02em;line-height:1}
+.hero .sub{font-size:11.5px;color:hsl(var(--muted-foreground));margin-top:7px;line-height:1.5}
+.delta{font-weight:700}.delta.up{color:hsl(var(--success))}.delta.down{color:hsl(var(--danger))}
+/* confidence chip */
+.conf{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;padding:2px 7px;border-radius:999px;border:1px solid}
+.conf.actual{color:hsl(var(--success));border-color:hsl(var(--success)/.3);background:hsl(var(--success-muted))}
+.conf.mapped{color:hsl(var(--chart-5));border-color:hsl(var(--chart-5)/.3);background:hsl(var(--chart-5)/.08)}
+.conf.est{color:hsl(var(--warning));border-color:hsl(var(--warning)/.3);background:hsl(var(--warning-muted))}
+.conf.dentally{color:hsl(var(--success));border-color:hsl(var(--success)/.3);background:hsl(var(--success-muted))}
+.conf.derived{color:hsl(var(--chart-5));border-color:hsl(var(--chart-5)/.3);background:hsl(var(--chart-5)/.08)}
+.conf.modelled{color:hsl(var(--warning));border-color:hsl(var(--warning)/.3);background:hsl(var(--warning-muted))}
+.conf.external{color:hsl(var(--primary));border-color:hsl(var(--primary)/.3);background:hsl(var(--primary)/.08)}
+.conf .cdot{width:6px;height:6px;border-radius:50%;background:currentColor}
+/* actions strip */
+.actions-wrap{background:linear-gradient(120deg,hsl(var(--primary)/.1),hsl(var(--primary)/.03));border:1px solid hsl(var(--primary)/.25);border-radius:14px;padding:18px 20px}
+.actions-wrap .hd{font-size:15px;font-weight:800;color:hsl(var(--foreground))}
+.actions-wrap .hd b{color:hsl(var(--primary))}
+.act-card{background:#fff;border:1px solid hsl(var(--border));border-radius:11px;padding:14px}
+.act-card .pr{font-size:10.5px;font-weight:700;color:hsl(var(--primary));text-transform:uppercase;letter-spacing:.05em}
+.act-card .ti{font-size:13.5px;font-weight:700;margin:5px 0 3px}
+.act-card .ds{font-size:12px;color:hsl(var(--muted-foreground));line-height:1.5}
+.act-card .amt{font-size:19px;font-weight:800;color:hsl(var(--primary));margin-top:8px}
+.badge{padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:4px}
+.badge.suc{background:hsl(var(--success-muted));color:hsl(var(--success))}.badge.warn{background:hsl(var(--warning-muted));color:hsl(var(--warning))}
+.badge.dng{background:hsl(var(--danger-muted));color:hsl(var(--danger))}.badge.neu{background:hsl(var(--muted));color:hsl(var(--muted-foreground))}.badge.pri{background:hsl(var(--primary)/.12);color:hsl(var(--primary))}
+table.tbl{width:100%;border-collapse:collapse;font-size:13px}
+table.tbl th{text-align:left;font-weight:600;color:hsl(var(--muted-foreground));padding:11px 14px;border-bottom:1px solid hsl(var(--border));white-space:nowrap;font-size:12px}
+table.tbl td{padding:11px 14px;border-bottom:1px solid hsl(var(--border)/.6);white-space:nowrap}
+table.tbl tbody tr:hover{background:hsl(var(--primary)/.04)}
+table.tbl td.r,table.tbl th.r{text-align:right}
+.pbar{height:8px;background:hsl(var(--muted));border-radius:999px;overflow:hidden}
+.pbar>span{display:block;height:100%;border-radius:999px;background:hsl(var(--primary))}
+.pbar>span.g{background:hsl(var(--success))}.pbar>span.a{background:hsl(var(--warning))}.pbar>span.r{background:hsl(var(--danger))}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:12.5px;font-weight:600}.field .hint{font-size:11.5px;color:hsl(var(--muted-foreground));font-weight:400}
+.inp,.sel{height:36px;border:1px solid hsl(var(--border));border-radius:8px;padding:0 11px;font-size:13px;background:#fff;font-family:inherit}
+.setrow{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 0;border-bottom:1px solid hsl(var(--border)/.7)}
+.setrow:last-child{border-bottom:none}
+.setrow .lbl{font-size:13.5px;font-weight:600}.setrow .dsc{font-size:12px;color:hsl(var(--muted-foreground));margin-top:2px;max-width:520px}
+.toggle{width:42px;height:24px;border-radius:999px;background:hsl(var(--muted));position:relative;cursor:pointer;flex-shrink:0}
+.toggle:after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:var(--shadow-sm);transition:.2s}
+.toggle.on{background:hsl(var(--primary))}.toggle.on:after{left:20px}
+.dot-legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:hsl(var(--muted-foreground))}
+.dot-legend span{display:inline-flex;align-items:center;gap:6px}.lg{width:10px;height:10px;border-radius:3px;display:inline-block}
+.mock-note{margin-top:34px;padding:14px 16px;border:1px dashed hsl(var(--border));border-radius:10px;font-size:12px;color:hsl(var(--muted-foreground));background:hsl(var(--muted)/.4)}
+svg text{font-family:inherit}
+.tm{font-size:.62em;vertical-align:super;opacity:.7}
+/* patient record */
+.rec-grid{display:grid;grid-template-columns:1.2fr 1fr;gap:16px}
+.stat{display:flex;justify-content:space-between;align-items:baseline;padding:8px 0;border-bottom:1px dashed hsl(var(--border))}
+.stat:last-child{border-bottom:none}
+.stat .k{font-size:12.5px;color:hsl(var(--muted-foreground))}.stat .v{font-size:13.5px;font-weight:700}
+.big-num{font-size:30px;font-weight:800;letter-spacing:-.02em;line-height:1}
+@media(max-width:1000px){.rec-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="sb-logo"><div class="mark">D</div><div class="txt">DentPulse<small>Enterprise</small></div></div>
+    <nav class="sb-nav">
+      <div class="sb-item"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg><span>Financial Position</span></div>
+      <div class="sb-item"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/></svg><span>Profitability</span></div>
+      <div class="sb-item"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="12" cy="12" r="3"/></svg><span>Cashflow</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+      <div class="sb-item"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/></svg><span class="sb-section-label" style="font-weight:600">Profit Engine</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+      <div class="sb-item active"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6"/><rect x="12" y="8" width="3" height="10"/><rect x="17" y="4" width="3" height="14"/></svg><span style="font-weight:600">Managing Business Growth</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(180deg)"><path d="m6 9 6 6 6-6"/></svg></div>
+      <div style="margin-left:14px;margin-bottom:6px">
+        <div class="sb-item active" style="margin-bottom:2px"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m17 11 2 2 4-4"/></svg><span style="font-weight:600">Patients</span></div>
+        <div class="sb-sub">
+          <a class="active" data-tab="pulse">Economic Pulse</a>
+          <a data-tab="growth">Growth Levers</a>
+          <a data-tab="leakage">Value &amp; Leakage</a>
+          <a data-tab="retention">Retention &amp; Reactivation</a>
+          <a data-tab="list">Patient List</a>
+          <a data-tab="records">Patient Records</a>
+          <a data-tab="invoices">Invoices</a>
+          <a data-tab="goals">Goal Settings</a>
+          <a data-tab="settings">Settings</a>
+        </div>
+        <div class="sb-item"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 11 18-5v12L3 14v-3z"/></svg><span>Marketing</span></div>
+      </div>
+      <div class="sb-item"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m16 16 3-8 3 8M2 16l3-8 3 8M7 21h10M12 3v18"/></svg><span style="font-weight:600">Business Valuation</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+      <div class="sb-item"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="15" r="3"/><circle cx="9" cy="7" r="4"/><path d="M10 15H6a4 4 0 0 0-4 4v2"/></svg><span style="font-weight:600">Settings</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+    </nav>
+    <div class="sb-collapse"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg><span>Collapse</span></div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="tb-left">
+        <button class="pill-btn"><span class="k">Location:</span><span class="v">All Locations (12)</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button>
+        <button class="pill-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg><span class="v">Last 12 Months</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button>
+      </div>
+      <div class="tb-search"><svg class="si" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input placeholder="Search patients, metrics…" /></div>
+      <div class="tb-right">
+        <div class="sync-chip"><span class="d"></span>Synced · 4m ago</div>
+        <button class="icon-btn"><span class="dot"></span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></button>
+        <div class="user-chip"><div class="avatar">CR</div><span class="nm">Chirag R.</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+      </div>
+    </header>
+
+    <div class="content">
+      <div class="page-head">
+        <div><h1>Patient Economics Engine<span class="tm">™</span></h1><p>Every patient as a financial record, contribution, opportunity and value at risk, across all 12 practices.</p></div>
+        <div class="head-actions">
+          <button class="btn btn-outline"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Export</button>
+          <button class="btn btn-primary"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>New Report</button>
+        </div>
+      </div>
+      <div class="ctx-banner">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="hsl(246 79% 62%)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        <span>Viewing as <b>Multi-Practice Manager</b> · figures aggregate all practices. Contribution figures use the <b>Economic Assumptions</b> in Settings where live cost feeds aren’t connected, each number carries a data-confidence tag.</span>
+      </div>
+
+      <div class="tabs">
+        <button class="tab active" data-tab="pulse">Economic Pulse</button>
+        <button class="tab" data-tab="growth">Growth Levers</button>
+        <button class="tab" data-tab="leakage">Value &amp; Leakage</button>
+        <button class="tab" data-tab="retention">Retention &amp; Reactivation</button>
+        <button class="tab" data-tab="list">Patient List</button>
+        <button class="tab" data-tab="records">Patient Records</button>
+        <button class="tab" data-tab="invoices">Invoices</button>
+        <button class="tab" data-tab="goals">Goal Settings</button>
+        <button class="tab" data-tab="settings">Settings</button>
+      </div>
+
+      <!-- ============ ECONOMIC PULSE ============ -->
+      <section class="panel active" id="pulse">
+        <div class="grid g5">
+          <div class="hero"><div class="q">1 · Existing patient value</div><div class="val">£3.84m</div><div class="sub">Active Patient Economic Value<span class="tm">™</span><br><span class="delta up">▲ 4.1%</span> vs prior yr &nbsp;<span class="conf modelled"><span class="cdot"></span>Modelled</span></div></div>
+          <div class="hero opp"><div class="q">2 · Opportunity in your database</div><div class="val" style="color:hsl(var(--chart-5))">£118k</div><div class="sub">Unrealised contribution (prob-weighted)<br>Gross £271k &nbsp;<span class="conf modelled"><span class="cdot"></span>Modelled</span></div></div>
+          <div class="hero risk"><div class="q">3 · Value at risk</div><div class="val" style="color:hsl(var(--danger))">£176k</div><div class="sub">Patient Contribution at Risk<span class="tm">™</span><br>Overdue &amp; drifting patients &nbsp;<span class="conf modelled"><span class="cdot"></span>Modelled</span></div></div>
+          <div class="hero conv"><div class="q">4 · Conversion</div><div class="val" style="color:hsl(var(--warning))">62%</div><div class="sub">Commitment Rate<span class="tm">™</span> (planned→scheduled 30d)<br><span class="delta up">+5%</span> ≈ +£38k contribution &nbsp;<span class="conf derived"><span class="cdot"></span>Derived*</span></div></div>
+          <div class="hero qual"><div class="q">5 · Patient quality</div><div class="val" style="color:hsl(var(--success))">£430</div><div class="sub">Avg annual contribution &nbsp;<span class="conf derived"><span class="cdot"></span>Derived</span><br>Projected LTV £1,840 &nbsp;<span class="conf modelled"><span class="cdot"></span>Modelled</span></div></div>
+        </div>
+
+        <div class="card card-p" style="margin-top:16px">
+          <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px">
+            <div><h3 class="ct">Revenue mix &amp; scope of the contribution view</h3><div class="cs">Contribution is calculated on private &amp; plan income. NHS/UDA is contract-value based, so it is tracked separately, never blended in.</div></div>
+            <span class="badge pri">6 of 12 practices are mixed NHS/private</span>
+          </div>
+          <div style="display:flex;height:26px;border-radius:7px;overflow:hidden;margin-top:14px;font-size:11px;font-weight:700;color:#fff">
+            <div style="width:52%;background:hsl(var(--primary));display:flex;align-items:center;justify-content:center">Private £0.75m · 52%</div>
+            <div style="width:16%;background:hsl(var(--chart-2));display:flex;align-items:center;justify-content:center">Plan £0.24m · 16%</div>
+            <div style="width:32%;background:hsl(var(--muted-foreground));display:flex;align-items:center;justify-content:center">NHS/UDA £0.46m · 32%</div>
+          </div>
+          <div class="grid g3" style="margin-top:14px">
+            <div class="stat"><span class="k">In contribution engine (private + plan)</span><span class="v" style="color:hsl(var(--primary))">£0.99m</span></div>
+            <div class="stat"><span class="k">UDA delivery YTD</span><span class="v">94% · <span style="color:hsl(var(--success))">on target</span></span></div>
+            <div class="stat"><span class="k">UDA clawback exposure</span><span class="v" style="color:hsl(var(--warning))">£11k · 2 practices</span></div>
+          </div>
+        </div>
+
+        <div class="actions-wrap" style="margin-top:20px">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:14px">
+            <div class="hd">DentPulse has identified <b>£186,400</b> of patient economic opportunity</div>
+            <span style="font-size:12px;color:hsl(var(--muted-foreground))">£118k existing treatment · £42.8k retention risk · £25.6k billing leakage</span>
+          </div>
+          <div class="grid g3">
+            <div class="act-card"><div class="pr">Priority 1 · Retention</div><div class="ti">73 high-value overdue patients</div><div class="ds">Lapsed patients who previously generated £1,000+ contribution/yr. Prioritise reactivation.</div><div class="amt">£42,800 <span style="font-size:12px;font-weight:600;color:hsl(var(--muted-foreground))">at risk</span></div></div>
+            <div class="act-card"><div class="pr">Priority 2 · Commercial opportunity</div><div class="ti">£187k planned &gt; 60 days, unscheduled</div><div class="ds">Private treatment planned with no future appointment linked. Chase to schedule.</div><div class="amt">£72,400 <span style="font-size:12px;font-weight:600;color:hsl(var(--muted-foreground))">contribution</span></div></div>
+            <div class="act-card"><div class="pr">Priority 3 · Billing leakage</div><div class="ti">Completed treatment not yet charged</div><div class="ds">34 courses worth £27k are completed in Dentally but no invoice has been raised. Charge them.</div><div class="amt">£25,600 <span style="font-size:12px;font-weight:600;color:hsl(var(--muted-foreground))">contribution</span></div></div>
+          </div>
+        </div>
+
+        <div class="section-label">Where the value sits</div>
+        <div class="grid" style="grid-template-columns:1.5fr 1fr">
+          <div class="card card-p">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><div><h3 class="ct">Treatment Economic Journey<span class="tm">™</span></h3><div class="cs">Planned → collected, group-wide · Dentally events and transparent derivations</div></div><div style="display:flex;gap:5px;flex-wrap:wrap"><span class="conf dentally"><span class="cdot"></span>Dentally</span><span class="conf derived"><span class="cdot"></span>Derived</span></div></div>
+            <div id="chart-waterfall" style="margin-top:14px"></div>
+          </div>
+          <div class="card card-p">
+            <h3 class="ct">Contribution vs Revenue</h3>
+            <div class="cs">Why economics beats “spend”</div>
+            <div id="chart-contrib" style="margin-top:10px"></div>
+            <div style="font-size:12px;color:hsl(var(--muted-foreground));margin-top:8px;line-height:1.6">The group collected <b style="color:hsl(var(--foreground))">£1.45m</b> but generated <b style="color:hsl(var(--success))">£548k</b> of patient contribution, a 37.8% margin after associate, lab and material cost.</div>
+          </div>
+        </div>
+
+        <div class="section-label">Practice comparison</div>
+        <div class="card">
+          <div class="card-p" style="padding-bottom:6px;display:flex;justify-content:space-between;align-items:center"><div><h3 class="ct">Per-Practice Economics</h3><div class="cs">Ranked by patient economic value</div></div><span class="badge pri">Multi-practice view</span></div>
+          <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Practice</th><th class="r">Active</th><th class="r">Econ. Value</th><th class="r">Contribution 12mo</th><th class="r">Opportunity (wtd)</th><th class="r">At Risk</th><th class="r">Commit. Rate</th><th>Status</th></tr></thead><tbody id="pcRows"></tbody></table></div>
+        </div>
+      </section>
+
+      <!-- ============ GROWTH LEVERS ============ -->
+      <section class="panel" id="growth">
+        <div class="ctx-banner" style="margin-top:2px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="hsl(246 79% 62%)" stroke-width="2"><path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/></svg><span>Patient value has three levers: how <b>often</b> patients visit, how <b>much</b> each visit is worth, and how <b>long</b> they stay. <b>Visit Frequency × Value per Visit × Patient Lifetime → Patient Economic Value.</b> They multiply, they don't add.</span></div>
+
+        <div class="grid g3">
+          <div class="hero conv"><div class="q">Lever 1 · Visit Frequency</div><div class="val" style="color:hsl(var(--warning))">2.1<span style="font-size:14px;font-weight:600;color:hsl(var(--muted-foreground))">/yr</span></div><div class="sub">Chargeable visits per active patient<br><span class="delta up">▲ 0.1</span> vs prior yr · target 2.6 &nbsp;<span class="conf derived"><span class="cdot"></span>Derived</span></div></div>
+          <div class="hero opp"><div class="q">Lever 2 · Value per Visit</div><div class="val" style="color:hsl(var(--chart-5))">£184</div><div class="sub">Avg contribution-bearing value per visit<br><span class="delta up">▲ 3.4%</span> · target £205 &nbsp;<span class="conf derived"><span class="cdot"></span>Derived</span></div></div>
+          <div class="hero qual"><div class="q">Lever 3 · Patient Retention / Lifetime</div><div class="val" style="color:hsl(var(--success))">6.2<span style="font-size:14px;font-weight:600;color:hsl(var(--muted-foreground))">yrs</span></div><div class="sub">Current avg tenure &nbsp;<span class="conf derived"><span class="cdot"></span>Derived</span><br>Projected lifetime 8.4 yrs · Economic Value £1,840 &nbsp;<span class="conf modelled"><span class="cdot"></span>Modelled</span></div></div>
+        </div>
+
+        <div class="actions-wrap" style="margin-top:20px">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:6px">
+            <div class="hd">Growth Lever Simulator<span class="tm">™</span> · <b>what a small move on each is worth</b></div>
+            <span style="font-size:12px;color:hsl(var(--muted-foreground))">Applied to 3,912 active patients · contribution basis</span>
+          </div>
+          <div class="cs" style="margin-bottom:12px">Move all three a little and the effect stacks. Edit any lever to see combined contribution uplift.</div>
+          <div class="grid g4">
+            <div class="act-card"><div class="pr">Visit Frequency</div><div class="ti">2.1 → <input class="inp" value="2.4" style="width:64px;height:30px;display:inline-block"> /yr</div><div class="ds">Recall attendance + hygiene cadence.</div><div class="amt">+£58k <span style="font-size:12px;font-weight:600;color:hsl(var(--muted-foreground))">contribution</span></div></div>
+            <div class="act-card"><div class="pr">Value per Visit</div><div class="ti">£184 → <input class="inp" value="200" style="width:64px;height:30px;display:inline-block"></div><div class="ds">Treatment mix + private uptake.</div><div class="amt">+£47k <span style="font-size:12px;font-weight:600;color:hsl(var(--muted-foreground))">contribution</span></div></div>
+            <div class="act-card"><div class="pr">Patient Lifetime</div><div class="ti">6.2 → <input class="inp" value="6.8" style="width:64px;height:30px;display:inline-block"> yrs</div><div class="ds">Fewer lapses, longer patient life.</div><div class="amt">+£39k <span style="font-size:12px;font-weight:600;color:hsl(var(--muted-foreground))">contribution</span></div></div>
+            <div class="act-card" style="border-color:hsl(var(--primary)/.4);background:hsl(var(--primary)/.04)"><div class="pr" style="color:hsl(var(--primary))">Combined (compounding)</div><div class="ti">All three together</div><div class="ds">Stacked effect, not the sum of the parts.</div><div class="amt" style="font-size:22px">+£161k</div></div>
+          </div>
+        </div>
+
+        <div class="section-label">Where the headroom is</div>
+        <div class="grid g2">
+          <div class="card card-p">
+            <h3 class="ct">Lever headroom by practice</h3>
+            <div class="cs">Gap to target on each lever · darker = more room to grow</div>
+            <div id="chart-levers" style="margin-top:14px"></div>
+          </div>
+          <div class="card card-p">
+            <h3 class="ct">CLTV<span class="tm">™</span> by acquisition source</h3>
+            <div class="cs">Not all patients are worth the same over a lifetime</div>
+            <div id="chart-cltv" style="margin-top:14px"></div>
+            <div style="font-size:12px;color:hsl(var(--muted-foreground));margin-top:8px;line-height:1.6">Referred and membership patients carry the highest lifetime contribution. CAC-adjusted view arrives with attribution in the next version.</div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="card-p" style="padding-bottom:6px;display:flex;justify-content:space-between;align-items:center"><div><h3 class="ct">Growth levers by practice</h3><div class="cs">Visit Frequency, Value per Visit and Economic Value side by side, ranked by combined headroom</div></div><span class="badge pri">Multi-practice view</span></div>
+          <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Practice</th><th class="r">Visit freq /yr</th><th class="r">Value/visit</th><th class="r">Economic value</th><th class="r">Avg tenure</th><th class="r">Combined headroom</th><th>Top lever to pull</th></tr></thead><tbody id="leverRows"></tbody></table></div>
+        </div>
+      </section>
+
+      <!-- ============ VALUE & LEAKAGE ============ -->
+      <section class="panel" id="leakage">
+        <div class="grid g4">
+          <div class="hero opp"><div class="q">Gross opportunity</div><div class="val">£271k</div><div class="sub">Unrealised treatment contribution</div></div>
+          <div class="hero"><div class="q">Probability-weighted</div><div class="val" style="color:hsl(var(--primary))">£118k</div><div class="sub">After conversion probability</div></div>
+          <div class="hero conv"><div class="q">Commitment rate · 30d</div><div class="val" style="color:hsl(var(--warning))">62%</div><div class="sub">Planned → future appt scheduled</div></div>
+          <div class="hero risk"><div class="q">Planned &gt; 60d, unscheduled</div><div class="val" style="color:hsl(var(--danger))">£187k</div><div class="sub">No appointment linked yet</div></div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:1.4fr 1fr;margin-top:18px">
+          <div class="card card-p">
+            <h3 class="ct">Treatment Economic Journey<span class="tm">™</span> · detailed</h3>
+            <div class="cs">£ retained and lost at each stage · Dentally events and transparent derivations</div>
+            <div id="chart-waterfall2" style="margin-top:14px"></div>
+            <div class="dot-legend" style="margin-top:10px"><span><i class="lg" style="background:hsl(var(--primary))"></i>Retained</span><span><i class="lg" style="background:hsl(var(--danger)/.6)"></i>Leaked at stage</span></div>
+          </div>
+          <div class="card card-p">
+            <h3 class="ct">Opportunity, gross vs weighted</h3>
+            <div class="cs">Never collapse the two into one number</div>
+            <div id="chart-opp" style="margin-top:14px"></div>
+          </div>
+        </div>
+
+        <div class="section-label">Commitment Intelligence<span class="tm" style="letter-spacing:0">™</span></div>
+        <div class="ctx-banner" style="margin-bottom:16px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="hsl(38 92% 45%)" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg><span><b>* Present-state commitment is robust</b> (a planned course either has a future linked appointment or it doesn't). <b>Historical time-window rates</b> (7/30/60d) need DentPulse to snapshot booking events daily to build its own booking history, since a clean booked-at timestamp isn't guaranteed from the API. Shown here where event history is sufficient; flagged for developer validation.</span></div>
+        <div class="grid g2">
+          <div class="card card-p">
+            <h3 class="ct">Treatment Commitment Rate<span class="tm">™</span> by clinician</h3>
+            <div class="cs">Planned → future appointment within 30 days</div>
+            <div id="chart-commit" style="margin-top:14px"></div>
+          </div>
+          <div class="card card-p">
+            <h3 class="ct">Commitment by time window</h3>
+            <div class="cs">How quickly planned treatment progresses to a booking</div>
+            <div id="chart-window" style="margin-top:14px"></div>
+            <div style="font-size:12px;color:hsl(var(--muted-foreground));margin-top:8px">£187k of private treatment was planned more than 60 days ago and has neither a linked appointment nor completion, est. <b style="color:hsl(var(--foreground))">£72.4k</b> contribution opportunity.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ RETENTION & REACTIVATION ============ -->
+      <section class="panel" id="retention">
+        <div class="grid g4">
+          <div class="hero"><div class="q">Active</div><div class="val">3,912</div><div class="sub">Seen within recall window</div></div>
+          <div class="hero conv"><div class="q">Drifting</div><div class="val" style="color:hsl(var(--warning))">620</div><div class="sub">Approaching lapse</div></div>
+          <div class="hero risk"><div class="q">Lapsed</div><div class="val" style="color:hsl(var(--danger))">410</div><div class="sub">£176k contribution at risk</div></div>
+          <div class="hero"><div class="q">Effectively lost</div><div class="val" style="color:hsl(var(--muted-foreground))">320</div><div class="sub">No realistic recovery</div></div>
+        </div>
+
+        <div class="grid g2" style="margin-top:18px">
+          <div class="card card-p">
+            <h3 class="ct">Contribution at Risk by segment</h3>
+            <div class="cs">Patient counts turned into £, value, not volume</div>
+            <div id="chart-risk" style="margin-top:16px"></div>
+          </div>
+          <div class="card card-p">
+            <h3 class="ct">Reactivation value by practice</h3>
+            <div class="cs">Recoverable contribution from lapsed patients</div>
+            <div id="chart-react" style="margin-top:16px"></div>
+          </div>
+        </div>
+
+        <div class="card card-p" style="margin-top:18px">
+          <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px">
+            <div><h3 class="ct">Recovery Loop<span class="tm">™</span></h3><div class="cs">From flagged to banked. Every at-risk £ gets an owner, a status and a measured outcome.</div></div>
+            <div style="display:flex;gap:22px">
+              <div style="text-align:right"><div style="font-size:11px;color:hsl(var(--muted-foreground))">Recovered this quarter</div><div style="font-size:22px;font-weight:800;color:hsl(var(--success))">£29,140</div></div>
+              <div style="text-align:right"><div style="font-size:11px;color:hsl(var(--muted-foreground))">In progress</div><div style="font-size:22px;font-weight:800;color:hsl(var(--primary))">£41,300</div></div>
+            </div>
+          </div>
+          <div id="chart-funnel" style="margin-top:16px"></div>
+          <div style="font-size:12px;color:hsl(var(--muted-foreground));margin-top:8px">Stage-to-stage conversion is measured, not assumed. Last quarter the group banked <b style="color:hsl(var(--foreground))">27%</b> of flagged at-risk contribution.</div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="card-p" style="padding-bottom:6px;display:flex;justify-content:space-between;align-items:center"><div><h3 class="ct">Financially-prioritised reactivation worklist</h3><div class="cs">Highest contribution at risk first, not an alphabetical recall list</div></div><span class="badge dng">73 high-value overdue</span></div>
+          <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Patient</th><th>Practice</th><th>Last visit</th><th class="r">Days overdue</th><th class="r">Hist. contribution/yr</th><th class="r">Contribution at risk</th><th>Owner</th><th>Status</th><th>Action</th></tr></thead><tbody id="reactRows"></tbody></table></div>
+        </div>
+      </section>
+
+      <!-- ============ PATIENT LIST ============ -->
+      <section class="panel" id="list">
+        <div class="grid g4">
+          <div class="hero"><div class="q">Total patients</div><div class="val">5,262</div><div class="sub">Across all 12 practices</div></div>
+          <div class="hero qual"><div class="q">Active</div><div class="val" style="color:hsl(var(--success))">3,912</div><div class="sub">Seen within recall window</div></div>
+          <div class="hero opp"><div class="q">Private / plan</div><div class="val" style="color:hsl(var(--chart-5))">68%</div><div class="sub">Rest NHS or mixed</div></div>
+          <div class="hero"><div class="q">Avg contribution / patient</div><div class="val">£430</div><div class="sub">Annual · LTV £1,840</div></div>
+        </div>
+
+        <div class="card" style="margin-top:18px">
+          <div class="card-p" style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px">
+            <div><h3 class="ct">Patient List</h3><div class="cs">Every patient as an economic record. Filter, sort, then open one to drill in.</div></div>
+            <div style="position:relative"><svg style="position:absolute;left:10px;top:9px;opacity:.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input class="inp" style="padding-left:32px;width:240px" placeholder="Search patient / ID…"></div>
+          </div>
+          <div class="card-p" style="padding-top:0;display:flex;flex-wrap:wrap;gap:6px">
+            <span class="badge pri">All</span><span class="badge neu">Active</span><span class="badge neu">Drifting</span><span class="badge neu">Lapsed</span>
+            <span style="width:1px;background:hsl(var(--border));margin:0 4px"></span>
+            <span class="badge neu">Private</span><span class="badge neu">NHS</span><span class="badge neu">Member</span>
+            <span style="width:1px;background:hsl(var(--border));margin:0 4px"></span>
+            <span class="badge neu">All practices</span><span class="badge neu">Value band</span>
+          </div>
+          <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Patient</th><th>ID</th><th>Practice</th><th>Type</th><th>Status</th><th class="r">Visit freq /yr</th><th class="r">Value/visit</th><th class="r">Contribution 12mo</th><th class="r">Projected LTV</th><th class="r">Quality</th></tr></thead><tbody id="listRows"></tbody></table></div>
+          <div class="card-p" style="padding-top:10px;display:flex;justify-content:space-between;align-items:center;color:hsl(var(--muted-foreground));font-size:12px"><span>Showing 8 of 5,262 patients</span><span>Rows open the full Patient Financial Record</span></div>
+        </div>
+      </section>
+
+      <!-- ============ PATIENT RECORDS ============ -->
+      <section class="panel" id="records">
+        <div class="card">
+          <div class="card-p" style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px">
+            <div><h3 class="ct">Patient Financial Records</h3><div class="cs">Revenue (Dentally) − Cost (attributed) = Contribution (Derived) · click any row for the per-treatment breakdown</div></div>
+            <div style="position:relative"><svg style="position:absolute;left:10px;top:9px;opacity:.5" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input class="inp" style="padding-left:32px;width:240px" placeholder="Search patient / ID…"></div>
+          </div>
+          <div style="overflow-x:auto"><table class="tbl"><thead><tr><th style="width:22px"></th><th>Patient</th><th>ID</th><th>Practice</th><th>Status</th><th class="r">Revenue</th><th class="r">Cost</th><th class="r">Contribution</th><th class="r">Opportunity (wtd)</th><th class="r">Econ. Value</th><th class="r">Quality</th></tr></thead><tbody id="recRows"></tbody></table></div>
+        </div>
+
+        <div class="section-label">Patient Financial Record · Sarah Jones <span style="text-transform:none;letter-spacing:0;color:hsl(var(--muted-foreground));font-weight:500">· DEN-10482 · member · private · Google Ads acquisition</span></div>
+        <div class="rec-grid">
+          <div class="card card-p">
+            <div style="display:flex;gap:20px;flex-wrap:wrap">
+              <div><div style="font-size:11.5px;color:hsl(var(--muted-foreground))">Patient Economic Value<span class="tm">™</span></div><div class="big-num" style="color:hsl(var(--primary))">£6,257</div></div>
+              <div><div style="font-size:11.5px;color:hsl(var(--muted-foreground))">Contribution to date</div><div class="big-num" style="color:hsl(var(--success))">£2,411</div></div>
+              <div><div style="font-size:11.5px;color:hsl(var(--muted-foreground))">Quality Score<span class="tm">™</span></div><div class="big-num">84<span style="font-size:15px;color:hsl(var(--muted-foreground))">/100</span></div></div>
+            </div>
+            <div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:0 24px">
+              <div>
+                <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:hsl(var(--primary));margin-bottom:4px">Revenue <span class="conf dentally" style="font-size:9px"><span class="cdot"></span>Dentally</span></div>
+                <div class="stat"><span class="k">Treatment revenue</span><span class="v">£6,050</span></div>
+                <div class="stat"><span class="k">Membership (24 mo)</span><span class="v">£672</span></div>
+                <div class="stat"><span class="k">Total revenue</span><span class="v">£6,722</span></div>
+              </div>
+              <div>
+                <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:hsl(var(--danger));margin-bottom:4px">Direct cost <span class="conf external" style="font-size:9px"><span class="cdot"></span>External</span></div>
+                <div class="stat"><span class="k">Associate (Dr B · 45%)</span><span class="v">£2,061</span></div>
+                <div class="stat"><span class="k">Lab</span><span class="v">£1,470</span></div>
+                <div class="stat"><span class="k">Materials</span><span class="v">£270</span></div>
+                <div class="stat"><span class="k">Membership svc + CAC</span><span class="v">£510</span></div>
+              </div>
+            </div>
+            <div style="margin-top:14px;padding:12px 14px;background:hsl(var(--success-muted));border-radius:10px;display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:13px;font-weight:600;color:hsl(var(--success))">Patient Contribution<span class="tm">™</span></span>
+              <span style="font-size:18px;font-weight:800;color:hsl(var(--success))">£2,411 <span style="font-size:12px">· 35.9% margin</span></span>
+            </div>
+          </div>
+
+          <div class="card card-p">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:hsl(var(--primary));margin-bottom:6px">Opportunity &amp; risk</div>
+            <div class="stat"><span class="k">Unscheduled treatment (gross)</span><span class="v">£4,150</span></div>
+            <div class="stat"><span class="k">Gross contribution opportunity</span><span class="v">£1,688</span></div>
+            <div class="stat"><span class="k">Probability-weighted</span><span class="v" style="color:hsl(var(--primary))">£596</span></div>
+            <div class="stat"><span class="k">Retention status</span><span class="v"><span class="badge suc">Healthy · recall Jan 2027</span></span></div>
+            <div class="stat"><span class="k">Data confidence</span><span class="v">94%</span></div>
+            <div style="margin-top:14px;padding:12px 14px;border:1px solid hsl(var(--primary)/.25);background:hsl(var(--primary)/.05);border-radius:10px">
+              <div style="font-size:11px;font-weight:700;color:hsl(var(--primary));text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Recommended action</div>
+              <div style="font-size:13px;line-height:1.55">Review the <b>implant</b> plan (£3,500) at Sarah’s next appointment, approx. <b>£1,330</b> potential contribution, the largest single unscheduled item.</div>
+            </div>
+            <div style="font-size:11px;color:hsl(var(--muted-foreground));margin-top:12px;line-height:1.55">Economic Value<span class="tm">™</span> = contribution to date + probability-weighted future contribution over a 5-year horizon, discounted 10%. Definition editable in Settings.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ INVOICES ============ -->
+      <section class="panel" id="invoices">
+        <div class="ctx-banner" style="margin-top:2px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="hsl(246 79% 62%)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8"/></svg><span>This is the <b>Charged → Collected</b> step of the Treatment Economic Journey made actionable. Treatment done but not collected is contribution already earned and sitting at risk.</span></div>
+
+        <div class="grid g5">
+          <div class="hero"><div class="q">Invoiced · 12mo</div><div class="val">£1.62m</div><div class="sub">Across all practices</div></div>
+          <div class="hero qual"><div class="q">Collected</div><div class="val" style="color:hsl(var(--success))">£1.45m</div><div class="sub">89.5% collection rate</div></div>
+          <div class="hero risk"><div class="q">Outstanding</div><div class="val" style="color:hsl(var(--danger))">£170k</div><div class="sub">Unpaid, all ages</div></div>
+          <div class="hero conv"><div class="q">Overdue &gt; 60d</div><div class="val" style="color:hsl(var(--warning))">£68k</div><div class="sub">Past terms, needs chasing</div></div>
+          <div class="hero"><div class="q">On payment plan</div><div class="val">£41k</div><div class="sub">312 active arrangements</div></div>
+        </div>
+
+        <div class="grid g2" style="margin-top:18px">
+          <div class="card card-p">
+            <h3 class="ct">Aged debt</h3>
+            <div class="cs">Outstanding balance by age bucket</div>
+            <div id="chart-aged" style="margin-top:16px"></div>
+          </div>
+          <div class="card card-p">
+            <h3 class="ct">Collection rate by practice</h3>
+            <div class="cs" title="Payment recorded/allocated in Dentally. Bank settlement is verified separately where accounting / open-banking integration is connected.">Collected in PMS · recorded in Dentally, not bank-settlement</div>
+            <div id="chart-collect" style="margin-top:16px"></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="card-p" style="padding-bottom:6px;display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;align-items:center"><div><h3 class="ct">Invoices</h3><div class="cs">Outstanding first, oldest at the top. Chase by value, not by date raised.</div></div><div style="display:flex;gap:6px"><span class="badge dng">£68k overdue</span><span class="badge warn">£102k current</span></div></div>
+          <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Invoice</th><th>Patient</th><th>Practice</th><th>Raised</th><th class="r">Amount</th><th class="r">Outstanding</th><th class="r">Age</th><th>Status</th><th>Action</th></tr></thead><tbody id="invRows"></tbody></table></div>
+        </div>
+      </section>
+
+      <!-- ============ GOAL SETTINGS ============ -->
+      <section class="panel" id="goals">
+        <div class="ctx-banner" style="margin-top:2px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="hsl(246 79% 62%)" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg><span>Targets are economic now, contribution, commitment rate and opportunity conversion, with <b>actual vs target</b> progress. Blank per-practice fields inherit the group target.</span></div>
+        <div class="grid g2">
+          <div class="card card-p"><div style="display:flex;justify-content:space-between"><div><h3 class="ct">Commitment Rate<span class="tm">™</span> (30-day)</h3><div class="cs">Planned → scheduled conversion</div></div><span class="badge warn">Below target</span></div><div style="display:flex;align-items:flex-end;gap:12px;margin:16px 0 10px"><div class="field" style="flex:1"><label>Group target</label><div style="display:flex;gap:8px"><input class="inp" value="70" style="width:80px"><span style="align-self:center;color:hsl(var(--muted-foreground))">%</span></div></div><div style="text-align:right"><div style="font-size:12px;color:hsl(var(--muted-foreground))">Actual</div><div style="font-size:22px;font-weight:800;color:hsl(var(--warning))">62%</div></div></div><div class="pbar"><span class="a" style="width:88%"></span></div><div style="font-size:12px;color:hsl(var(--muted-foreground));margin-top:6px">+5pt ≈ +£38k contribution</div></div>
+          <div class="card card-p"><div style="display:flex;justify-content:space-between"><div><h3 class="ct">Contribution per active patient</h3><div class="cs">Annual</div></div><span class="badge suc">On track</span></div><div style="display:flex;align-items:flex-end;gap:12px;margin:16px 0 10px"><div class="field" style="flex:1"><label>Group target</label><input class="inp" value="£420"></div><div style="text-align:right"><div style="font-size:12px;color:hsl(var(--muted-foreground))">Actual</div><div style="font-size:22px;font-weight:800;color:hsl(var(--success))">£430</div></div></div><div class="pbar"><span class="g" style="width:100%"></span></div><div style="font-size:12px;color:hsl(var(--muted-foreground));margin-top:6px">102% to plan</div></div>
+          <div class="card card-p"><div style="display:flex;justify-content:space-between"><div><h3 class="ct">Opportunity Progression</h3><div class="cs">Planned unscheduled → Scheduled / quarter</div></div><span class="badge pri">In progress</span></div><div style="display:flex;align-items:flex-end;gap:12px;margin:16px 0 10px"><div class="field" style="flex:1"><label>Quarterly target</label><input class="inp" value="£90k"></div><div style="text-align:right"><div style="font-size:12px;color:hsl(var(--muted-foreground))">This qtr</div><div style="font-size:22px;font-weight:800;color:hsl(var(--primary))">£71k</div></div></div><div class="pbar"><span style="width:79%"></span></div><div style="font-size:12px;color:hsl(var(--muted-foreground));margin-top:6px">79% to target</div></div>
+          <div class="card card-p"><div style="display:flex;justify-content:space-between"><div><h3 class="ct">Attrition ceiling</h3><div class="cs">Max annual patient loss</div></div><span class="badge suc">Within limit</span></div><div style="display:flex;align-items:flex-end;gap:12px;margin:16px 0 10px"><div class="field" style="flex:1"><label>Ceiling</label><div style="display:flex;gap:8px"><input class="inp" value="7.0" style="width:80px"><span style="align-self:center;color:hsl(var(--muted-foreground))">%</span></div></div><div style="text-align:right"><div style="font-size:12px;color:hsl(var(--muted-foreground))">Actual</div><div style="font-size:22px;font-weight:800;color:hsl(var(--success))">6.9%</div></div></div><div class="pbar"><span class="g" style="width:99%"></span></div><div style="font-size:12px;color:hsl(var(--muted-foreground));margin-top:6px">Riverside breaching at 11.2%</div></div>
+        </div>
+        <div class="section-label">Per-practice goal overrides</div>
+        <div class="card"><div class="card-p" style="padding-bottom:6px;display:flex;justify-content:space-between;align-items:center"><div><h3 class="ct">Targets by practice</h3><div class="cs">Blank inherits the group target</div></div><button class="btn btn-primary" style="height:32px">Save targets</button></div>
+          <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Practice</th><th>Commit rate %</th><th>Contribution/pt</th><th>Opp. conversion</th><th>Attrition ceiling %</th><th>Progress</th></tr></thead><tbody id="goalRows"></tbody></table></div>
+        </div>
+      </section>
+
+      <!-- ============ SETTINGS ============ -->
+      <section class="panel" id="settings">
+        <div class="grid g2">
+          <div class="card card-p" style="border-color:hsl(var(--primary)/.35)">
+            <h3 class="ct" style="color:hsl(var(--primary))">Economic Assumptions</h3>
+            <div class="cs">Used to compute contribution where live cost feeds aren’t connected, the “only a few assumptions” layer</div>
+            <div style="margin-top:8px">
+              <div style="padding:14px 0;border-bottom:1px solid hsl(var(--border)/.7)">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><div class="lbl">Clinician remuneration profiles</div><div class="dsc">Per-clinician cost basis, not one group %. Fair clinician-level comparison depends on this.</div></div><button class="btn btn-outline" style="height:32px">Edit · 14 clinicians</button></div>
+                <div style="overflow-x:auto;margin-top:10px"><table class="tbl" style="font-size:12px"><thead><tr><th>Clinician</th><th class="r">Private share</th><th>Lab treatment</th><th class="r">UDA rate</th></tr></thead><tbody>
+                  <tr><td style="font-weight:600">Dr A · principal</td><td class="r">100% retained</td><td>Lab pre-split</td><td class="r">£28.50</td></tr>
+                  <tr><td style="font-weight:600">Dr B · associate</td><td class="r">45%</td><td>50/50 split</td><td class="r">£26.00</td></tr>
+                  <tr><td style="font-weight:600">Dr C · associate</td><td class="r">50%</td><td>Lab pre-split</td><td class="r">n/a</td></tr>
+                  <tr><td style="font-weight:600">Dr D · hygienist</td><td class="r">40%</td><td>n/a</td><td class="r">n/a</td></tr>
+                </tbody></table></div>
+              </div>
+              <div class="setrow"><div><div class="lbl">Lab cost source</div><div class="dsc">Where treatment lab cost comes from.</div></div><select class="sel"><option>Dentally item → Xero (Phase 2)</option><option selected>Treatment standard cost</option></select></div>
+              <div class="setrow"><div><div class="lbl">Material standard-cost library</div><div class="dsc">Per-treatment consumable cost (TPE library).</div></div><button class="btn btn-outline" style="height:32px">Edit · 48 treatments</button></div>
+              <div class="setrow"><div><div class="lbl">Membership service cost</div><div class="dsc">Annual expected delivery cost per member.</div></div><div style="display:flex;gap:6px;align-items:center"><span style="color:hsl(var(--muted-foreground));font-size:13px">£</span><input class="inp" value="205" style="width:80px"></div></div>
+            </div>
+          </div>
+
+          <div class="card card-p">
+            <h3 class="ct">Conversion Probabilities</h3>
+            <div class="cs">Weight the opportunity pipeline, never collapse gross &amp; weighted</div>
+            <div style="margin-top:8px">
+              <div class="setrow"><div><div class="lbl">Auto-learn from your history</div><div class="dsc">Use each treatment's real planned→completed rate when the sample is large enough. Manual values apply only where data is thin.</div></div><div class="toggle on"></div></div>
+              <div class="setrow"><div><div class="lbl">Implant</div><div class="dsc">Your history: <b style="color:hsl(var(--success))">34% converted</b> (n=118, trusted). Override:</div></div><div style="display:flex;gap:6px;align-items:center"><input class="inp" value="34" style="width:70px"><span style="color:hsl(var(--muted-foreground));font-size:13px">%</span></div></div>
+              <div class="setrow"><div><div class="lbl">Whitening</div><div class="dsc">History n=14, <b style="color:hsl(var(--warning))">too thin to trust</b>. Using manual assumption:</div></div><div style="display:flex;gap:6px;align-items:center"><input class="inp" value="55" style="width:70px"><span style="color:hsl(var(--muted-foreground));font-size:13px">%</span></div></div>
+              <div class="setrow"><div><div class="lbl">Invisalign / ortho</div><div class="dsc">Your history: <b style="color:hsl(var(--success))">46% converted</b> (n=63, trusted). Override:</div></div><div style="display:flex;gap:6px;align-items:center"><input class="inp" value="46" style="width:70px"><span style="color:hsl(var(--muted-foreground));font-size:13px">%</span></div></div>
+              <div class="setrow"><div><div class="lbl">Churn model</div><div class="dsc">Drives Contribution-at-Risk weighting.</div></div><select class="sel"><option>Recall-gap based</option><option>Behavioural (attendance + gap)</option></select></div>
+            </div>
+          </div>
+
+          <div class="card card-p" style="border-color:hsl(var(--primary)/.35)">
+            <h3 class="ct">Data Provenance &amp; Confidence<span class="tm">™</span></h3>
+            <div class="cs">Every figure is tagged by <b>where it comes from</b>, not just how sure we are. Four tiers, not one scale.</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;padding:12px;background:hsl(var(--muted)/.5);border-radius:10px">
+              <span class="conf dentally"><span class="cdot"></span>Dentally · directly sourced</span>
+              <span class="conf derived"><span class="cdot"></span>Derived · deterministic calc</span>
+              <span class="conf modelled"><span class="cdot"></span>Modelled · probability / forecast</span>
+              <span class="conf external"><span class="cdot"></span>External · Xero / plan / marketing</span>
+            </div>
+            <div style="margin-top:8px">
+              <div class="setrow"><div><div class="lbl">Patient, appointment &amp; treatment activity</div><div class="dsc">Direct from the Dentally API.</div></div><span class="conf dentally"><span class="cdot"></span>Dentally</span></div>
+              <div class="setrow"><div><div class="lbl">Plan values, invoices, payments, recalls</div><div class="dsc">Dentally treatment plans, invoice items, payment explanations, recalls API.</div></div><span class="conf dentally"><span class="cdot"></span>Dentally</span></div>
+              <div class="setrow"><div><div class="lbl">Status, frequency, commitment, opportunity (gross)</div><div class="dsc">Deterministic calculations over Dentally events. Started/Scheduled are derived, not native fields.</div></div><span class="conf derived"><span class="cdot"></span>Derived</span></div>
+              <div class="setrow"><div><div class="lbl">Weighted opportunity, CLTV, Quality, contribution-at-risk</div><div class="dsc">Probability and forecast models owned by DentPulse.</div></div><span class="conf modelled"><span class="cdot"></span>Modelled</span></div>
+              <div class="setrow"><div><div class="lbl">Associate, lab, materials, CAC, bank-settled cash</div><div class="dsc">Contracts, Xero / QBO, marketing spend, Open Banking. Not available from Dentally.</div></div><span class="conf external"><span class="cdot"></span>External</span></div>
+              <div class="setrow"><div><div class="lbl">Overall data confidence</div><div class="dsc">Composite across the tiers above, weighted by how much of each figure is directly sourced.</div></div><span class="badge suc">86%</span></div>
+              <div class="setrow"><div><div class="lbl">Show provenance tags in UI</div><div class="dsc">Display the chip beside every computed figure.</div></div><div class="toggle on"></div></div>
+            </div>
+          </div>
+
+          <div class="card card-p">
+            <h3 class="ct">Status, Recall &amp; Data Source</h3>
+            <div class="cs">Definitions that drive the calculations</div>
+            <div style="margin-top:8px">
+              <div class="setrow"><div><div class="lbl">Active window</div><div class="dsc">Seen within N months = Active.</div></div><div style="display:flex;gap:6px;align-items:center"><input class="inp" value="18" style="width:64px"><span style="color:hsl(var(--muted-foreground));font-size:13px">mo</span></div></div>
+              <div class="setrow"><div><div class="lbl">Scheduling window</div><div class="dsc">Days after treatment planning within which a linked future appointment must appear. Drives Treatment Commitment Rate™.</div></div><div style="display:flex;gap:6px;align-items:center"><input class="inp" value="30" style="width:64px"><span style="color:hsl(var(--muted-foreground));font-size:13px">days</span></div></div>
+              <div class="setrow"><div><div class="lbl">Primary source</div><div class="dsc">Practice management integration.</div></div><span class="badge suc">Dentally · Connected</span></div>
+              <div class="setrow"><div><div class="lbl">Sync frequency</div><div class="dsc">Patient base refresh.</div></div><select class="sel"><option>Every 15 min</option><option>Hourly</option></select></div>
+            </div>
+          </div>
+
+          <div class="card card-p" style="border-color:hsl(var(--muted-foreground)/.3)">
+            <h3 class="ct">NHS / UDA treatment</h3>
+            <div class="cs">How NHS work is treated so it never distorts private contribution</div>
+            <div style="margin-top:8px">
+              <div class="setrow"><div><div class="lbl">Exclude UDA income from contribution</div><div class="dsc">UDA is contract-value based, not margin-based. Keep it out of the private contribution engine.</div></div><div class="toggle on"></div></div>
+              <div class="setrow"><div><div class="lbl">Track UDA delivery separately</div><div class="dsc">Delivered vs contracted UDAs and clawback exposure in its own lens.</div></div><div class="toggle on"></div></div>
+              <div class="setrow"><div><div class="lbl">Clawback alert threshold</div><div class="dsc">Warn when projected delivery falls below contract.</div></div><div style="display:flex;gap:6px;align-items:center"><input class="inp" value="96" style="width:64px"><span style="color:hsl(var(--muted-foreground));font-size:13px">%</span></div></div>
+              <div class="setrow"><div><div class="lbl">Mixed-patient handling</div><div class="dsc">Patients with both NHS and private courses.</div></div><select class="sel"><option selected>Split by course type</option><option>Flag as mixed</option></select></div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px"><button class="btn btn-outline">Reset</button><button class="btn btn-primary"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>Save changes</button></div>
+      </section>
+
+      <div class="mock-note">
+        <b>Design mockup · aligned build v5.1 (API-audited, terminology-clean).</b> DentPulse Enterprise “Patient Economics Engine” for the multi-practice manager. v5.1 extends the frozen v5 baseline with a per-treatment P&L on the Patient Financial Record: the directory now shows <b>Revenue (Dentally) − Cost (attributed) = Contribution (Derived)</b> as three columns, and each row expands to the completed-treatment breakdown, with patient-level overheads (membership service, CAC) shown as a separate deduction line so the lines reconcile to the totals. v5 purges the residual “committed / not booked” language left over from v3, which contradicted the Scheduled model: opportunity states are now observable (Planned-unscheduled = commercial opportunity, Completed-not-charged = billing leakage, Charged-not-collected = cash leakage). <b>Commitment Rate™</b> is kept as the branded KPI (% of eligible planned private treatment value that becomes Scheduled within N days) sitting on the raw <b>Scheduled</b> event; the Settings “Scheduling window” defines N. Confidence is a four-tier provenance model (Dentally / Derived / Modelled / External) with an overall score; mixed-provenance tiles now split their tags (avg contribution Derived, projected LTV Modelled). Growth levers are named for dentistry: <b>Visit Frequency × Value per Visit × Patient Lifetime → Patient Economic Value</b>. Collected = recorded in the PMS, not bank-settled. Per-clinician remuneration profiles; NHS/UDA tracked apart via nhs_uda_value / NHS Claims; conversion learned from history; Recovery Loop is DentPulse accountability over Dentally evidence; CAC attribution next version. All names and figures are illustrative placeholders.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function activate(tab){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active',p.id===tab));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===tab));
+  document.querySelectorAll('.sb-sub a').forEach(a=>a.classList.toggle('active',a.dataset.tab===tab));
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+document.querySelectorAll('[data-tab]').forEach(el=>el.addEventListener('click',()=>activate(el.dataset.tab)));
+const C={p:'hsl(246 79% 62%)',g:'hsl(145 50% 46%)',a:'hsl(38 92% 52%)',r:'hsl(0 72% 62%)',b:'hsl(200 75% 50%)',mut:'hsl(246 30% 55%)',grid:'hsl(246 40% 90%)'};
+
+function waterfall(elId, compact){
+  const st=[['Planned',2400],['Scheduled',1900],['Started',1660],['Completed',1520],['Charged',1483],['Collected',1450]];
+  const W=560,H=compact?230:260,pl=40,pr=12,pt=14,pb=compact?40:44,max=2500;
+  const bw=(W-pl-pr)/st.length;const y=v=>pt+(1-v/max)*(H-pt-pb);let bars='',xl='',conn='';
+  st.forEach((s,i)=>{const[n,v]=s;const bx=pl+i*bw+6;const w=bw-14;const top=y(v);
+    // retained bar
+    bars+=`<rect x="${bx}" y="${top}" width="${w}" height="${H-pb-top}" rx="3" fill="${C.p}" opacity="${i===0||i===st.length-1?1:.85}"/>`;
+    bars+=`<text x="${bx+w/2}" y="${top-5}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${C.p}">£${(v/1000).toFixed(2)}m</text>`;
+    // leak segment vs previous
+    if(i>0){const pv=st[i-1][1];const drop=pv-v;const ytop=y(pv);const yb=y(v);
+      const lx=pl+i*bw+6;conn+=`<rect x="${lx-6}" y="${ytop}" width="6" height="${yb-ytop}" fill="${C.r}" opacity=".55"/>`;
+      conn+=`<text x="${lx-3}" y="${(ytop+yb)/2+3}" text-anchor="middle" font-size="8.5" fill="${C.r}" transform="rotate(0)"></text>`;}
+    const label=n.split('\n');xl+=`<text x="${bx+w/2}" y="${H-pb+16}" text-anchor="middle" font-size="9.5" fill="${C.mut}">${label[0]}</text>`;
+    if(label[1])xl+=`<text x="${bx+w/2}" y="${H-pb+27}" text-anchor="middle" font-size="9.5" fill="${C.mut}">${label[1]}</text>`;
+  });
+  let grid='';for(let g=0;g<=4;g++){const gy=pt+g*(H-pt-pb)/4;grid+=`<line x1="${pl}" y1="${gy}" x2="${W-pr}" y2="${gy}" stroke="${C.grid}"/><text x="${pl-6}" y="${gy+3}" text-anchor="end" font-size="9" fill="${C.mut}">${(max-max*g/4)/1000}m</text>`;}
+  const contribY=y(548);
+  let contrib=`<line x1="${pl}" y1="${y(1450)}" x2="${W-pr}" y2="${y(1450)}" stroke="none"/>`;
+  document.getElementById(elId).innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%">${grid}${conn}${bars}${xl}</svg>`;
+}
+waterfall('chart-waterfall',true);
+waterfall('chart-waterfall2',false);
+
+/* contribution vs revenue mini */
+(function(){
+  const d=[['Collected',1450,C.mut],['Contribution',548,C.g]];
+  const W=280,H=150,pl=10,pr=10,pt=10,pb=26,max=1550;const bw=(W-pl-pr)/2;const y=v=>pt+(1-v/max)*(H-pt-pb);
+  let out='';d.forEach((r,i)=>{const[n,v,c]=r;const bx=pl+i*bw;out+=`<rect x="${bx+24}" y="${y(v)}" width="${bw-48}" height="${H-pb-y(v)}" rx="4" fill="${c}"/><text x="${bx+bw/2}" y="${y(v)-5}" text-anchor="middle" font-size="12" font-weight="800" fill="${c}">£${(v/1000).toFixed(2)}m</text><text x="${bx+bw/2}" y="${H-8}" text-anchor="middle" font-size="10.5" fill="${C.mut}">${n}</text>`;});
+  document.getElementById('chart-contrib').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%">${out}</svg>`;
+})();
+
+/* opportunity gross vs weighted */
+(function(){
+  const d=[['Whitening',358,197],['Implant',1330,399],['Ortho',890,427],['Other',692,255]];
+  const W=520,H=200,pl=70,pr=54,max=1400;const rowH=40;let out='';const bw=W-pl-pr;
+  d.forEach((r,i)=>{const[n,gross,wtd]=r;const yy=8+i*rowH;out+=`<text x="${pl-8}" y="${yy+20}" text-anchor="end" font-size="11" fill="${C.mut}">${n}</text><rect x="${pl}" y="${yy+4}" width="${bw*gross/max}" height="13" rx="4" fill="${C.p}" opacity=".25"/><rect x="${pl}" y="${yy+20}" width="${bw*wtd/max}" height="13" rx="4" fill="${C.p}"/><text x="${pl+bw*gross/max+5}" y="${yy+14}" font-size="9.5" fill="${C.mut}">£${gross}</text><text x="${pl+bw*wtd/max+5}" y="${yy+30}" font-size="9.5" font-weight="700" fill="${C.p}">£${wtd}</text>`;});
+  out+=`<text x="${pl}" y="${H-2}" font-size="9.5" fill="${C.mut}">▨ gross &nbsp; ▮ probability-weighted</text>`;
+  document.getElementById('chart-opp').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%">${out}</svg>`;
+})();
+
+/* commitment rate by clinician */
+(function(){
+  const d=[['Dr A',74],['Dr B',61],['Dr C',43],['Dr D',68],['Dr E',57]];const target=70;
+  const W=520,rowH=30,pl=54,pr=44;const H=d.length*rowH+16;const bw=W-pl-pr;let out='';
+  d.forEach((r,i)=>{const[n,v]=r;const yy=8+i*rowH;const w=bw*v/100;const col=v>=target?C.g:v>=55?C.a:C.r;out+=`<text x="${pl-8}" y="${yy+15}" text-anchor="end" font-size="11" fill="${C.mut}">${n}</text><rect x="${pl}" y="${yy+3}" width="${bw}" height="14" rx="7" fill="${C.grid}" opacity=".5"/><rect x="${pl}" y="${yy+3}" width="${w}" height="14" rx="7" fill="${col}"/><text x="${pl+w+6}" y="${yy+14}" font-size="10.5" font-weight="700" fill="${col}">${v}%</text>`;});
+  const tx=pl+bw*target/100;out+=`<line x1="${tx}" y1="4" x2="${tx}" y2="${H-8}" stroke="${C.p}" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+  document.getElementById('chart-commit').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%">${out}</svg>`;
+})();
+
+/* commitment by time window */
+(function(){
+  const d=[['7d',34],['30d',62],['60d',73],['90d',79]];const W=520,H=180,pl=30,pr=10,pt=14,pb=26,max=100;const bw=(W-pl-pr)/d.length;const y=v=>pt+(1-v/max)*(H-pt-pb);let bars='',xl='';
+  d.forEach((r,i)=>{const[n,v]=r;const bx=pl+i*bw;bars+=`<rect x="${bx+16}" y="${y(v)}" width="${bw-32}" height="${H-pb-y(v)}" rx="4" fill="${C.b}" opacity="${0.55+i*0.12}"/><text x="${bx+bw/2}" y="${y(v)-5}" text-anchor="middle" font-size="11" font-weight="800" fill="${C.b}">${v}%</text>`;xl+=`<text x="${bx+bw/2}" y="${H-8}" text-anchor="middle" font-size="10.5" fill="${C.mut}">${n}</text>`;});
+  document.getElementById('chart-window').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%">${bars}${xl}</svg>`;
+})();
+
+/* contribution at risk by segment */
+(function(){
+  const d=[['Active (healthy)',3912,0,C.g],['Drifting',620,58,C.a],['Lapsed',410,176,C.r],['Lost',320,0,C.mut]];
+  const W=520,H=200,pl=110,pr=54,max=200;const rowH=44;let out='';const bw=W-pl-pr;
+  d.forEach((r,i)=>{const[n,cnt,risk,c]=r;const yy=8+i*rowH;out+=`<text x="${pl-8}" y="${yy+16}" text-anchor="end" font-size="11" font-weight="600" fill="hsl(246 79% 25%)">${n}</text><text x="${pl-8}" y="${yy+29}" text-anchor="end" font-size="9.5" fill="${C.mut}">${cnt.toLocaleString()} patients</text>`;
+    if(risk>0){const w=bw*risk/max;out+=`<rect x="${pl}" y="${yy+6}" width="${w}" height="20" rx="4" fill="${c}"/><text x="${pl+w+6}" y="${yy+20}" font-size="11" font-weight="700" fill="${c}">£${risk}k at risk</text>`;}
+    else out+=`<text x="${pl}" y="${yy+20}" font-size="10.5" fill="${C.mut}">${i===0?'no contribution at risk':'not recoverable'}</text>`;});
+  document.getElementById('chart-risk').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%">${out}</svg>`;
+})();
+
+/* reactivation value by practice */
+(function(){
+  const d=[['City Central',96],['Riverside',88],['Harbourside',78],['Meadow St.',64],['Kingsway',52],['Parkview',43]];
+  const W=520,H=200,pl=90,pr=46,max=100;const rowH=30;let out='';const bw=W-pl-pr;
+  d.forEach((r,i)=>{const[n,v]=r;const yy=8+i*rowH;const w=bw*v/max;out+=`<text x="${pl-8}" y="${yy+15}" text-anchor="end" font-size="11" fill="${C.mut}">${n}</text><rect x="${pl}" y="${yy+4}" width="${bw}" height="15" rx="4" fill="${C.grid}" opacity=".5"/><rect x="${pl}" y="${yy+4}" width="${w}" height="15" rx="4" fill="${C.p}"/><text x="${pl+w+6}" y="${yy+16}" font-size="10.5" font-weight="700" fill="${C.p}">£${v}k</text>`;});
+  document.getElementById('chart-react').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%">${out}</svg>`;
+})();
+
+/* recovery loop funnel */
+(function(){
+  const d=[['Flagged at risk',176,C.r],['Assigned',108,C.a],['Contacted',74,C.b],['Booked',41,C.p],['Recovered',29,C.g]];
+  const W=560,H=190,pl=112,pr=54,max=176;const rowH=34;let out='';const bw=W-pl-pr;
+  d.forEach((r,i)=>{const[n,v,c]=r;const yy=8+i*rowH;const w=bw*v/max;out+=`<text x="${pl-8}" y="${yy+18}" text-anchor="end" font-size="11" font-weight="600" fill="hsl(246 79% 25%)">${n}</text><rect x="${pl}" y="${yy+4}" width="${bw}" height="21" rx="4" fill="${C.grid}" opacity=".45"/><rect x="${pl}" y="${yy+4}" width="${w}" height="21" rx="4" fill="${c}"/><text x="${pl+w+6}" y="${yy+20}" font-size="11" font-weight="700" fill="${c}">£${v}k</text>`;});
+  document.getElementById('chart-funnel').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%">${out}</svg>`;
+})();
+
+/* tables */
+const pcs=[
+  ['Northgate Dental',3980,'£0.71m','£112k','£24k','£18k',74,'suc','On track'],
+  ['City Central',4610,'£0.82m','£128k','£31k','£29k',66,'suc','On track'],
+  ['Harbourside',3520,'£0.58m','£96k','£22k','£17k',63,'suc','On track'],
+  ['Meadow Street',2960,'£0.44m','£74k','£17k','£19k',59,'warn','Watch'],
+  ['Kingsway',2740,'£0.39m','£63k','£14k','£21k',57,'warn','Watch'],
+  ['Riverside Dental',1810,'£0.24m','£41k','£11k','£38k',43,'dng','Off track'],
+];
+document.getElementById('pcRows').innerHTML=pcs.map(p=>`<tr><td style="font-weight:600">${p[0]}</td><td class="r">${p[1].toLocaleString()}</td><td class="r" style="font-weight:700">${p[2]}</td><td class="r">${p[3]}</td><td class="r" style="color:hsl(var(--chart-5))">${p[4]}</td><td class="r" style="color:hsl(var(--danger))">${p[5]}</td><td class="r">${p[6]}%</td><td><span class="badge ${p[7]}">${p[8]}</span></td></tr>`).join('');
+
+const react=[
+  ['Margaret Hughes','Riverside','12 Jan 2025',214,'£1,640','£2,171','Aisha (RS)','contacted'],
+  ['Robert Sinclair','Parkview','29 Jan 2025',197,'£1,420','£1,960','Unassigned','new'],
+  ['Elaine Foster','Kingsway','14 Feb 2025',181,'£1,180','£1,510','Tom (KW)','booked'],
+  ['Derek Nolan','Meadow Street','02 Mar 2025',165,'£980','£1,240','Unassigned','new'],
+  ['Patricia Owens','City Central','20 Mar 2025',147,'£1,060','£1,180','Aisha (CC)','recovered'],
+];
+const stMap={new:['neu','New'],contacted:['warn','Contacted'],booked:['pri','Booked'],recovered:['suc','Recovered']};
+document.getElementById('reactRows').innerHTML=react.map(r=>{const[sc,sl]=stMap[r[7]];const act=r[6]==='Unassigned'?'Assign':'Open';return `<tr><td style="font-weight:600">${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td class="r"><span class="badge ${r[3]>180?'dng':'warn'}">${r[3]}d</span></td><td class="r">${r[4]}</td><td class="r" style="color:hsl(var(--danger));font-weight:700">${r[5]}</td><td style="${r[6]==='Unassigned'?'color:hsl(var(--muted-foreground))':''}">${r[6]}</td><td><span class="badge ${sc}">${sl}</span></td><td><button class="btn btn-outline" style="height:28px;font-size:12px">${act}</button></td></tr>`;}).join('');
+
+const recs=[
+  ['Sarah Jones','DEN-10482','City Central','Member','£2,411','£596','£6,257',84],
+  ['James Whitfield','DEN-10488','Northgate','Active','£410','£1,350','£3,120',52],
+  ['Priya Nair','DEN-10501','Harbourside','Member','£1,180','£210','£3,840',77],
+  ['David Osei','DEN-10515','Riverside','Active','£690','£1,140','£2,960',48],
+  ['Chloe Adeyemi','City Central','—','Active','£930','£320','£2,510',63].slice(0,0)&&[],
+];
+const recData=[
+  ['Sarah Jones','DEN-10482','City Central','Member','£6,722','£4,311','£2,411','£596','£6,257',84,'suc',[
+    ['Implant (UR6)','12 Nov 2024','Dr B','£3,200','£1,880','£1,320'],
+    ['Crown','03 Oct 2024','Dr B','£1,450','£820','£630'],
+    ['Composite bonding','20 Aug 2024','Dr C','£1,200','£700','£500'],
+    ['Exam + hygiene ×3','2024','Dr D','£872','£401','£471'],
+    ['Membership service + CAC','patient-level','—','—','£510','−£510'],
+  ]],
+  ['James Whitfield','DEN-10488','Northgate','Active','£1,180','£770','£410','£1,350','£3,120',52,'warn',[
+    ['Exam + 2 fillings','14 Feb 2025','Dr C','£480','£300','£180'],
+    ['Hygiene ×2','2024','Dr D','£240','£120','£120'],
+    ['Extraction','05 Dec 2024','Dr B','£460','£350','£110'],
+  ]],
+  ['Priya Nair','DEN-10501','Harbourside','Member','£2,760','£1,580','£1,180','£210','£3,840',77,'suc',[
+    ['Invisalign','09 Jan 2025','Dr B','£1,900','£1,050','£850'],
+    ['Whitening','12 Feb 2025','Dr C','£350','£150','£200'],
+    ['Hygiene ×2 + exam','2024','Dr D','£510','£230','£280'],
+    ['Membership service','patient-level','—','—','£150','−£150'],
+  ]],
+  ['David Osei','DEN-10515','Riverside','Active','£1,640','£950','£690','£1,140','£2,960',48,'warn',[
+    ['Root canal + crown','02 Nov 2024','Dr B','£1,150','£690','£460'],
+    ['Exam + hygiene ×2','2024','Dr D','£490','£260','£230'],
+  ]],
+  ['Grace O’Neill','DEN-10530','Kingsway','Member','£3,410','£1,870','£1,540','£180','£4,410',81,'suc',[
+    ['Implant','18 Oct 2024','Dr B','£2,400','£1,300','£1,100'],
+    ['Composite bonding','20 Jan 2025','Dr C','£620','£330','£290'],
+    ['Hygiene ×3 + exam','2024','Dr D','£390','£190','£200'],
+    ['Membership service','patient-level','—','—','£50','−£50'],
+  ]],
+];
+function toggleRec(i){const d=document.getElementById('rec-det-'+i);const c=document.getElementById('rec-chev-'+i);const open=d.style.display==='table-row';d.style.display=open?'none':'table-row';c.textContent=open?'▸':'▾';}
+document.getElementById('recRows').innerHTML=recData.map((r,i)=>{
+  const bd=r[11].map(t=>{const neg=t[5].indexOf('−')===0;return `<tr><td style="padding-left:14px">${t[0]}</td><td style="color:hsl(var(--muted-foreground))">${t[1]}</td><td>${t[2]}</td><td class="r">${t[3]}</td><td class="r" style="color:hsl(var(--danger))">${t[4]}</td><td class="r" style="font-weight:600;color:${neg?'hsl(var(--danger))':'hsl(var(--success))'}">${t[5]}</td></tr>`;}).join('');
+  const detail=`<tr id="rec-det-${i}" style="display:none"><td></td><td colspan="10" style="background:hsl(var(--muted)/.4);padding:12px 14px">
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:hsl(var(--muted-foreground));margin-bottom:8px">Completed treatments · ${r[0]} &nbsp;<span class="conf dentally" style="font-size:9px"><span class="cdot"></span>Revenue Dentally</span> <span class="conf external" style="font-size:9px"><span class="cdot"></span>Cost attributed</span> <span class="conf derived" style="font-size:9px"><span class="cdot"></span>Contribution Derived</span></div>
+    <table class="tbl" style="font-size:12px;background:hsl(var(--card));border-radius:8px"><thead><tr><th>Treatment</th><th>Date</th><th>Clinician</th><th class="r">Revenue</th><th class="r">Cost</th><th class="r">Contribution</th></tr></thead><tbody>${bd}
+    <tr style="border-top:2px solid hsl(var(--border))"><td style="font-weight:700">Total</td><td></td><td></td><td class="r" style="font-weight:700">${r[4]}</td><td class="r" style="font-weight:700;color:hsl(var(--danger))">${r[5]}</td><td class="r" style="font-weight:800;color:hsl(var(--success))">${r[6]}</td></tr></tbody></table>
+  </td></tr>`;
+  return `<tr style="cursor:pointer" onclick="toggleRec(${i})"><td style="text-align:center;color:hsl(var(--muted-foreground))"><span id="rec-chev-${i}">▸</span></td><td style="font-weight:600">${r[0]}</td><td style="color:hsl(var(--muted-foreground))">${r[1]}</td><td>${r[2]}</td><td><span class="badge ${r[3]==='Member'?'pri':'neu'}">${r[3]}</span></td><td class="r">${r[4]}</td><td class="r" style="color:hsl(var(--danger))">${r[5]}</td><td class="r" style="color:hsl(var(--success));font-weight:700">${r[6]}</td><td class="r" style="color:hsl(var(--primary))">${r[7]}</td><td class="r" style="font-weight:700">${r[8]}</td><td class="r"><span class="badge ${r[10]}">${r[9]}/100</span></td></tr>${detail}`;
+}).join('');
+
+const goals=[
+  ['Northgate Dental','—','—','—','—',102,'g'],
+  ['City Central','72','£440','£26k','6.5',98,'g'],
+  ['Harbourside','—','—','—','—',94,'g'],
+  ['Meadow Street','—','£400','—','—',86,'a'],
+  ['Kingsway','65','—','—','—',80,'a'],
+  ['Riverside Dental','60','£360','£14k','9.0',58,'r'],
+];
+document.getElementById('goalRows').innerHTML=goals.map(g=>`<tr><td style="font-weight:600">${g[0]}</td><td><input class="inp" style="width:70px;height:32px" value="${g[1]}" placeholder="70"></td><td><input class="inp" style="width:80px;height:32px" value="${g[2]}" placeholder="£420"></td><td><input class="inp" style="width:76px;height:32px" value="${g[3]}" placeholder="£90k"></td><td><input class="inp" style="width:76px;height:32px" value="${g[4]}" placeholder="7.0"></td><td style="min-width:150px"><div style="display:flex;align-items:center;gap:8px"><div class="pbar" style="flex:1"><span class="${g[6]}" style="width:${Math.min(g[5],100)}%"></span></div><span style="font-size:11.5px;font-weight:700;color:hsl(var(--muted-foreground))">${g[5]}%</span></div></td></tr>`).join('');
+
+/* ===== GROWTH LEVERS ===== */
+/* lever headroom by practice (gap to target, grouped) */
+(function(){
+  const d=[['City Central',18,64],['Northgate',26,52],['Harbourside',34,71],['Meadow St.',48,58],['Kingsway',55,66],['Riverside',72,80]];
+  const W=520,H=200,pl=90,pr=44,max=100;const rowH=30;let out='';const bw=W-pl-pr;
+  d.forEach((r,i)=>{const[n,head,q]=r;const yy=8+i*rowH;const w=bw*head/max;const col=head>=55?C.r:head>=30?C.a:C.g;out+=`<text x="${pl-8}" y="${yy+15}" text-anchor="end" font-size="11" fill="${C.mut}">${n}</text><rect x="${pl}" y="${yy+4}" width="${bw}" height="15" rx="4" fill="${C.grid}" opacity=".5"/><rect x="${pl}" y="${yy+4}" width="${w}" height="15" rx="4" fill="${col}"/><text x="${pl+w+6}" y="${yy+16}" font-size="10.5" font-weight="700" fill="${col}">${head}% room</text>`;});
+  document.getElementById('chart-levers').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%">${out}</svg>`;
+})();
+/* CLTV by acquisition source */
+(function(){
+  const d=[['Referral',2680],['Membership',2410],['Google Ads',1520],['Walk-in',1180],['NHS convert',960]];
+  const W=520,H=190,pl=96,pr=52,max=2800;const rowH=30;let out='';const bw=W-pl-pr;
+  d.forEach((r,i)=>{const[n,v]=r;const yy=8+i*rowH;const w=bw*v/max;out+=`<text x="${pl-8}" y="${yy+15}" text-anchor="end" font-size="11" fill="${C.mut}">${n}</text><rect x="${pl}" y="${yy+4}" width="${bw}" height="15" rx="4" fill="${C.grid}" opacity=".5"/><rect x="${pl}" y="${yy+4}" width="${w}" height="15" rx="4" fill="${C.p}"/><text x="${pl+w+6}" y="${yy+16}" font-size="10.5" font-weight="700" fill="${C.p}">£${v.toLocaleString()}</text>`;});
+  document.getElementById('chart-cltv').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%">${out}</svg>`;
+})();
+const levers=[
+  ['City Central',2.5,'£201','£2,240','6.8','18%','Value per Visit'],
+  ['Northgate Dental',2.3,'£188','£2,010','6.5','26%','Visit Frequency'],
+  ['Harbourside',2.0,'£176','£1,760','6.1','34%','Visit Frequency'],
+  ['Meadow Street',1.9,'£169','£1,540','5.7','48%','Patient Lifetime'],
+  ['Kingsway',1.8,'£162','£1,430','5.4','55%','Patient Lifetime'],
+  ['Riverside Dental',1.6,'£151','£1,180','4.9','72%','Visit Frequency'],
+];
+document.getElementById('leverRows').innerHTML=levers.map(l=>{const hv=parseInt(l[5]);const hc=hv>=55?'dng':hv>=30?'warn':'suc';return `<tr><td style="font-weight:600">${l[0]}</td><td class="r">${l[1]}</td><td class="r">${l[2]}</td><td class="r" style="font-weight:700">${l[3]}</td><td class="r">${l[4]} yrs</td><td class="r"><span class="badge ${hc}">${l[5]}</span></td><td><span class="badge pri">${l[6]}</span></td></tr>`;}).join('');
+
+/* ===== PATIENT LIST ===== */
+const patients=[
+  ['Sarah Jones','DEN-10482','City Central','Member','suc','Active',2.8,'£212','£2,411','£6,257',84,'suc'],
+  ['James Whitfield','DEN-10488','Northgate','Private','','Active',1.9,'£174','£410','£3,120',52,'warn'],
+  ['Priya Nair','DEN-10501','Harbourside','Member','suc','Active',3.1,'£198','£1,180','£3,840',77,'suc'],
+  ['David Osei','DEN-10515','Riverside','Private','','Drifting',1.4,'£151','£690','£2,960',48,'warn'],
+  ['Grace O’Neill','DEN-10530','Kingsway','Member','suc','Active',2.6,'£205','£1,540','£4,410',81,'suc'],
+  ['Margaret Hughes','DEN-10544','Riverside','Private','','Lapsed',0.6,'£143','£120','£2,171',31,'dng'],
+  ['Ade Bello','DEN-10559','City Central','NHS','','Active',2.2,'£38','£210','£640',44,'neu'],
+  ['Fiona Clarke','DEN-10563','Harbourside','Private','','Active',2.4,'£221','£1,760','£5,020',79,'suc'],
+];
+const stCol={Active:'suc',Drifting:'warn',Lapsed:'dng'};
+const tyCol={Member:'pri',Private:'suc',NHS:'neu'};
+document.getElementById('listRows').innerHTML=patients.map(p=>`<tr style="cursor:pointer"><td style="font-weight:600">${p[0]}</td><td style="color:hsl(var(--muted-foreground))">${p[1]}</td><td>${p[2]}</td><td><span class="badge ${tyCol[p[3]]||'neu'}">${p[3]}</span></td><td><span class="badge ${stCol[p[5]]||'neu'}">${p[5]}</span></td><td class="r">${p[6]}</td><td class="r">${p[7]}</td><td class="r" style="color:hsl(var(--success));font-weight:700">${p[8]}</td><td class="r" style="font-weight:700">${p[9]}</td><td class="r"><span class="badge ${p[11]}">${p[10]}</span></td></tr>`).join('');
+
+/* ===== INVOICES ===== */
+/* aged debt buckets */
+(function(){
+  const d=[['Current',102,C.b],['31–60d',38,C.a],['61–90d',18,C.a],['90d+',12,C.r]];
+  const W=520,H=180,pl=30,pr=14,pt=14,pb=28,max=110;const bw=(W-pl-pr)/d.length;const y=v=>pt+(1-v/max)*(H-pt-pb);let out='';
+  d.forEach((r,i)=>{const[n,v,c]=r;const bx=pl+i*bw;out+=`<rect x="${bx+18}" y="${y(v)}" width="${bw-36}" height="${H-pb-y(v)}" rx="4" fill="${c}"/><text x="${bx+bw/2}" y="${y(v)-5}" text-anchor="middle" font-size="11.5" font-weight="800" fill="${c}">£${v}k</text><text x="${bx+bw/2}" y="${H-9}" text-anchor="middle" font-size="10.5" fill="${C.mut}">${n}</text>`;});
+  document.getElementById('chart-aged').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%">${out}</svg>`;
+})();
+/* collection rate by practice */
+(function(){
+  const d=[['City Central',94],['Northgate',92],['Harbourside',90],['Meadow St.',88],['Kingsway',85],['Riverside',79]];const target=92;
+  const W=520,rowH=30,pl=88,pr=44;const H=d.length*rowH+16;const bw=W-pl-pr;let out='';
+  d.forEach((r,i)=>{const[n,v]=r;const yy=8+i*rowH;const w=bw*v/100;const col=v>=target?C.g:v>=85?C.a:C.r;out+=`<text x="${pl-8}" y="${yy+15}" text-anchor="end" font-size="11" fill="${C.mut}">${n}</text><rect x="${pl}" y="${yy+3}" width="${bw}" height="14" rx="7" fill="${C.grid}" opacity=".5"/><rect x="${pl}" y="${yy+3}" width="${w}" height="14" rx="7" fill="${col}"/><text x="${pl+w+6}" y="${yy+14}" font-size="10.5" font-weight="700" fill="${col}">${v}%</text>`;});
+  const tx=pl+bw*target/100;out+=`<line x1="${tx}" y1="4" x2="${tx}" y2="${H-8}" stroke="${C.p}" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+  document.getElementById('chart-collect').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%">${out}</svg>`;
+})();
+const invoices=[
+  ['INV-24817','Margaret Hughes','Riverside','04 Dec 2024','£1,640','£1,640',134,'overdue'],
+  ['INV-24902','Derek Nolan','Meadow Street','18 Jan 2025','£980','£620',89,'part'],
+  ['INV-25044','David Osei','Riverside','02 Feb 2025','£1,140','£1,140',74,'overdue'],
+  ['INV-25110','James Whitfield','Northgate','21 Feb 2025','£1,350','£450',55,'part'],
+  ['INV-25233','Fiona Clarke','Harbourside','09 Mar 2025','£2,210','£2,210',39,'current'],
+  ['INV-25301','Sarah Jones','City Central','24 Mar 2025','£596','£0',24,'paid'],
+];
+const invMap={overdue:['dng','Overdue'],part:['warn','Part-paid'],current:['pri','Current'],paid:['suc','Paid']};
+document.getElementById('invRows').innerHTML=invoices.map(v=>{const[ic,il]=invMap[v[7]];const act=v[7]==='paid'?'View':(v[7]==='current'?'Remind':'Chase');return `<tr><td style="font-weight:600">${v[0]}</td><td>${v[1]}</td><td>${v[2]}</td><td>${v[3]}</td><td class="r">${v[4]}</td><td class="r" style="font-weight:700;color:${v[5]==='£0'?'hsl(var(--muted-foreground))':'hsl(var(--danger))'}">${v[5]}</td><td class="r"><span class="badge ${v[6]>60?'dng':v[6]>30?'warn':'neu'}">${v[6]}d</span></td><td><span class="badge ${ic}">${il}</span></td><td><button class="btn btn-outline" style="height:28px;font-size:12px">${act}</button></td></tr>`;}).join('');
+</script>
+</body>
+</html>

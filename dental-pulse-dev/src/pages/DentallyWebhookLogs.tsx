@@ -12,88 +12,135 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import {
-  RefreshCw, Copy, Eye, EyeOff, Webhook, CheckCircle2, XCircle, Filter,
+  RefreshCw, Copy, Webhook, CheckCircle2, XCircle, Filter,
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
-// ── Webhook configuration ─────────────────────────────────────────────
-// NOTE: the signing secret is used to VERIFY inbound webhook signatures and
-// belongs in a backend env var in production — it is shown here only for this
-// internal tracking/dev page. Do not expose this page to untrusted users.
-const WEBHOOK = {
-  url: 'https://p-eu-west-1-region-api.portal.dental/webhooks/dentally/patients?practice_id=e8051ca1-aa26-4647-a08d-da5f56822a85',
-  practiceId: 'e8051ca1-aa26-4647-a08d-da5f56822a85',
-  resource: 'patients',
-  secret: '00860073e12862079eab8c2f23975ae1',
-};
-
-// The Supabase table this page reads from when present. If it doesn't exist
-// yet, the page falls back to the sample rows below so the layout is visible.
 const LOG_TABLE = 'dentally_webhook_logs';
+
+/** Dev page — set VITE_DENTALLY_WEBHOOK_PRACTICE_ID to filter logs for one org. */
+const PRACTICE_ID =
+  import.meta.env.VITE_DENTALLY_WEBHOOK_PRACTICE_ID?.trim() || '';
+
+const API_BASE =
+  import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ||
+  (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:5000` : '');
+
+const WEBHOOK_PAYMENTS_URL = PRACTICE_ID
+  ? `${API_BASE}/api/dentally-webhook/payments?practice_id=${PRACTICE_ID}`
+  : `${API_BASE}/api/dentally-webhook/payments?practice_id={organization_uuid}`;
+
+const WEBHOOK_APPOINTMENTS_URL = PRACTICE_ID
+  ? `${API_BASE}/api/dentally-webhook/appointments?practice_id=${PRACTICE_ID}`
+  : `${API_BASE}/api/dentally-webhook/appointments?practice_id={organization_uuid}`;
 
 type WebhookLog = {
   id: string;
   received_at: string;
-  resource: string;       // patients, appointments, …
-  action: string;         // created | updated | destroyed
+  resource: string;
+  action: string;
   object_id: string | null;
+  event_name?: string | null;
   signature_valid: boolean;
-  status_code: number;
+  status_code: number | null;
+  processing_status?: string | null;
   payload: unknown;
 };
 
-// ── Sample data (used only when the log table is absent/empty) ─────────
 const SAMPLE_LOGS: WebhookLog[] = [
   {
-    id: 'smpl-1', received_at: '2026-07-14T10:22:41Z', resource: 'patients', action: 'updated',
-    object_id: '12854', signature_valid: true, status_code: 200,
-    payload: { event: 'patient.updated', patient: { id: 12854, first_name: 'Paul', last_name: 'Bowen', updated_at: '2026-07-14T10:22:40Z' } },
+    id: 'smpl-1',
+    received_at: '2026-07-14T10:22:41Z',
+    resource: 'payment',
+    action: 'updated',
+    object_id: '12854',
+    event_name: 'payment.updated',
+    signature_valid: true,
+    status_code: 200,
+    processing_status: 'processed',
+    payload: {
+      event: 'payment.updated',
+      object: 'payment',
+      data: { id: 12854, amount: '250.00', explanations: [{ invoice_id: 62988296, amount: '250.00' }] },
+    },
   },
   {
-    id: 'smpl-2', received_at: '2026-07-14T10:05:12Z', resource: 'patients', action: 'created',
-    object_id: '13246', signature_valid: true, status_code: 200,
-    payload: { event: 'patient.created', patient: { id: 13246, first_name: 'Nina', last_name: 'Okafor', created_at: '2026-07-14T10:05:11Z' } },
+    id: 'smpl-2',
+    received_at: '2026-07-14T10:05:12Z',
+    resource: 'payment',
+    action: 'created',
+    object_id: '13246',
+    event_name: 'payment.created',
+    signature_valid: true,
+    status_code: 200,
+    processing_status: 'processed',
+    payload: {
+      event: 'payment.created',
+      object: 'payment',
+      data: { id: 13246, amount: '18.5', patient_id: 5106 },
+    },
   },
   {
-    id: 'smpl-3', received_at: '2026-07-14T09:48:03Z', resource: 'patients', action: 'destroyed',
-    object_id: '11902', signature_valid: false, status_code: 401,
-    payload: { event: 'patient.destroyed', patient: { id: 11902 }, note: 'signature mismatch' },
+    id: 'smpl-3',
+    received_at: '2026-07-14T09:48:03Z',
+    resource: 'payment',
+    action: 'deleted',
+    object_id: '11902',
+    event_name: 'payment.deleted',
+    signature_valid: false,
+    status_code: 401,
+    processing_status: 'failed',
+    payload: { event: 'payment.deleted', object: 'payment', data: { id: 11902 } },
   },
   {
-    id: 'smpl-4', received_at: '2026-07-14T09:31:55Z', resource: 'patients', action: 'updated',
-    object_id: '9526', signature_valid: true, status_code: 200,
-    payload: { event: 'patient.updated', patient: { id: 9526, first_name: 'Corina', last_name: 'Lamb' } },
+    id: 'smpl-4',
+    received_at: '2026-07-14T11:10:22Z',
+    resource: 'appointment',
+    action: 'updated',
+    object_id: '88421',
+    event_name: 'appointment.updated',
+    signature_valid: true,
+    status_code: 200,
+    processing_status: 'processed',
+    payload: {
+      event: 'appointment.updated',
+      object: 'appointment',
+      data: { id: 88421, patient_id: 5106, state: 'Completed' },
+    },
   },
 ];
 
-function maskSecret(secret: string): string {
-  if (secret.length <= 8) return '•'.repeat(secret.length);
-  return `${secret.slice(0, 4)}${'•'.repeat(secret.length - 8)}${secret.slice(-4)}`;
-}
-
 function actionVariant(action: string): 'default' | 'secondary' | 'destructive' | 'outline' {
   if (action === 'created') return 'default';
-  if (action === 'destroyed') return 'destructive';
+  if (action === 'deleted') return 'destructive';
   return 'secondary';
 }
 
 export default function DentallyWebhookLogs() {
-  const [revealSecret, setRevealSecret] = useState(false);
   const [search, setSearch] = useState('');
   const [actionFilter, setActionFilter] = useState<string>('all');
+  const [resourceFilter, setResourceFilter] = useState<string>('all');
   const [selected, setSelected] = useState<WebhookLog | null>(null);
 
   const { data, isFetching, refetch } = useQuery({
-    queryKey: ['dentally_webhook_logs', WEBHOOK.practiceId],
+    queryKey: ['dentally_webhook_logs', PRACTICE_ID],
     queryFn: async (): Promise<{ rows: WebhookLog[]; isSample: boolean }> => {
       try {
-        const { data: rows, error } = await (supabase as any)
+        let query = (supabase as any)
           .from(LOG_TABLE)
-          .select('id, received_at, resource, action, object_id, signature_valid, status_code, payload')
+          .select(
+            'id, received_at, resource, action, object_id, event_name, signature_valid, status_code, processing_status, payload',
+          )
           .order('received_at', { ascending: false })
           .limit(200);
+
+        if (PRACTICE_ID) {
+          query = query.eq('practice_id', PRACTICE_ID);
+        }
+
+        const { data: rows, error } = await query;
         if (error || !rows || rows.length === 0) {
           return { rows: SAMPLE_LOGS, isSample: true };
         }
@@ -112,15 +159,22 @@ export default function DentallyWebhookLogs() {
     const q = search.trim().toLowerCase();
     return logs.filter((l) => {
       if (actionFilter !== 'all' && l.action !== actionFilter) return false;
+      if (resourceFilter !== 'all' && l.resource !== resourceFilter) return false;
       if (!q) return true;
       return (
         (l.object_id ?? '').toLowerCase().includes(q) ||
         l.action.toLowerCase().includes(q) ||
         l.resource.toLowerCase().includes(q) ||
+        (l.event_name ?? '').toLowerCase().includes(q) ||
         JSON.stringify(l.payload).toLowerCase().includes(q)
       );
     });
-  }, [logs, search, actionFilter]);
+  }, [logs, search, actionFilter, resourceFilter]);
+
+  const resources = useMemo(
+    () => [...new Set(logs.map((l) => l.resource).filter(Boolean))],
+    [logs],
+  );
 
   const copy = (text: string, label: string) => {
     navigator.clipboard?.writeText(text).then(
@@ -142,13 +196,14 @@ export default function DentallyWebhookLogs() {
       <Helmet><title>Dentally Webhook Logs</title></Helmet>
 
       <div className="space-y-6 p-4 md:p-6">
-        {/* Header */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2">
             <Webhook className="h-6 w-6 text-primary" />
             <div>
               <h1 className="text-2xl font-semibold">Dentally Webhook Logs</h1>
-              <p className="text-sm text-muted-foreground">Inbound webhook events for the configured practice</p>
+              <p className="text-sm text-muted-foreground">
+                Inbound Dentally webhook events {PRACTICE_ID ? `· practice ${PRACTICE_ID.slice(0, 8)}…` : '· all practices'}
+              </p>
             </div>
           </div>
           <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
@@ -157,59 +212,80 @@ export default function DentallyWebhookLogs() {
           </Button>
         </div>
 
-        {/* Configuration card */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Webhook Configuration</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <ConfigRow label="Endpoint URL">
-              <code className="break-all rounded bg-muted px-2 py-1 text-xs">{WEBHOOK.url}</code>
-              <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => copy(WEBHOOK.url, 'URL')}>
-                <Copy className="h-3.5 w-3.5" />
-              </Button>
-            </ConfigRow>
-            <ConfigRow label="Practice ID">
-              <code className="rounded bg-muted px-2 py-1 text-xs">{WEBHOOK.practiceId}</code>
-            </ConfigRow>
-            <ConfigRow label="Resource">
-              <Badge variant="outline">{WEBHOOK.resource}</Badge>
-            </ConfigRow>
-            <ConfigRow label="Signing Secret">
-              <code className="rounded bg-muted px-2 py-1 text-xs">
-                {revealSecret ? WEBHOOK.secret : maskSecret(WEBHOOK.secret)}
-              </code>
-              <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => setRevealSecret((v) => !v)}>
-                {revealSecret ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-              </Button>
-              <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => copy(WEBHOOK.secret, 'Secret')}>
-                <Copy className="h-3.5 w-3.5" />
-              </Button>
-            </ConfigRow>
-          </CardContent>
-        </Card>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Payment webhook endpoint</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <ConfigRow label="URL">
+                <code className="break-all rounded bg-muted px-2 py-1 text-xs">{WEBHOOK_PAYMENTS_URL}</code>
+                <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => copy(WEBHOOK_PAYMENTS_URL, 'URL')}>
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
+              </ConfigRow>
+              <ConfigRow label="Events">
+                <div className="flex flex-wrap gap-1">
+                  {['payment.created', 'payment.updated', 'payment.deleted'].map((e) => (
+                    <Badge key={e} variant="outline" className="font-mono text-[10px]">{e}</Badge>
+                  ))}
+                </div>
+              </ConfigRow>
+              <ConfigRow label="Secret">
+                <span className="text-xs text-muted-foreground">
+                  Store in <code className="rounded bg-muted px-1">integrations.webhook_secret</code> (backend only — not shown here).
+                </span>
+              </ConfigRow>
+            </CardContent>
+          </Card>
 
-        {/* Sample-data banner */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Appointment webhook endpoint</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <ConfigRow label="URL">
+                <code className="break-all rounded bg-muted px-2 py-1 text-xs">{WEBHOOK_APPOINTMENTS_URL}</code>
+                <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => copy(WEBHOOK_APPOINTMENTS_URL, 'URL')}>
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
+              </ConfigRow>
+              <ConfigRow label="Events">
+                <div className="flex flex-wrap gap-1">
+                  {['appointment.created', 'appointment.updated', 'appointment.deleted'].map((e) => (
+                    <Badge key={e} variant="outline" className="font-mono text-[10px]">{e}</Badge>
+                  ))}
+                </div>
+              </ConfigRow>
+              <ConfigRow label="Downstream">
+                <span className="text-xs text-muted-foreground">
+                  Refreshes linked <code className="rounded bg-muted px-1">treatment_appointments</code> and writes{' '}
+                  <code className="rounded bg-muted px-1">event_ledger</code> link/unlink events.
+                </span>
+              </ConfigRow>
+            </CardContent>
+          </Card>
+        </div>
+
         {isSample && (
           <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-            Showing <strong>sample data</strong> — no <code>{LOG_TABLE}</code> table found or it is empty. Point a
-            receiver at the endpoint above and persist events into that table to see live logs here.
+            Showing <strong>sample data</strong> — no live rows in <code>{LOG_TABLE}</code> yet. Configure the endpoints in
+            Dentally Developer Settings and trigger a payment or appointment event to see live logs.
           </div>
         )}
 
-        {/* Toolbar */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
             <Filter className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search patient id, action, payload…"
+              placeholder="Search object id, event, payload…"
               className="w-72 pl-8"
             />
           </div>
           <div className="flex gap-1">
-            {['all', 'created', 'updated', 'destroyed'].map((a) => (
+            {['all', 'created', 'updated', 'deleted'].map((a) => (
               <Button
                 key={a}
                 variant={actionFilter === a ? 'default' : 'outline'}
@@ -221,6 +297,27 @@ export default function DentallyWebhookLogs() {
               </Button>
             ))}
           </div>
+          {resources.length > 1 && (
+            <div className="flex gap-1">
+              <Button
+                variant={resourceFilter === 'all' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setResourceFilter('all')}
+              >
+                All resources
+              </Button>
+              {resources.map((r) => (
+                <Button
+                  key={r}
+                  variant={resourceFilter === r ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setResourceFilter(r)}
+                >
+                  {r}
+                </Button>
+              ))}
+            </div>
+          )}
           <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
             <span className="flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5 text-green-600" />{validCount} valid</span>
             <span className="flex items-center gap-1"><XCircle className="h-3.5 w-3.5 text-red-600" />{invalidCount} invalid</span>
@@ -228,7 +325,6 @@ export default function DentallyWebhookLogs() {
           </div>
         </div>
 
-        {/* Logs table */}
         <Card>
           <CardContent className="p-0">
             <Table>
@@ -240,13 +336,14 @@ export default function DentallyWebhookLogs() {
                   <TableHead>Object ID</TableHead>
                   <TableHead>Signature</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Processing</TableHead>
                   <TableHead className="text-right">Payload</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="h-24 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={8} className="h-24 text-center text-sm text-muted-foreground">
                       No webhook events match your filters.
                     </TableCell>
                   </TableRow>
@@ -263,7 +360,12 @@ export default function DentallyWebhookLogs() {
                           : <span className="flex items-center gap-1 text-xs text-red-600"><XCircle className="h-3.5 w-3.5" />Invalid</span>}
                       </TableCell>
                       <TableCell>
-                        <Badge variant={log.status_code >= 400 ? 'destructive' : 'secondary'}>{log.status_code}</Badge>
+                        <Badge variant={(log.status_code ?? 0) >= 400 ? 'destructive' : 'secondary'}>
+                          {log.status_code ?? '—'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs capitalize text-muted-foreground">
+                        {log.processing_status ?? '—'}
                       </TableCell>
                       <TableCell className="text-right">
                         <Button variant="ghost" size="sm" onClick={() => setSelected(log)}>View</Button>
@@ -277,17 +379,21 @@ export default function DentallyWebhookLogs() {
         </Card>
       </div>
 
-      {/* Payload viewer */}
       <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Webhook payload {selected?.object_id ? `· #${selected.object_id}` : ''}</DialogTitle>
+            <DialogTitle>
+              Webhook payload {selected?.object_id ? `· payment #${selected.object_id}` : ''}
+            </DialogTitle>
           </DialogHeader>
           {selected && (
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <Badge variant="outline">{selected.resource}</Badge>
                 <Badge variant={actionVariant(selected.action)} className="capitalize">{selected.action}</Badge>
+                {selected.event_name && (
+                  <Badge variant="secondary" className="font-mono">{selected.event_name}</Badge>
+                )}
                 <span className="text-muted-foreground">{fmt(selected.received_at)}</span>
               </div>
               <pre className="max-h-[50vh] overflow-auto rounded-md bg-muted p-3 text-xs">

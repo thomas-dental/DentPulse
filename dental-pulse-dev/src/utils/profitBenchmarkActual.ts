@@ -55,15 +55,8 @@ export function composeIncomeBreakdown(
   const privateIncome = round2(
     accountingIncome?.private != null ? accountingIncome.private : pmsPrivate,
   );
-  // Membership: the accounting path returns 0 (not null) whenever the
-  // source defaults to Accounting App but no membership ledger revenue is
-  // mapped/posted — that zero must not shadow the real statement-upload
-  // revenue carried by provider net production (client 2026-08-20
-  // "implement membership revenue" on Profit Benchmark). A NON-ZERO
-  // accounting figure still wins — same gate as provider production's own
-  // per-month membership fallback.
   const membershipIncome = round2(
-    accountingIncome?.membership != null && accountingIncome.membership !== 0
+    accountingIncome?.membership != null
       ? accountingIncome.membership
       : pmsMembership,
   );

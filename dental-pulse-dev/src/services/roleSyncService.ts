@@ -7,9 +7,9 @@
 import { supabase } from '@/integrations/supabase/client';
 
 const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname);
-const BACKEND_URL = isLocal
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (isLocal
   ? 'http://localhost:4000'
-  : 'https://dent-enterprise-api.dentpulse.com';
+  : 'https://dent-enterprise-api.dentpulse.com');
 
 async function authHeaders(): Promise<Record<string, string>> {
   const { data: { session } } = await supabase.auth.getSession();

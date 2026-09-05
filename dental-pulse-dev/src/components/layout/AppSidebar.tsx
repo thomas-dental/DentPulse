@@ -6,7 +6,6 @@ import { SITE_LOGOS } from "@/lib/integrationLogos";
 import { useUserRole } from "@/hooks/useUserRole";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useModuleAccess } from "@/hooks/useModuleAccess";
-import { usePlanAccess } from "@/hooks/usePlanAccess";
 
 interface SubItem {
   label: string;
@@ -290,7 +289,22 @@ const navItems: NavItem[] = [
         icon: UserCheck,
         label: "Patients",
         path: "/patients",
+        dropdown: true,
         moduleKey: "patients",
+        subItems: [
+          { label: "Economic Pulse", path: "/patients" },
+          { label: "Growth Levers", path: "/patients?tab=growth-levers" },
+          { label: "Value & Leakage", path: "/patients?tab=value-leakage" },
+          {
+            label: "Retention & Reactivation",
+            path: "/patients?tab=retention",
+          },
+          { label: "Patient List", path: "/patients?tab=patient-list" },
+          { label: "Patient Records", path: "/patients?tab=patient-records" },
+          { label: "Invoices", path: "/patients?tab=invoices" },
+          { label: "Goal Settings", path: "/patients?tab=goal-settings" },
+          { label: "Settings", path: "/patients?tab=settings" },
+        ],
       },
       {
         icon: Megaphone,
@@ -485,7 +499,6 @@ export function AppSidebar({
   const { isOwner } = useUserRole();
   const { can, canAccessModule, isOwner: isOwnerPerm } = usePermissions();
   const { isModuleEnabled } = useModuleAccess();
-  const { isModuleAllowedByPlan } = usePlanAccess();
 
   // Filter a single item (top-level or nested under a section) by:
   // owner-only flag + module-level permission, then filter its subItems (if
@@ -495,8 +508,6 @@ export function AppSidebar({
     if (item.ownerOnly && !isOwner()) return null;
     // Org-wide module gate (SuperAdmin) — applies to everyone, even owners.
     if (item.moduleKey && !isModuleEnabled(item.moduleKey)) return null;
-    // Subscription plan gate — applies to everyone, even owners.
-    if (item.moduleKey && !isModuleAllowedByPlan(item.moduleKey)) return null;
     if (isOwnerPerm) return item;
     // For dropdowns with sub-items that have their own moduleKey, skip parent
     // moduleKey check and let sub-item filtering handle visibility.
@@ -518,7 +529,6 @@ export function AppSidebar({
     const filteredSubItems = item.subItems.filter((sub) => {
       // Sub-item has its own module key — check that module's access
       const effectiveModule = sub.moduleKey || parentModule;
-      if (effectiveModule && !isModuleAllowedByPlan(effectiveModule)) return false;
       if (effectiveModule && !canAccessModule(effectiveModule)) return false;
       // Card-level check within the effective module
       if (sub.cardKey && effectiveModule) {
@@ -595,11 +605,14 @@ export function AppSidebar({
   const subItemMatchesLocation = (subItemPath: string | undefined) => {
     if (!subItemPath) return false;
     const [basePath, query] = subItemPath.split("?");
+    const tabParam = new URLSearchParams(location.search).get("tab");
     if (query) {
-      return (
-        location.pathname === basePath &&
-        location.search.includes(query.split("=")[1])
-      );
+      const itemTabParam = new URLSearchParams(query).get("tab");
+      return location.pathname === basePath && tabParam === itemTabParam;
+    }
+    // Bare /patients = Economic Pulse only (not when another ?tab= is selected)
+    if (basePath === "/patients") {
+      return location.pathname === "/patients" && !tabParam;
     }
     return (
       location.pathname === basePath ||
@@ -690,8 +703,11 @@ export function AppSidebar({
       // dropdown header, then a section header) over shallower ones — same
       // class is applied at every level when a descendant is active.
       const active =
+        nav.querySelector<HTMLElement>("ul ul ul .sidebar-sub-item-active") ||
         nav.querySelector<HTMLElement>("ul ul ul .sidebar-item-active") ||
+        nav.querySelector<HTMLElement>("ul ul .sidebar-sub-item-active") ||
         nav.querySelector<HTMLElement>("ul ul .sidebar-item-active") ||
+        nav.querySelector<HTMLElement>(".sidebar-sub-item-active") ||
         nav.querySelector<HTMLElement>(".sidebar-item-active");
       if (active) active.scrollIntoView({ block: "nearest" });
     });
@@ -742,7 +758,7 @@ export function AppSidebar({
             )}
           </button>
           {!collapsed && isOpen && (
-            <ul className="ml-4 mt-1 space-y-1">
+            <ul className="sidebar-sub">
               {item.children.map((child, childIndex) =>
                 renderNavItem(child, childIndex),
               )}
@@ -790,14 +806,14 @@ export function AppSidebar({
             )}
           </button>
           {!collapsed && isOpen && item.subItems && (
-            <ul className="ml-4 mt-1 space-y-1">
+            <ul className="sidebar-sub">
               {item.subItems.map((subItem) => {
                 const isSubItemActive = subItemMatchesLocation(subItem.path);
                 if (!subItem.path) {
                   return (
                     <li key={subItem.label}>
-                      <span className="sidebar-item text-xs cursor-default opacity-50 select-none">
-                        <span className="ml-6">{subItem.label}</span>
+                      <span className="sidebar-sub-item cursor-default opacity-50 select-none">
+                        {subItem.label}
                       </span>
                     </li>
                   );
@@ -807,12 +823,12 @@ export function AppSidebar({
                     <NavLink
                       to={subItem.path}
                       className={cn(
-                        "sidebar-item text-xs",
-                        isSubItemActive && "sidebar-item-active",
+                        "sidebar-sub-item",
+                        isSubItemActive && "sidebar-sub-item-active",
                       )}
                       title={subItem.label}
                     >
-                      <span className="ml-6">{subItem.label}</span>
+                      {subItem.label}
                     </NavLink>
                   </li>
                 );
@@ -866,7 +882,7 @@ export function AppSidebar({
       {/* Navigation */}
       <nav
         ref={navRef}
-        className="flex-1 py-4 px-3 overflow-y-auto sidebar-scrollbar"
+        className="flex-1 overflow-y-auto px-3 py-3.5 sidebar-scrollbar"
       >
         {firstNavItem && (
           <ul className="space-y-1">{renderNavItem(firstNavItem, 0)}</ul>

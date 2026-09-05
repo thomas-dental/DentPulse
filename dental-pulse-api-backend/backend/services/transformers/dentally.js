@@ -11,7 +11,7 @@ const { parseBigInt, mapSiteIdToLocationId, mapNhsBand, truncate, parseUuid } = 
  * Transform a single record based on entity type.
  * @param {string} entityAlias
  * @param {object} record - Raw API record
- * @param {object} ctx - Context: { organizationId, userId, locationMap, categoryMap }
+ * @param {object} ctx - Context: { organizationId, userId, locationMap, categoryMap, cancellationReasonMap, acquisitionSourceMap }
  * @returns {object|null} Transformed record or null
  */
 function transformRecord(entityAlias, record, ctx) {
@@ -45,12 +45,14 @@ function transformRecord(entityAlias, record, ctx) {
       return transformTreatment(record, base, categoryMap);
     case 'appointment_cancellation_reasons':
       return transformAppointmentCancellationReason(record, base);
+    case 'acquisition_sources':
+      return transformAcquisitionSource(record, base);
     case 'treatment_category':
       return transformTreatmentCategory(record, base);
     case 'locations':
       return transformLocation(record, base);
     case 'patients':
-      return transformPatient(record, base, locationMap);
+      return transformPatient(record, base, locationMap, ctx.acquisitionSourceMap);
     case 'payments':
       return transformPayment(record, base, locationMap);
     case 'sundries':
@@ -283,6 +285,16 @@ function transformAppointmentCancellationReason(record, base) {
   };
 }
 
+function transformAcquisitionSource(record, base) {
+  return {
+    ...base,
+    as_id: parseUuid(record.id) || (typeof record.id === 'string' ? record.id : null),
+    as_name: truncate(record.name, 255) || '',
+    as_active: record.active !== false,
+    as_notes: record.notes || null,
+  };
+}
+
 function transformTreatmentCategory(record, base) {
   return {
     ...base,
@@ -332,7 +344,16 @@ function transformLocation(record, base) {
   };
 }
 
-function transformPatient(record, base, locationMap) {
+function transformPatient(record, base, locationMap, acquisitionSourceMap) {
+  const acquisitionSourceId = parseUuid(record.acquisition_source_id)
+    || (typeof record.acquisition_source_id === 'string' && record.acquisition_source_id
+      ? record.acquisition_source_id
+      : null);
+  let acquisitionSourceName = null;
+  if (acquisitionSourceId && acquisitionSourceMap && acquisitionSourceMap.size > 0) {
+    acquisitionSourceName = acquisitionSourceMap.get(String(acquisitionSourceId)) || null;
+  }
+
   return {
     ...base,
     location_id: mapSiteIdToLocationId(record.site_id, locationMap, 'patients'),
@@ -354,6 +375,11 @@ function transformPatient(record, base, locationMap) {
     pt_dentist_id: parseBigInt(record.dentist_id),
     pt_dentist_recall_date: record.dentist_recall_date || null,
     pt_dentist_recall_interval: record.dentist_recall_interval || null,
+    pt_hygienist_recall_date: record.hygienist_recall_date || null,
+    pt_hygienist_recall_interval: record.hygienist_recall_interval || null,
+    pt_recall_method: truncate(record.recall_method, 50),
+    pt_acquisition_source_id: acquisitionSourceId,
+    pt_acquisition_source_name: truncate(acquisitionSourceName, 255),
     pt_doctor_id: parseBigInt(record.doctor_id),
     pt_email: truncate(record.email, 255),
     pt_family_id: parseBigInt(record.family_id),

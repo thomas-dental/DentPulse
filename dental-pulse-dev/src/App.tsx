@@ -1,113 +1,120 @@
+import { lazy, Suspense } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { PermissionProtectedRoute } from "@/components/auth/PermissionProtectedRoute";
-import { PlatformAdminRoute } from "@/components/auth/PlatformAdminRoute";
 import { AuthProvider } from "@/hooks/useAuth";
 import { FilterProvider } from "@/contexts/FilterContext";
 import "@/utils/triggerSyncJob"; // Make triggerSyncJob available globally for console access
-import Dashboard from "./pages/Dashboard";
-import GroupDashboard from "./pages/GroupDashboard";
-import GroupDashboardDesign from "./pages/GroupDashboardDesign";
-import Performance from "./pages/Performance";
-import LocationDetail from "./pages/LocationDetail";
-import PreparingCashflowStatement from "./pages/PreparingCashflowStatement";
-import CashflowForecast from "./pages/CashflowForecast";
-import CashflowCfoSummary from "./pages/CashflowCfoSummary";
-import CashflowGrowth from "./pages/CashflowGrowth";
-import BillsToPay from "./pages/BillsToPay";
-import Budget from "./pages/Budget";
-import Reports from "./pages/Reports";
-import FinancialReports from "./pages/FinancialReports";
-import Profitability from "./pages/Profitability";
-import ProfitBenchmarkAction from "./pages/ProfitBenchmarkAction";
-import Tax from "./pages/Tax";
-import Providers from "./pages/Providers";
-import ProviderDetail from "./pages/ProviderDetail";
-import ProviderActivity from "./pages/ProviderActivity";
-import Treatments from "./pages/Treatments";
-import TreatmentSetup from "./pages/TreatmentSetup";
-import TreatmentInsights from "./pages/TreatmentInsights";
-import PrivateTreatment from "./pages/PrivateTreatment";
-import MembershipPerformance from "./pages/MembershipPerformance";
-import TreatmentEdit from "./pages/TreatmentEdit";
-import TreatmentQuickFill from "./pages/dev/TreatmentQuickFill";
-import NHSContractPerformance from "./pages/NHSContractPerformance";
-import NHSClaims from "./pages/NHSClaims";
-import MembershipPlanDetail from "./pages/MembershipPlanDetail";
-// import MembershipComparison from "./pages/MembershipComparison";
-import TreatmentProfitGoals from "./pages/TreatmentProfitGoals";
-import Chairs from "./pages/Chairs";
-import Patients from "./pages/Patients";
-import AccountsPayable from "./pages/AccountsPayable";
-import ApproverInvoiceItems from "./pages/ApproverInvoiceItems";
-import PublicInvoiceApproval from "./pages/PublicInvoiceApproval";
-import ApproverDashboard from "./pages/ApproverDashboard";
-import AcceptInvite from "./pages/AcceptInvite";
-import Settings from "./pages/Settings";
-import Profile from "./pages/Profile";
-import Onboarding from "./pages/Onboarding";
-import TeamManagement from "./pages/TeamManagement";
-import Auth from "./pages/Auth";
-// DISABLED: already run, commented to prevent accidental use
-// import ResetAllPasswords from "./pages/ResetAllPasswords";
-import NotFound from "./pages/NotFound";
-import LabFees from "./pages/LabFees";
-import LabFeesView from "./pages/LabFeesView";
-import StaffCosts from "./pages/StaffCosts";
-import OperatingLeases from "./pages/OperatingLeases";
-import ClinicianCosts from "./pages/ClinicianCosts";
-import OverheadCosts from "./pages/OverheadCosts";
-import MaterialCosts from "./pages/MaterialCosts";
-import MarketingCosts from "./pages/MarketingCosts";
-import Marketing from "./pages/Marketing";
-import CostImpactDashboard from "./pages/CostImpactDashboard";
-import Organization from "./pages/Organization";
-import Locations from "./pages/Locations";
-import ProviderTypes from "./pages/ProviderTypes";
-import Specialties from "./pages/Specialties";
-import ProvidersDentist from "./pages/ProvidersDentist";
-import ProvidersTherapist from "./pages/ProvidersTherapist";
-import ProvidersHygienist from "./pages/ProvidersHygienist";
-import ProvidersOther from "./pages/ProvidersOther";
-import ProfitPlanningByAssociates from "./pages/ProfitPlanningByAssociates";
-import ProfitByAssociates from "./pages/ProfitByAssociates";
-import ProfitByTreatments from "./pages/ProfitByTreatments";
-import TreatmentIncomeReport from "./pages/TreatmentIncomeReport";
-import XeroCallback from "./pages/XeroCallback";
-import SageTest from "./pages/SageTest";
-import SageDataViewer from "./pages/SageDataViewer";
-import QuickBooksCallback from "./pages/QuickBooksCallback";
-import { SyncSummary } from "./pages/SyncSummary";
-import SetupCategories from "./pages/SetupCategories";
-import AIPricingSettings from "./pages/AIPricingSettings";
-import GA4Callback from "./pages/GA4Callback";
-import GoogleAdsCallback from "./pages/GoogleAdsCallback";
-import Notifications from "./pages/Notifications";
-import OnboardingUIPreview from "./pages/OnboardingUIPreview";
-// import ApiKeyChecker from "./pages/ApiKeyChecker";
-import EbitdaValuation from "./pages/EbitdaValuation";
-import ScenarioSimulator from "./pages/ScenarioSimulator";
-import EbitdaBridge from "./pages/EbitdaBridge";
-import QualityScore from "./pages/QualityScore";
-import MultipleEngine from "./pages/MultipleEngine";
-import GapAnalysis from "./pages/GapAnalysis";
-import EbitdaSettings from "./pages/EbitdaSettings";
-import ExitCockpit from "./pages/ExitCockpit";
-import DueDiligence from "./pages/DueDiligence";
-import GroupHeatmap from "./pages/GroupHeatmap";
-import GeneratePdf from "./pages/GeneratePdf";
-import RolesPermissions from "./pages/RolesPermissions";
-import PractitionerHistory from "./pages/PractitionerHistory";
-import PractitionerHistoryDetail from "./pages/PractitionerHistoryDetail";
-import PractitionerActivityReport from "./pages/PractitionerActivityReport";
-import LocationHistory from "./pages/LocationHistory";
-import PlaidStatementsPage from "./pages/PlaidStatementsPage";
-import CashflowScenarioStudio from "./pages/CashflowScenarioStudio";
-import DentallyWebhookLogs from "./pages/DentallyWebhookLogs";
-import PlatformAdminOrganizations from "./pages/PlatformAdminOrganizations";
+
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const GroupDashboard = lazy(() => import("./pages/GroupDashboard"));
+const GroupDashboardDesign = lazy(() => import("./pages/GroupDashboardDesign"));
+const Performance = lazy(() => import("./pages/Performance"));
+const LocationDetail = lazy(() => import("./pages/LocationDetail"));
+const PreparingCashflowStatement = lazy(() => import("./pages/PreparingCashflowStatement"));
+const CashflowForecast = lazy(() => import("./pages/CashflowForecast"));
+const CashflowCfoSummary = lazy(() => import("./pages/CashflowCfoSummary"));
+const CashflowGrowth = lazy(() => import("./pages/CashflowGrowth"));
+const BillsToPay = lazy(() => import("./pages/BillsToPay"));
+const Budget = lazy(() => import("./pages/Budget"));
+const Reports = lazy(() => import("./pages/Reports"));
+const FinancialReports = lazy(() => import("./pages/FinancialReports"));
+const Profitability = lazy(() => import("./pages/Profitability"));
+const ProfitBenchmarkAction = lazy(() => import("./pages/ProfitBenchmarkAction"));
+const Tax = lazy(() => import("./pages/Tax"));
+const Providers = lazy(() => import("./pages/Providers"));
+const ProviderDetail = lazy(() => import("./pages/ProviderDetail"));
+const ProviderActivity = lazy(() => import("./pages/ProviderActivity"));
+const Treatments = lazy(() => import("./pages/Treatments"));
+const TreatmentSetup = lazy(() => import("./pages/TreatmentSetup"));
+const TreatmentInsights = lazy(() => import("./pages/TreatmentInsights"));
+const PrivateTreatment = lazy(() => import("./pages/PrivateTreatment"));
+const MembershipPerformance = lazy(() => import("./pages/MembershipPerformance"));
+const TreatmentEdit = lazy(() => import("./pages/TreatmentEdit"));
+const TreatmentQuickFill = lazy(() => import("./pages/dev/TreatmentQuickFill"));
+const NHSContractPerformance = lazy(() => import("./pages/NHSContractPerformance"));
+const NHSClaims = lazy(() => import("./pages/NHSClaims"));
+const MembershipPlanDetail = lazy(() => import("./pages/MembershipPlanDetail"));
+const TreatmentProfitGoals = lazy(() => import("./pages/TreatmentProfitGoals"));
+const Chairs = lazy(() => import("./pages/Chairs"));
+const Patients = lazy(() => import("./pages/Patients"));
+const AccountsPayable = lazy(() => import("./pages/AccountsPayable"));
+const ApproverInvoiceItems = lazy(() => import("./pages/ApproverInvoiceItems"));
+const PublicInvoiceApproval = lazy(() => import("./pages/PublicInvoiceApproval"));
+const ApproverDashboard = lazy(() => import("./pages/ApproverDashboard"));
+const AcceptInvite = lazy(() => import("./pages/AcceptInvite"));
+const Settings = lazy(() => import("./pages/Settings"));
+const Profile = lazy(() => import("./pages/Profile"));
+const Onboarding = lazy(() => import("./pages/Onboarding"));
+const TeamManagement = lazy(() => import("./pages/TeamManagement"));
+const Auth = lazy(() => import("./pages/Auth"));
+const NotFound = lazy(() => import("./pages/NotFound"));
+const LabFees = lazy(() => import("./pages/LabFees"));
+const LabFeesView = lazy(() => import("./pages/LabFeesView"));
+const StaffCosts = lazy(() => import("./pages/StaffCosts"));
+const OperatingLeases = lazy(() => import("./pages/OperatingLeases"));
+const ClinicianCosts = lazy(() => import("./pages/ClinicianCosts"));
+const OverheadCosts = lazy(() => import("./pages/OverheadCosts"));
+const MaterialCosts = lazy(() => import("./pages/MaterialCosts"));
+const MarketingCosts = lazy(() => import("./pages/MarketingCosts"));
+const Marketing = lazy(() => import("./pages/Marketing"));
+const CostImpactDashboard = lazy(() => import("./pages/CostImpactDashboard"));
+const Organization = lazy(() => import("./pages/Organization"));
+const Locations = lazy(() => import("./pages/Locations"));
+const ProviderTypes = lazy(() => import("./pages/ProviderTypes"));
+const Specialties = lazy(() => import("./pages/Specialties"));
+const ProvidersDentist = lazy(() => import("./pages/ProvidersDentist"));
+const ProvidersTherapist = lazy(() => import("./pages/ProvidersTherapist"));
+const ProvidersHygienist = lazy(() => import("./pages/ProvidersHygienist"));
+const ProvidersOther = lazy(() => import("./pages/ProvidersOther"));
+const ProfitPlanningByAssociates = lazy(() => import("./pages/ProfitPlanningByAssociates"));
+const ProfitByAssociates = lazy(() => import("./pages/ProfitByAssociates"));
+const ProfitByTreatments = lazy(() => import("./pages/ProfitByTreatments"));
+const TreatmentIncomeReport = lazy(() => import("./pages/TreatmentIncomeReport"));
+const XeroCallback = lazy(() => import("./pages/XeroCallback"));
+const SageTest = lazy(() => import("./pages/SageTest"));
+const SageDataViewer = lazy(() => import("./pages/SageDataViewer"));
+const QuickBooksCallback = lazy(() => import("./pages/QuickBooksCallback"));
+const SyncSummary = lazy(() =>
+  import("./pages/SyncSummary").then((m) => ({ default: m.SyncSummary })),
+);
+const SetupCategories = lazy(() => import("./pages/SetupCategories"));
+const AIPricingSettings = lazy(() => import("./pages/AIPricingSettings"));
+const GA4Callback = lazy(() => import("./pages/GA4Callback"));
+const GoogleAdsCallback = lazy(() => import("./pages/GoogleAdsCallback"));
+const Notifications = lazy(() => import("./pages/Notifications"));
+const OnboardingUIPreview = lazy(() => import("./pages/OnboardingUIPreview"));
+const EbitdaValuation = lazy(() => import("./pages/EbitdaValuation"));
+const ScenarioSimulator = lazy(() => import("./pages/ScenarioSimulator"));
+const EbitdaBridge = lazy(() => import("./pages/EbitdaBridge"));
+const QualityScore = lazy(() => import("./pages/QualityScore"));
+const MultipleEngine = lazy(() => import("./pages/MultipleEngine"));
+const GapAnalysis = lazy(() => import("./pages/GapAnalysis"));
+const EbitdaSettings = lazy(() => import("./pages/EbitdaSettings"));
+const ExitCockpit = lazy(() => import("./pages/ExitCockpit"));
+const DueDiligence = lazy(() => import("./pages/DueDiligence"));
+const GroupHeatmap = lazy(() => import("./pages/GroupHeatmap"));
+const GeneratePdf = lazy(() => import("./pages/GeneratePdf"));
+const RolesPermissions = lazy(() => import("./pages/RolesPermissions"));
+const PractitionerHistory = lazy(() => import("./pages/PractitionerHistory"));
+const PractitionerHistoryDetail = lazy(() => import("./pages/PractitionerHistoryDetail"));
+const PractitionerActivityReport = lazy(() => import("./pages/PractitionerActivityReport"));
+const LocationHistory = lazy(() => import("./pages/LocationHistory"));
+const PlaidStatementsPage = lazy(() => import("./pages/PlaidStatementsPage"));
+const CashflowScenarioStudio = lazy(() => import("./pages/CashflowScenarioStudio"));
+const DentallyWebhookLogs = lazy(() => import("./pages/DentallyWebhookLogs"));
+const PeSyncInspector = lazy(() => import("./pages/dev/PeSyncInspector"));
+
+function RouteFallback() {
+  return (
+    <div className="flex min-h-[40vh] items-center justify-center text-sm text-muted-foreground">
+      Loading…
+    </div>
+  );
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -129,6 +136,7 @@ const App = () => (
       <BrowserRouter>
         <AuthProvider>
         <FilterProvider>
+          <Suspense fallback={<RouteFallback />}>
           <Routes>
           {/* Public routes */}
           <Route path="/auth" element={<Auth />} />
@@ -164,12 +172,13 @@ const App = () => (
           {/* URL-only module (not in sidebar): Week-0 model builder + 13-week scenario dashboard */}
           <Route path="/cashflow/scenario-studio" element={<ProtectedRoute><CashflowScenarioStudio /></ProtectedRoute>} />
           <Route path="/dev/dentally-webhook-logs" element={<ProtectedRoute><DentallyWebhookLogs /></ProtectedRoute>} />
+          <Route path="/dev/pe-sync-inspector" element={<ProtectedRoute><PeSyncInspector /></ProtectedRoute>} />
           <Route path="/profitability" element={<PermissionProtectedRoute module="profitability" card="profitability_analysis"><Profitability /></PermissionProtectedRoute>} />
           <Route path="/profitability/benchmark" element={<Navigate to="/profitability" replace />} />
           <Route path="/profitability/benchmark/:category" element={<PermissionProtectedRoute module="profitability" card="profit_benchmark"><ProfitBenchmarkAction /></PermissionProtectedRoute>} />
           <Route path="/tax" element={<PermissionProtectedRoute module="tax"><Tax /></PermissionProtectedRoute>} />
           <Route path="/budget" element={<PermissionProtectedRoute module="budget"><Budget /></PermissionProtectedRoute>} />
-          <Route path="/planning/associates" element={<PermissionProtectedRoute module="providers"><ProfitPlanningByAssociates /></PermissionProtectedRoute>} />
+          <Route path="/planning/associates" element={<PermissionProtectedRoute module="budget"><ProfitPlanningByAssociates /></PermissionProtectedRoute>} />
           <Route path="/locations" element={<PermissionProtectedRoute module="locations"><Locations /></PermissionProtectedRoute>} />
           <Route path="/providers/dentist" element={<PermissionProtectedRoute module="providers" card="dentist_tab"><ProvidersDentist /></PermissionProtectedRoute>} />
           <Route path="/providers/therapist" element={<PermissionProtectedRoute module="providers" card="therapist_tab"><ProvidersTherapist /></PermissionProtectedRoute>} />
@@ -241,13 +250,13 @@ const App = () => (
           <Route path="/group-heatmap" element={<PermissionProtectedRoute module="ebitda_to_value" card="group_heatmap_tab"><GroupHeatmap /></PermissionProtectedRoute>} />
           <Route path="/generate-pdf" element={<PermissionProtectedRoute module="ebitda_to_value" card="generate_pdf_tab"><GeneratePdf /></PermissionProtectedRoute>} />
           <Route path="/roles-permissions" element={<ProtectedRoute><RolesPermissions /></ProtectedRoute>} />
-          <Route path="/platform-admin/organizations" element={<PlatformAdminRoute><PlatformAdminOrganizations /></PlatformAdminRoute>} />
 
           <Route path="/plaid/statements/:connId" element={<ProtectedRoute><PlaidStatementsPage /></ProtectedRoute>} />
           <Route path="/sage-test" element={<SageTest />} />
           <Route path="/sage-data" element={<SageDataViewer />} />
           <Route path="*" element={<NotFound />} />
           </Routes>
+          </Suspense>
         </FilterProvider>
         </AuthProvider>
       </BrowserRouter>

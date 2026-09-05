@@ -1,4 +1,4 @@
-project_id = "doaouezuovagzjsyfmca"
+project_id = "fpqesehkowpvxraommsc"
 
 [functions.ai-summary]
 verify_jwt = false
@@ -45,4 +45,8 @@ verify_jwt = false
 
 # Gateway JWT verify rejects ES256 session tokens; handler validates Bearer via auth.getUser().
 [functions.xero-bank-overview]
+verify_jwt = false
+
+# Membership CSV import — validates Bearer via auth.getUser() + user_roles.
+[functions.patient-economics-membership-import]
 verify_jwt = false

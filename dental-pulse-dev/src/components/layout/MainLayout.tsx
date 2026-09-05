@@ -7,20 +7,22 @@ import { useChatbot } from '@/hooks/useChatbot';
 import { useActivityTracker } from '@/hooks/useActivityTracker';
 import { useAuth } from '@/hooks/useAuth';
 import { useFilters } from '@/contexts/FilterContext';
-import { PlanUpgradeOverlay } from '@/components/ui/plan-upgrade-overlay';
+import { cn } from '@/lib/utils';
 
 interface MainLayoutProps {
   children: ReactNode;
   userRole?: string;
   aiContext?: Record<string, any>;
-  // When true, the sidebar/topbar stay usable but the page content is blurred
-  // behind an "upgrade your plan" prompt instead of hard-blocking navigation.
-  locked?: boolean;
-  lockedTitle?: string;
-  lockedDescription?: string;
+  /** Override main content padding (defaults to p-6 pt-[4.5rem]). */
+  contentClassName?: string;
 }
 
-export function MainLayout({ children, userRole = 'admin', aiContext, locked, lockedTitle, lockedDescription }: MainLayoutProps) {
+export function MainLayout({
+  children,
+  userRole = 'admin',
+  aiContext,
+  contentClassName,
+}: MainLayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { profile } = useAuth();
   useActivityTracker(profile?.user_id || null); // Platform-wide activity detection (user-scoped)
@@ -51,14 +53,14 @@ export function MainLayout({ children, userRole = 'admin', aiContext, locked, lo
     <div className="min-h-screen bg-background">
       <AppSidebar collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} />
       <TopBar sidebarCollapsed={sidebarCollapsed} />
-      <main className={`p-6 pt-[4.5rem] transition-all duration-300 ${sidebarCollapsed ? 'ml-16' : 'ml-[17.5rem]'} ${locked ? 'h-screen overflow-hidden' : ''}`}>
-        {locked ? (
-          <PlanUpgradeOverlay title={lockedTitle} description={lockedDescription} className="h-[calc(100vh-7.5rem)]">
-            {children}
-          </PlanUpgradeOverlay>
-        ) : (
-          children
+      <main
+        className={cn(
+          'pt-[4.5rem] transition-all duration-300',
+          sidebarCollapsed ? 'ml-16' : 'ml-[17.5rem]',
+          contentClassName ?? 'p-6',
         )}
+      >
+        {children}
       </main>
 
       {/* Version-aware chatbot rendering */}

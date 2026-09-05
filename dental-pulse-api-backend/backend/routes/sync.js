@@ -113,6 +113,38 @@ router.get('/status/:orgId', syncAuthMiddleware, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/sync/active/:orgId
+ * Active sync jobs only (queued | running) — for UI status polling.
+ * Frontend should poll this instead of querying sync_jobs via Supabase REST.
+ */
+router.get('/active/:orgId', syncAuthMiddleware, async (req, res) => {
+  try {
+    const { orgId } = req.params;
+    const { data: jobs, error } = await supabaseAdmin
+      .from('sync_jobs')
+      .select('*')
+      .eq('organization_id', orgId)
+      .in('status', ['queued', 'running'])
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    const list = jobs || [];
+    return res.json({
+      success: true,
+      jobs: list,
+      isAnySyncRunning: list.some((j) => j.status === 'running'),
+      hasQueuedJobs: list.some((j) => j.status === 'queued'),
+    });
+  } catch (err) {
+    console.error('[SyncRoute] Active jobs error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to fetch active sync jobs' });
+  }
+});
+
 // GET /api/sync/job/:jobId - Get single job status
 router.get('/job/:jobId', syncAuthMiddleware, async (req, res) => {
   try {

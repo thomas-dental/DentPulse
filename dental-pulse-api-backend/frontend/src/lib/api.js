@@ -98,17 +98,6 @@ export const api = {
     return data;
   },
 
-  async updateOrganizationPlan(id, planTier) {
-    const res = await fetch(`${API_URL}/organizations/${id}/plan`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify({ plan_tier: planTier }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    return data;
-  },
-
   async getDentallyAccounts(orgId) {
     const res = await fetch(`${API_URL}/organizations/${orgId}/dentally-accounts`, {
       headers: getHeaders(),

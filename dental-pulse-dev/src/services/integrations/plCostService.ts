@@ -1,6 +1,4 @@
 import { supabase } from '@/integrations/supabase/client';
-import { fetchScopedProfitBenchmark } from '@/hooks/useProfitBenchmark';
-import { splitProfitBenchmarkCostExpense } from '@/utils/profitBenchmarkActual';
 
 /**
  * Fetches the connected accounting platform for an organization (org-level).
@@ -121,51 +119,6 @@ async function getUniqueEntityRepresentativeLocations(
  *   iplicit → org-wide get_iplicit_pl_amount_cost_by_date (no entity filter)
  *   quickbooks → sum get_quickbooks_op_cost once per unique QB company
  */
-/**
- * Operational expense for a period, defined EXACTLY as Profitability's
- * "Total Expenses To Run Your Business" row: the sum of |actual| over the
- * profit-benchmark rows in group_type 3 (Staff, Marketing, Operating lease,
- * Other Fixed Costs, ...).
- *
- * Why not getOpCostByPlatform: that routes to a per-platform op-cost RPC
- * (get_xero_op_cost / get_iplicit_pl_amount_cost_by_date / ...) whose account
- * selection is its own thing and does not agree with the Profitability page.
- * Two screens showing a differently-scoped "Op costs" for the same location
- * and period is the bug this replaces — Profit Goals planning is built on top
- * of this figure (OCPSPD = opCosts / surgery days per year), so it has to be
- * the same number the P&L screen reports.
- *
- * Goes through fetchScopedProfitBenchmark, NOT getProfitBenchmark directly:
- * a location that is a Xero tracking-option split inside a shared tenant needs
- * both the trackingOptionId on the request and the journal-detail overlay, or
- * the figure returned is the whole tenant's expenses across every practice.
- *
- * Returns the same { amount, platform } shape as getOpCostByPlatform so call
- * sites keep their `if (amount != null)` guard. `amount` is null only when the
- * benchmark call fails, which keeps the caller's previous value rather than
- * silently zeroing a planning input.
- */
-export async function getOperationalExpense(
-  organizationId: string,
-  startDate: string,    // YYYY-MM-DD
-  endDate: string,      // YYYY-MM-DD
-  locationId?: string | null,
-): Promise<{ amount: number | null; platform: string | null }> {
-  try {
-    const { rows, platformIntegrationId } = await fetchScopedProfitBenchmark(
-      organizationId,
-      startDate,
-      endDate,
-      locationId && locationId !== 'all' ? locationId : null,
-    );
-    const { totalExpense } = splitProfitBenchmarkCostExpense(rows);
-    return { amount: totalExpense, platform: platformIntegrationId ?? null };
-  } catch (err) {
-    console.error('[plCostService] getOperationalExpense failed:', err);
-    return { amount: null, platform: null };
-  }
-}
-
 export async function getOpCostByPlatform(
   organizationId: string,
   startDate: string,    // YYYY-MM-DD

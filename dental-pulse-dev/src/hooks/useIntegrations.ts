@@ -6,6 +6,7 @@ import { useOrganization } from './useOrganization';
 import { toast } from 'sonner';
 import { testIntegrationConnection } from '@/services/integrationService';
 import { DentallyService } from '@/services/integrations';
+import { integrationHasPat, revalidateDentallyCredential } from '@/services/integrations/patientEconomicsService';
 
 export interface Integration {
   id: string;
@@ -15,6 +16,9 @@ export interface Integration {
   is_connected: boolean;
   api_endpoints: string | null;
   api_key: string | null;
+  pat_hint: string | null;
+  validated_at: string | null;
+  needs_reconnection: boolean | null;
   secret_key_id_available: string | null;
   sync_frequency: string | null;
   sync_at: string | null;
@@ -141,34 +145,27 @@ export function useIntegrations() {
       if (fetchError) throw new Error('Integration not found');
       if (!integration) throw new Error('Integration not found');
 
-      // Get API key and endpoint from database
-      const apiKey = integration.api_key;
+      // Get endpoint from database; Dentally PAT is encrypted (pat_hint only on client)
       const apiEndpoint = integration.api_endpoints;
 
-      // Validate that API key and endpoint are set
-      if (!apiKey || !apiEndpoint) {
-        throw new Error('API Key and API Endpoint must be set before connecting. Please configure them first.');
-      }
-
-      // Determine which service to use based on integration name
       if (integration.integration_name === 'Dentally') {
-        // For Dentally, call /v1/user endpoint using API endpoint from database
-        const userResult = await DentallyService.getUser(apiKey, apiEndpoint);
-        
-        // Check if we got user data in response
-        if (userResult.success && userResult.data?.user) {
-          console.log('Dentally user data received:', userResult.data.user);
-          // Connection successful - user data exists, proceed to connect
-        } else {
-          // Check if it's an error response
-          if (userResult.data?.error) {
-            const errorMsg = userResult.data.error.message || userResult.data.error.type || 'Invalid API token';
-            throw new Error(errorMsg);
-          }
-          throw new Error(userResult.error || 'Connection test failed - no user data received');
+        if (!integrationHasPat(integration)) {
+          throw new Error('Dentally PAT must be saved before connecting. Enter your token in Settings first.');
+        }
+        if (!organizationId) {
+          throw new Error('Organization not found');
+        }
+
+        const result = await revalidateDentallyCredential(organizationId);
+        if (!result.validated) {
+          throw new Error(result.validationError || 'Dentally rejected this token');
         }
       } else {
-        // Generic connection test
+        const apiKey = integration.api_key;
+        if (!apiKey || !apiEndpoint) {
+          throw new Error('API Key and API Endpoint must be set before connecting. Please configure them first.');
+        }
+
         const testResult = await testIntegrationConnection(apiEndpoint, apiKey);
         if (!testResult.success) {
           throw new Error(testResult.error || 'Connection test failed');

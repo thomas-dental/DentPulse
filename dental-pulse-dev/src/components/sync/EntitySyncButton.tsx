@@ -30,24 +30,18 @@ export function EntitySyncButton({ entityAlias, entityLabel, className, addition
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const [lastSyncJob, setLastSyncJob] = useState<any>(null);
 
-  // Fetch last sync time for this entity
+  // Fetch last sync time for this entity (via backend sync status API)
   const fetchLastSyncTime = async () => {
     if (!organizationId) return;
 
     try {
-      const { data, error } = await supabase
-        .from('sync_jobs')
-        .select('*')
-        .eq('organization_id', organizationId)
-        .eq('entity_alias', entityAlias)
-        .eq('status', 'completed')
-        .order('completed_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (!error && data) {
-        setLastSyncTime(data.completed_at);
-        setLastSyncJob(data);
+      const jobs = await SyncJobService.getSyncJobs(organizationId, 200);
+      const latest = jobs.find(
+        (j) => j.entity_alias === entityAlias && j.status === 'completed' && j.completed_at,
+      );
+      if (latest) {
+        setLastSyncTime(latest.completed_at);
+        setLastSyncJob(latest);
       }
     } catch (error) {
       console.error('Error fetching last sync time:', error);
@@ -65,23 +59,16 @@ export function EntitySyncButton({ entityAlias, entityLabel, className, addition
   // Helper function to get last sync job for an entity
   const getLastSyncJob = async (alias: string) => {
     try {
-      const { data, error } = await supabase
-        .from('sync_jobs')
-        .select('*')
-        .eq('organization_id', organizationId)
-        .eq('entity_alias', alias)
-        .eq('status', 'completed')
-        .order('completed_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (!error && data) {
-        return data;
-      }
+      const jobs = await SyncJobService.getSyncJobs(organizationId!, 200);
+      return (
+        jobs.find(
+          (j) => j.entity_alias === alias && j.status === 'completed' && j.completed_at,
+        ) || null
+      );
     } catch (error) {
       console.error(`Error fetching last sync time for ${alias}:`, error);
+      return null;
     }
-    return null;
   };
 
   // Handle manual sync
@@ -212,22 +199,17 @@ export function EntitySyncButton({ entityAlias, entityLabel, className, addition
         const poll = setInterval(async () => {
           attempts++;
           try {
-            // Check each alias — all must have a completed_at >= triggeredAt
-            const checks = await Promise.all(
-              aliasesToWatch.map(alias =>
-                supabase
-                  .from('sync_jobs')
-                  .select('completed_at')
-                  .eq('organization_id', organizationId)
-                  .in('entity_alias', [alias, `${alias}_current_month`])
-                  .eq('status', 'completed')
-                  .gte('completed_at', triggeredAt)
-                  .limit(1)
-                  .maybeSingle()
-              )
+            const jobs = await SyncJobService.getSyncJobs(organizationId, 200);
+            const allDone = aliasesToWatch.every((alias) =>
+              jobs.some(
+                (j) =>
+                  j.status === 'completed' &&
+                  j.completed_at &&
+                  j.completed_at >= triggeredAt &&
+                  (j.entity_alias === alias || j.entity_alias === `${alias}_current_month`),
+              ),
             );
 
-            const allDone = checks.every(r => r.data?.completed_at);
             if (allDone) {
               setLastSyncTime(new Date().toISOString());
               clearInterval(poll);

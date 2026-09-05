@@ -7,7 +7,7 @@ import { useFilters } from '@/contexts/FilterContext';
 import { useLocations } from './useLocations';
 import { useAllProvidersNetProduction } from './useAllProvidersNetProduction';
 import { useAllProvidersWorkingHours } from './useAllProvidersWorkingHours';
-import { getOperationalExpense } from '@/services/integrations/plCostService';
+import { getOpCostByPlatform } from '@/services/integrations/plCostService';
 import { resolveBusinessInfoLocationId } from '@/lib/businessInfoLocation';
 import { loadProviderCostInputs, type ProviderCostInputRow } from '@/lib/providerCostInputs';
 import { resolveProviderCost } from '@/lib/providerCostResolution';
@@ -27,8 +27,6 @@ export interface AssociateProfitRow {
 
 export interface AssociateMonthlyTrend {
   month: string;
-  /** YYYY-MM, so a consumer can line a bucket up with the current filter's month. */
-  period: string;
   actual: number;
   planned: number;
 }
@@ -231,10 +229,11 @@ export function useAssociateProfitPlanning() {
 
       let opCosts = 0;
       try {
-        const { amount } = await getOperationalExpense(
+        const { amount } = await getOpCostByPlatform(
           organizationId,
           startDateStr,
           endDateStr,
+          'TC',
           selectedLocationId,
         );
         if (amount != null) opCosts = amount;
@@ -489,45 +488,6 @@ export function useAssociateProfitPlanning() {
     selectedLocationId,
   );
 
-  // Per-provider lab/material cost sourcing over the 6-month trend window —
-  // same resolution as `providerCostInputsData` above (account/monthly/sliding
-  // scale/flat %), just scoped to the trend range instead of the filter range.
-  // Without this the monthly trend fell back to a flat location percentage,
-  // which diverges from the Associate Profit Planning Details table below it
-  // whenever a provider has a per-provider cost override configured.
-  const { data: trendProviderCostInputsData = null, isLoading: isLoadingTrendCostInputs } = useQuery({
-    queryKey: [
-      'associate-profit-trend-cost-inputs',
-      organizationId,
-      providerIdsKey,
-      monthBuckets[0]?.startDate,
-      monthBuckets[monthBuckets.length - 1]?.endDate,
-    ],
-    queryFn: async () => {
-      if (!organizationId || providers.length === 0) return null;
-      const rows: ProviderCostInputRow[] = providers.map((p) => ({
-        id: p.id,
-        location_id: p.location_id ?? null,
-        lab_cost_source_method: p.lab_cost_source_method ?? null,
-        lab_cost_percentage: p.lab_cost_percentage ?? null,
-        lab_cost_account_id: p.lab_cost_account_id ?? null,
-        lab_cost_account_platform: p.lab_cost_account_platform ?? null,
-        material_cost_source_method: p.material_cost_source_method ?? null,
-        material_cost_percentage: p.material_cost_percentage ?? null,
-        material_cost_account_id: p.material_cost_account_id ?? null,
-        material_cost_account_platform: p.material_cost_account_platform ?? null,
-      }));
-      return loadProviderCostInputs({
-        organizationId,
-        providers: rows,
-        dateFrom: trendStart,
-        dateTo: trendEnd,
-      });
-    },
-    enabled: !!organizationId && providers.length > 0 && monthBuckets.length > 0,
-    staleTime: 1000 * 60 * 5,
-  });
-
   // OCPSPD over the 6-month trend window (same method as Profit Goals)
   const { data: trendOcpspd = 0, isLoading: isLoadingTrendOcpspd } = useQuery({
     queryKey: [
@@ -556,10 +516,11 @@ export function useAssociateProfitPlanning() {
 
       let opCosts = 0;
       try {
-        const { amount } = await getOperationalExpense(
+        const { amount } = await getOpCostByPlatform(
           organizationId,
           monthBuckets[0].startDate,
           monthBuckets[monthBuckets.length - 1].endDate,
+          'TC',
           selectedLocationId,
         );
         if (amount != null) opCosts = amount;
@@ -583,7 +544,6 @@ export function useAssociateProfitPlanning() {
         providers.map((p) => p.id).join(','),
         trendProduction?.providers?.length,
         trendHours?.providers?.length,
-        !!trendProviderCostInputsData,
         trendOcpspd,
         profitGoalsMetrics?.associateCostLabsPercent,
         profitGoalsMetrics?.practiceCostMaterialsPercent,
@@ -591,7 +551,7 @@ export function useAssociateProfitPlanning() {
       ],
       queryFn: async (): Promise<AssociateMonthlyTrend[]> => {
         if (!organizationId || providers.length === 0 || !profitGoalsMetrics) {
-          return monthBuckets.map((b) => ({ month: b.label, period: b.period, actual: 0, planned: 0 }));
+          return monthBuckets.map((b) => ({ month: b.label, actual: 0, planned: 0 }));
         }
 
         const labPct = profitGoalsMetrics.associateCostLabsPercent;
@@ -677,47 +637,6 @@ export function useAssociateProfitPlanning() {
 
           const associateSplitPercent = provider.associate_split_percentage || 30;
           const associateLabSplitPercent = provider.lab_split_percentage || 50;
-          const associateMaterialSplitPercent = provider.material_split_percentage || 50;
-
-          // Same per-provider cost resolution + gating as the Associate Profit
-          // Planning Details table (associateData below), resolved once over
-          // the whole trend window, then apportioned across months by each
-          // month's share of the window's total production. Percentage-based
-          // cost bases come out exact per month this way; absolute-£ bases
-          // (account / monthly / sliding-scale) only resolve to one total for
-          // the range they're queried over, so pro-rata production share is
-          // the closest monthly split without re-querying per month.
-          const gate = provider.location_id
-            ? trendProviderCostInputsData?.locationGateByLocationId.get(provider.location_id)
-            : undefined;
-          const labGateActive = gate?.associate_cost_lab_source === 'associate_wise';
-          const materialGateActive = gate?.material_cost_source === 'associate_wise';
-          const includesLabCost = gate?.is_associate_pay_including_lab_cost ?? true;
-          const includesMaterialCost = gate?.is_associate_pay_including_material_cost ?? false;
-
-          const trendTotalProduction = prod.total ?? 0;
-          const labResolved = resolveProviderCost({
-            sourceMethod: labGateActive ? provider.lab_cost_source_method : null,
-            flatPercentage: provider.lab_cost_percentage,
-            production: trendTotalProduction,
-            accountAmount: trendProviderCostInputsData?.accountAmountByProviderId.get(provider.id)?.lab ?? null,
-            monthlyValues: trendProviderCostInputsData?.monthlyValuesByProviderId.get(provider.id)?.lab ?? [],
-            monthlyBillByMonth: provider.location_id ? (trendProviderCostInputsData?.monthlyBillByLocationId.get(provider.location_id)?.lab ?? []) : [],
-            bands: trendProviderCostInputsData?.bandsByProviderId.get(provider.id)?.lab ?? [],
-            fallbackLocationPercent: gate?.associate_cost_labs_percent ?? labPct,
-          });
-          const materialResolved = resolveProviderCost({
-            sourceMethod: materialGateActive ? provider.material_cost_source_method : null,
-            flatPercentage: provider.material_cost_percentage,
-            production: trendTotalProduction,
-            accountAmount: trendProviderCostInputsData?.accountAmountByProviderId.get(provider.id)?.material ?? null,
-            monthlyValues: trendProviderCostInputsData?.monthlyValuesByProviderId.get(provider.id)?.material ?? [],
-            monthlyBillByMonth: provider.location_id ? (trendProviderCostInputsData?.monthlyBillByLocationId.get(provider.location_id)?.material ?? []) : [],
-            bands: trendProviderCostInputsData?.bandsByProviderId.get(provider.id)?.material ?? [],
-            fallbackLocationPercent: gate?.practice_cost_materials_percent ?? materialsPct,
-          });
-          const trendTotalCostOfLabs = labResolved.amount;
-          const trendTotalMaterialsCosts = materialResolved.amount;
 
           for (const [monthKey, cell] of Object.entries(prod.monthlyData)) {
             const period = monthLabelToPeriod.get(monthKey);
@@ -727,22 +646,16 @@ export function useAssociateProfitPlanning() {
               typeof cell === 'object' && cell !== null
                 ? Number((cell as any).amount) || 0
                 : Number(cell) || 0;
-            const productionShare =
-              trendTotalProduction > 0 ? monthProduction / trendTotalProduction : 0;
 
             const monthHours = hrs?.monthlyData?.[monthKey] ?? 0;
             const workingDays = hoursPerDay > 0 ? monthHours / hoursPerDay : 0;
 
-            const costOfLabs = trendTotalCostOfLabs * productionShare;
-            const materialsCosts = trendTotalMaterialsCosts * productionShare;
             const associateGrossShare = monthProduction * (associateSplitPercent / 100);
-            const labCostDeduction = includesLabCost
-              ? costOfLabs * (associateLabSplitPercent / 100)
-              : 0;
-            const materialCostDeduction = includesMaterialCost
-              ? materialsCosts * (associateMaterialSplitPercent / 100)
-              : 0;
-            const associateNetPay = associateGrossShare - labCostDeduction - materialCostDeduction;
+            const labCostDeduction =
+              monthProduction * (labPct / 100) * (associateLabSplitPercent / 100);
+            const associateNetPay = associateGrossShare - labCostDeduction;
+            const costOfLabs = monthProduction * (labPct / 100);
+            const materialsCosts = (materialsPct / 100) * monthProduction;
             const ocpspaContribution = trendOcpspd * workingDays;
             const profit =
               monthProduction -
@@ -754,7 +667,6 @@ export function useAssociateProfitPlanning() {
 
         return monthBuckets.map((b) => ({
           month: b.label,
-          period: b.period,
           actual: Math.round(actualByMonth.get(b.period) || 0),
           planned: Math.round(plannedByMonth.get(b.period) || 0),
         }));
@@ -775,37 +687,12 @@ export function useAssociateProfitPlanning() {
     isLoadingPlanned ||
     isLoadingTrendProd ||
     isLoadingTrendHours ||
-    isLoadingTrendCostInputs ||
     isLoadingTrendOcpspd ||
     isLoadingTrendsPlanned;
 
-  // The trend's own month bucket for whichever month the top filter is
-  // currently on is only ever an estimate (pro-rated absolute-£ costs, a
-  // separately-queried OCPSPD rate — see the comment above trendOcpspd).
-  // Force that one bucket to the exact totals the table/stat-tiles below
-  // already show, so the graph point for "this month" always agrees with
-  // the numbers directly under it. Only when the filter is a single
-  // calendar month — a multi-month filter has no one bucket to stand in for.
-  const currentFilterPeriod = useMemo(() => {
-    const startPeriod = format(dateRange.startDate, 'yyyy-MM');
-    const endPeriod = format(dateRange.endDate, 'yyyy-MM');
-    return startPeriod === endPeriod ? startPeriod : null;
-  }, [dateRange.startDate, dateRange.endDate]);
-
-  const monthlyTrendsExact = useMemo(() => {
-    if (!currentFilterPeriod || monthlyTrends.length === 0) return monthlyTrends;
-    const totalCurrentProfit = associateData.reduce((sum, a) => sum + a.currentProfit, 0);
-    const totalPlannedProfit = associateData.reduce((sum, a) => sum + a.plannedProfit, 0);
-    return monthlyTrends.map((t) =>
-      t.period === currentFilterPeriod
-        ? { ...t, actual: Math.round(totalCurrentProfit), planned: Math.round(totalPlannedProfit) }
-        : t,
-    );
-  }, [monthlyTrends, associateData, currentFilterPeriod]);
-
   return {
     associateData,
-    monthlyTrends: monthlyTrendsExact,
+    monthlyTrends,
     isLoading,
   };
 }

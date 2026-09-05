@@ -156,12 +156,19 @@ export default {
           from: { opacity: "0", transform: "translateY(10px)" },
           to: { opacity: "1", transform: "translateY(0)" },
         },
+        /** Long chart labels: reveal overflow by scrolling right → left, then reverse. */
+        "pe-marquee-rtl": {
+          "0%, 12%": { transform: "translateX(0)" },
+          "48%, 62%": { transform: "translateX(calc(-1 * var(--pe-marquee-x, 0px)))" },
+          "100%": { transform: "translateX(0)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
         "fade-in": "fade-in 0.3s ease-out",
         "slide-up": "slide-up 0.4s ease-out",
+        "pe-marquee-rtl": "pe-marquee-rtl var(--pe-marquee-duration, 8s) ease-in-out infinite",
       },
     },
   },

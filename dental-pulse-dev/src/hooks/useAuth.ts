@@ -9,7 +9,6 @@ export interface Profile {
   full_name: string | null;
   avatar_url: string | null;
   current_organization_id: string | null;
-  is_platform_admin?: boolean;
 }
 
 interface AuthContextType {

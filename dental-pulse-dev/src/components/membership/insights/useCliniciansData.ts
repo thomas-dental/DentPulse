@@ -9,7 +9,6 @@ import { useTreatments } from "@/hooks/useTreatments";
 import { useCostImpactData } from "@/hooks/useCostImpactData";
 import { ukDayStartInstant, ukDayEndInstant } from "@/utils/dateRangeUtils";
 import { dentistNamesLikelyMatch } from "@/lib/dentistNameMatch";
-import { fetchMembershipProviderMappings } from "@/hooks/useMembershipProviderMappings";
 
 export interface ClinicianRow {
   name: string;
@@ -54,20 +53,6 @@ export interface ClinicianRow {
    *  "sleeping, paying but not attending" cohort, this dentist's slice of
    *  the Members tab's own Sleeping worklist. */
   unredeemedCount: number | null;
-  /** Matched members WITH a real appointment in the last 6 months — the
-   *  numerator behind seenPct6m, surfaced so the cell tooltip can show the
-   *  worked sum instead of just the finished %. */
-  seenCount6m: number | null;
-  /** This dentist's plan members that resolved to a real Dentally patient
-   *  link — the denominator behind seenPct6m (can be below `members` when
-   *  some upload rows didn't match a patient). */
-  matchedCount: number | null;
-  /** This dentist's plan members' membership revenue (their net dues) for
-   *  the displayed month — the top of the margin calculation. */
-  revenue: number;
-  /** The real allocated accounting cost behind marginPct (see its comment).
-   *  null exactly when marginPct is null for cost reasons. */
-  cost: number | null;
   /** (revenue − real allocated cost) ÷ revenue for this dentist's own plan
    *  members over the selected period. Revenue = their membership net_due.
    *  Cost (2026-08-14, client request — must be real accounting spend, not
@@ -204,7 +189,7 @@ export function useCliniciansData(): CliniciansData {
         string,
         {
           site: string | null;
-          newPatients: number | null;
+          newPatients: number;
           existingConversionPct: number | null;
         }
       >
@@ -213,7 +198,7 @@ export function useCliniciansData(): CliniciansData {
         string,
         {
           site: string | null;
-          newPatients: number | null;
+          newPatients: number;
           existingConversionPct: number | null;
         }
       >();
@@ -232,16 +217,11 @@ export function useCliniciansData(): CliniciansData {
       // than guess which one gets the figures.
       const { data: providerRows, error: provErr } = await (supabase as any)
         .from("providers")
-        .select("id, name, external_id, location_id")
+        .select("name, external_id, location_id")
         .eq("organization_id", organizationId)
         .is("deleted_at", null)
         .not("external_id", "is", null);
       if (provErr) throw provErr;
-
-      // Explicit Settings-tab mapping (membership_provider_mappings) —
-      // wins over the fuzzy name match below wherever a row exists.
-      // Tolerant fetch: empty map when unavailable.
-      const explicitMappings = await fetchMembershipProviderMappings(organizationId);
 
       const { data: locationRows, error: locErr } = await (supabase as any)
         .from("practice_locations")
@@ -251,12 +231,8 @@ export function useCliniciansData(): CliniciansData {
       if (locErr) throw locErr;
       const locationNameById = new Map<string, string>((locationRows ?? []).map((l: any) => [l.id, l.location_name]));
 
-      const rawProviders = (providerRows ?? []) as Array<{ id: string; name: string | null; external_id: number; location_id: string | null }>;
+      const rawProviders = (providerRows ?? []) as Array<{ name: string | null; external_id: number; location_id: string | null }>;
       const providerGroupByName = new Map<string, { name: string; externalIds: number[]; locationId: string | null }>();
-      // Provider row id → its name-key group, so an explicit mapping's
-      // stored row id (whichever duplicate row the user's dropdown carried)
-      // lands on the same collapsed person as the fuzzy path.
-      const groupKeyByProviderId = new Map<string, string>();
       for (const p of rawProviders) {
         if (!p.name) continue;
         const key = p.name.trim().toLowerCase();
@@ -264,50 +240,17 @@ export function useCliniciansData(): CliniciansData {
         g.externalIds.push(Number(p.external_id));
         if (!g.locationId && p.location_id) g.locationId = p.location_id;
         providerGroupByName.set(key, g);
-        groupKeyByProviderId.set(String(p.id), key);
       }
       const providerGroups = Array.from(providerGroupByName.values());
 
       const extIdsByDentistName = new Map<string, number[]>();
       for (const name of dentistNames) {
-        const mapping = explicitMappings.get(name);
-        const mappedSite =
-          mapping && mapping.locationIds.length > 0
-            ? mapping.locationIds.map((id) => locationNameById.get(id)).filter(Boolean).join(", ") || null
-            : null;
-
-        // Explicit mapping wins outright — no fuzzy fallback when the
-        // mapped record(s) can't be resolved (deleted / no external id),
-        // rather than guessing a different person by name. Multi-mapped
-        // names (a "Hygiene Only" bucket covering several providers) use
-        // the UNION of the mapped providers' Dentally ids, so New pts /
-        // Existing conv. cover everyone behind that statement bucket.
-        let resolved: Array<{ name: string; externalIds: number[]; locationId: string | null }> = [];
-        if (mapping && mapping.providerIds.length > 0) {
-          const seenKeys = new Set<string>();
-          for (const pid of mapping.providerIds) {
-            const key = groupKeyByProviderId.get(pid);
-            if (!key || seenKeys.has(key)) continue;
-            seenKeys.add(key);
-            const g = providerGroupByName.get(key);
-            if (g) resolved.push(g);
-          }
-        } else {
-          const matches = providerGroups.filter((gr) => dentistNamesLikelyMatch(name, gr.name));
-          if (matches.length === 1) resolved = [matches[0]];
-        }
-
-        if (resolved.length === 0) {
-          // A location-only mapping still pins the Site column even when no
-          // provider record resolves; the Dentally-sourced columns stay "—".
-          if (mappedSite) result.set(name, { site: mappedSite, newPatients: null, existingConversionPct: null });
-          continue;
-        }
-        const unionExtIds = [...new Set(resolved.flatMap((g) => g.externalIds))];
-        extIdsByDentistName.set(name, unionExtIds);
-        const firstLoc = resolved.find((g) => g.locationId)?.locationId ?? null;
+        const matches = providerGroups.filter((g) => dentistNamesLikelyMatch(name, g.name));
+        if (matches.length !== 1) continue;
+        const g = matches[0];
+        extIdsByDentistName.set(name, g.externalIds);
         result.set(name, {
-          site: mappedSite ?? (firstLoc ? locationNameById.get(firstLoc) ?? null : null),
+          site: g.locationId ? locationNameById.get(g.locationId) ?? null : null,
           newPatients: 0,
           existingConversionPct: null,
         });
@@ -478,17 +421,14 @@ export function useCliniciansData(): CliniciansData {
   });
 
   const seenByDentist = useMemo(() => {
-    const result = new Map<
-      string,
-      { seenPct6m: number | null; seenPct12m: number | null; unredeemedCount: number | null; seenCount6m: number | null; matchedCount: number | null }
-    >();
+    const result = new Map<string, { seenPct6m: number | null; seenPct12m: number | null; unredeemedCount: number | null }>();
     if (!seenQ.data) return result;
     for (const [name, members] of membersByDentistName) {
       const ptIds = members
         .map((m) => (m.patient_id != null ? seenQ.data!.keyToPtId.get(String(m.patient_id).trim()) : undefined))
         .filter((x): x is string => !!x);
       if (ptIds.length === 0) {
-        result.set(name, { seenPct6m: null, seenPct12m: null, unredeemedCount: null, seenCount6m: null, matchedCount: null });
+        result.set(name, { seenPct6m: null, seenPct12m: null, unredeemedCount: null });
         continue;
       }
       const seen6Count = ptIds.filter((id) => seenQ.data!.seen6.has(id)).length;
@@ -497,8 +437,6 @@ export function useCliniciansData(): CliniciansData {
         seenPct6m: Math.round((seen6Count / ptIds.length) * 100),
         seenPct12m: Math.round((seen12Count / ptIds.length) * 100),
         unredeemedCount: ptIds.length - seen6Count,
-        seenCount6m: seen6Count,
-        matchedCount: ptIds.length,
       });
     }
     return result;
@@ -649,10 +587,6 @@ export function useCliniciansData(): CliniciansData {
           seenPct6m: seen?.seenPct6m ?? null,
           seenPct12m: seen?.seenPct12m ?? null,
           unredeemedCount: seen?.unredeemedCount ?? null,
-          seenCount6m: seen?.seenCount6m ?? null,
-          matchedCount: seen?.matchedCount ?? null,
-          revenue: r.revenue,
-          cost: cost ?? null,
           marginPct:
             cost != null && r.revenue > 0
               ? Math.round(((r.revenue - cost) / r.revenue) * 100)

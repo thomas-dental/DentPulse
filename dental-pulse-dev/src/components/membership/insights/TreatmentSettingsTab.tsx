@@ -1,22 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import { toast } from "sonner";
-import {
-  Check,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ChevronUp,
-  Download,
-  Loader2,
-  Pencil,
-  Search,
-  Upload,
-  X,
-} from "lucide-react";
+import { Check, Download, Loader2, Pencil, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Pagination, PaginationContent, PaginationEllipsis, PaginationItem } from "@/components/ui/pagination";
 import { AccountMultiSelect, type AccountOption } from "@/components/settings/AccountMultiSelect";
 import { useTreatments } from "@/hooks/useTreatments";
 import {
@@ -26,9 +13,6 @@ import {
 } from "@/hooks/useMembershipTreatmentSettings";
 import { ScopeBar } from "./ScopeBar";
 import { nn, gbpExact } from "./format";
-
-const PAGE_SIZE = 25;
-type SortKey = "name" | "dentist" | "hygienist" | "lab" | "material";
 
 const EXPORT_FIELDS = [
   "Treatment Name",
@@ -56,22 +40,6 @@ function parseImportNumber(v: string | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** First/last page always shown, plus a window around the current page,
- *  collapsing the gaps into ellipses — same shape as TreatmentsList's own
- *  pagination so a client sees one consistent pattern app-wide. */
-function getPageNumbers(current: number, total: number): Array<number | "ellipsis"> {
-  const maxVisible = 5;
-  if (total <= maxVisible) return Array.from({ length: total }, (_, i) => i + 1);
-  const pages: Array<number | "ellipsis"> = [1];
-  if (current > 3) pages.push("ellipsis");
-  const start = Math.max(2, current - 1);
-  const end = Math.min(total - 1, current + 1);
-  for (let i = start; i <= end; i++) pages.push(i);
-  if (current < total - 2) pages.push("ellipsis");
-  pages.push(total);
-  return pages;
-}
-
 function mins(v: number | null): string {
   return v == null ? "—" : `${nn(v)} min`;
 }
@@ -84,50 +52,6 @@ interface EditState {
   hygienistTimeMinutes: string;
   labCost: string;
   materialCost: string;
-}
-
-/** A column header that toggles sort on click, with a chevron showing
- *  direction only on the currently active column — same unstyled-button +
- *  inline-flex pattern LedgerLabel uses for its ⓘ icon, so it inherits the
- *  th's own alignment/right-align instead of fighting it. */
-function SortHeader({
-  label,
-  sortKey,
-  active,
-  dir,
-  onClick,
-}: {
-  label: string;
-  sortKey: SortKey;
-  active: SortKey;
-  dir: "asc" | "desc";
-  onClick: (key: SortKey) => void;
-}) {
-  const isActive = active === sortKey;
-  return (
-    <button
-      type="button"
-      onClick={() => onClick(sortKey)}
-      style={{
-        background: "none",
-        border: "none",
-        padding: 0,
-        font: "inherit",
-        color: isActive ? "var(--mpi-ink)" : "inherit",
-        cursor: "pointer",
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 2,
-      }}
-    >
-      {label}
-      {isActive ? (
-        dir === "asc" ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />
-      ) : (
-        <ChevronUp className="w-3 h-3" style={{ opacity: 0.25 }} />
-      )}
-    </button>
-  );
 }
 
 function toEditState(s: MembershipTreatmentSetting): EditState {
@@ -162,10 +86,6 @@ export function TreatmentSettingsTab() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editState, setEditState] = useState<EditState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("name");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [currentPage, setCurrentPage] = useState(1);
 
   const treatmentById = useMemo(() => new Map(treatments.map((t) => [t.id, t])), [treatments]);
 
@@ -193,63 +113,6 @@ export function TreatmentSettingsTab() {
         .sort((a, b) => a.treatment.treatment_name.localeCompare(b.treatment.treatment_name)),
     [settings, treatmentById],
   );
-
-  const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return selectedRows;
-    return selectedRows.filter(
-      ({ treatment }) =>
-        treatment.treatment_name.toLowerCase().includes(q) ||
-        (treatment.treatment_code ?? "").toLowerCase().includes(q),
-    );
-  }, [selectedRows, search]);
-
-  const sortedRows = useMemo(() => {
-    const dirMul = sortDir === "asc" ? 1 : -1;
-    const value = (row: (typeof filteredRows)[number]): string | number | null => {
-      switch (sortKey) {
-        case "name": return row.treatment.treatment_name;
-        case "dentist": return row.setting.dentistTimeMinutes;
-        case "hygienist": return row.setting.hygienistTimeMinutes;
-        case "lab": return row.setting.labCost;
-        case "material": return row.setting.materialCost;
-      }
-    };
-    return [...filteredRows].sort((a, b) => {
-      const av = value(a);
-      const bv = value(b);
-      // Blanks always sort to the bottom, regardless of direction — a
-      // reversed sort should surface the highest/lowest real numbers, not
-      // bury them under every unset treatment.
-      if (av == null && bv == null) return 0;
-      if (av == null) return 1;
-      if (bv == null) return -1;
-      if (typeof av === "string" || typeof bv === "string") {
-        return String(av).localeCompare(String(bv)) * dirMul;
-      }
-      return (av - bv) * dirMul;
-    });
-  }, [filteredRows, sortKey, sortDir]);
-
-  // Search/sort changing the result set, or the selection itself changing
-  // (add/remove), can leave currentPage past the new last page.
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [search, sortKey, sortDir]);
-
-  const totalPages = Math.max(1, Math.ceil(sortedRows.length / PAGE_SIZE));
-  const currentPageSafe = Math.min(currentPage, totalPages);
-  const pageStart = (currentPageSafe - 1) * PAGE_SIZE;
-  const pagedRows = sortedRows.slice(pageStart, pageStart + PAGE_SIZE);
-
-  const toggleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortKey(key);
-      setSortDir("asc");
-    }
-  };
 
   const exportCsv = () => {
     const csv = Papa.unparse({
@@ -411,28 +274,7 @@ export function TreatmentSettingsTab() {
       </div>
 
       <div>
-        <div className="flex items-center justify-between mpi-mb" style={{ marginBottom: 6 }}>
-          <p className="mpi-eyebrow" style={{ margin: 0 }}>
-            Selected treatments · {nn(selectedRows.length)}
-            {search.trim() && ` · ${nn(sortedRows.length)} matching`}
-          </p>
-          {selectedRows.length > 0 && (
-            <div style={{ position: "relative", width: 220 }}>
-              <Search
-                className="w-3.5 h-3.5"
-                style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: "var(--mpi-t3)" }}
-              />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search treatments…"
-                className="h-8 text-sm"
-                style={{ paddingLeft: 28 }}
-                aria-label="Search selected treatments"
-              />
-            </div>
-          )}
-        </div>
+        <p className="mpi-eyebrow">Selected treatments · {nn(selectedRows.length)}</p>
         {isLoading ? (
           <div className="mpi-card text-sm text-center py-8" style={{ color: "var(--mpi-t3)" }}>
             <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
@@ -442,25 +284,21 @@ export function TreatmentSettingsTab() {
           <div className="mpi-card text-sm text-center py-8" style={{ color: "var(--mpi-t3)" }}>
             No treatments selected yet — pick some above to set their membership cost.
           </div>
-        ) : sortedRows.length === 0 ? (
-          <div className="mpi-card text-sm text-center py-8" style={{ color: "var(--mpi-t3)" }}>
-            No selected treatments match "{search}".
-          </div>
         ) : (
           <div className="mpi-card" style={{ opacity: isSelecting ? 0.6 : 1 }}>
             <table className="mpi-tb">
               <thead>
                 <tr>
-                  <th className="l"><SortHeader label="Treatment" sortKey="name" active={sortKey} dir={sortDir} onClick={toggleSort} /></th>
-                  <th><SortHeader label="Dentist time" sortKey="dentist" active={sortKey} dir={sortDir} onClick={toggleSort} /></th>
-                  <th><SortHeader label="Hygienist time" sortKey="hygienist" active={sortKey} dir={sortDir} onClick={toggleSort} /></th>
-                  <th><SortHeader label="Lab cost" sortKey="lab" active={sortKey} dir={sortDir} onClick={toggleSort} /></th>
-                  <th><SortHeader label="Material cost" sortKey="material" active={sortKey} dir={sortDir} onClick={toggleSort} /></th>
+                  <th className="l">Treatment</th>
+                  <th>Dentist time</th>
+                  <th>Hygienist time</th>
+                  <th>Lab cost</th>
+                  <th>Material cost</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {pagedRows.map(({ setting, treatment }) => {
+                {selectedRows.map(({ setting, treatment }) => {
                   const isEditing = editingId === setting.treatmentId;
                   return (
                     <tr key={setting.treatmentId}>
@@ -576,62 +414,6 @@ export function TreatmentSettingsTab() {
                 })}
               </tbody>
             </table>
-            {totalPages > 1 && (
-              <div
-                className="flex items-center justify-between"
-                style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--mpi-line)" }}
-              >
-                <span className="text-xs" style={{ color: "var(--mpi-t3)" }}>
-                  Showing {nn(pageStart + 1)}–{nn(Math.min(pageStart + PAGE_SIZE, sortedRows.length))} of {nn(sortedRows.length)}
-                </span>
-                <Pagination className="mx-0 w-auto justify-end">
-                  <PaginationContent>
-                    <PaginationItem>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 gap-1 px-2"
-                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                        disabled={currentPageSafe === 1}
-                      >
-                        <ChevronLeft className="w-3.5 h-3.5" />
-                        Prev
-                      </Button>
-                    </PaginationItem>
-                    {getPageNumbers(currentPageSafe, totalPages).map((page, i) =>
-                      page === "ellipsis" ? (
-                        <PaginationItem key={`e${i}`}>
-                          <PaginationEllipsis />
-                        </PaginationItem>
-                      ) : (
-                        <PaginationItem key={page}>
-                          <Button
-                            variant={page === currentPageSafe ? "outline" : "ghost"}
-                            size="icon"
-                            className="h-7 w-7 text-xs"
-                            onClick={() => setCurrentPage(page)}
-                          >
-                            {page}
-                          </Button>
-                        </PaginationItem>
-                      ),
-                    )}
-                    <PaginationItem>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 gap-1 px-2"
-                        onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                        disabled={currentPageSafe === totalPages}
-                      >
-                        Next
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </Button>
-                    </PaginationItem>
-                  </PaginationContent>
-                </Pagination>
-              </div>
-            )}
           </div>
         )}
         <p className="text-xs mt-2" style={{ color: "var(--mpi-t3)" }}>

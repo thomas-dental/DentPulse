@@ -190,53 +190,28 @@ export function CapacityTab() {
           k="Hygiene hours booked"
           v={d.hygieneBookedPct == null ? "—" : `${d.hygieneBookedPct}%`}
           note={d.hygieneBookedPct == null ? "no hygienist providers" : `${nn(d.hygieneBookedHours)} of ${nn(d.hygieneAvailableHours)} available`}
-          tooltip={d.hygieneBookedPct == null ? "Same formula as the Hygienist Management page's Avg Utilisation tile — needs at least one hygienist provider." : undefined}
-          calc={
-            d.hygieneBookedPct == null
-              ? undefined
-              : [
-                  { label: "Booked hygienist hours", value: `${nn(d.hygieneBookedHours)} hrs` },
-                  { label: "÷ Available hours (hygienists × working days × hrs/day)", value: `${nn(d.hygieneAvailableHours)} hrs` },
-                  { label: "= Booked", value: `${d.hygieneBookedPct}%`, isTotal: true },
-                ]
-          }
+          tooltip="Same formula as the Hygienist Management page's Avg Utilisation tile: total booked hygienist appointment minutes ÷ (hygienists × working days × hours/day × 60)."
         />
         <Stat
           k="Time to next slot"
           v={d.waitWeeks == null ? "—" : `${d.waitWeeks.toFixed(1)}w`}
           note={d.waitWeeks == null ? "no recent hygiene bookings" : d.waitWeeks > 8 ? "beyond patient patience" : "within reach"}
           tone={d.waitWeeks != null && d.waitWeeks > 8 ? "down" : undefined}
-          tooltip="Proxy, not live availability — this app has no schedule feed, so this is current booking lead time, not a true next-free-slot."
-          calc={
-            d.waitWeeks == null
-              ? undefined
-              : [
-                  { label: "Hygienist appointments booked in the last 8 weeks", value: nn(d.waitSampleCount) },
-                  { label: "Median gap, booked → appointment", value: `${Math.round(d.waitWeeks * 7)} days` },
-                  { label: "= In weeks", value: `${d.waitWeeks.toFixed(1)}w`, isTotal: true },
-                ]
-          }
+          tooltip="Proxy, not live availability (this app has no schedule feed): median gap between when a hygienist appointment was booked and when it took place, over hygienist appointments booked in the last 8 weeks."
         />
         <Stat
           k="Short-notice loss"
           v={`${d.shortNoticeLossPct}%`}
           note="failed to attend or cancelled"
           tone={d.shortNoticeLossPct > 10 ? "down" : undefined}
-          calc={[
-            { label: "Cancelled or not attended", value: nn(d.lostAppointments) },
-            { label: "÷ Appointments booked", value: nn(d.totalAppointments) },
-            { label: "= Short-notice loss", value: `${d.shortNoticeLossPct}%`, isTotal: true },
-          ]}
+          tooltip={`${nn(d.lostAppointments)} cancelled or not attended ÷ ${nn(d.totalAppointments)} booked = ${d.shortNoticeLossPct}%`}
         />
         {d.matchedPlanMembers > 0 && (
           <Stat
             k="Visits owed a year"
             v={nn(d.visitsOwedAYear)}
             note={`${nn((d.hygieneRedemption?.none ?? 0) + (d.hygieneRedemption?.partial ?? 0) + (d.hygieneRedemption?.full ?? 0))} hygiene · ${nn((d.examRedemption?.none ?? 0) + (d.examRedemption?.partial ?? 0) + (d.examRedemption?.full ?? 0))} exam · ${nn((d.xrayRedemption?.none ?? 0) + (d.xrayRedemption?.partial ?? 0) + (d.xrayRedemption?.full ?? 0))} xray plans`}
-            calc={[
-              { label: "Matched plan members", value: nn(d.matchedPlanMembers) },
-              { label: "Their included exam + hygiene + xray visits a year, summed", value: nn(d.visitsOwedAYear), isTotal: true },
-            ]}
+            tooltip="Sum of each matched plan member's included exam + hygiene + xray visits for the year, from their plan's entitlement settings."
           />
         )}
         {d.matchedPlanMembers > 0 && (
@@ -245,15 +220,7 @@ export function CapacityTab() {
             v={d.seenPct6m == null ? "—" : `${d.seenPct6m}%`}
             note={d.seenPct12m == null ? "of matched plan members" : `${d.seenPct12m}% in the last 12 months`}
             tone={d.seenPct6m != null && d.seenPct6m < 50 ? "down" : undefined}
-            calc={[
-              { label: "Matched plan members", value: nn(d.matchedPlanMembers) },
-              {
-                label: "= With a real (non-cancelled, non-DNA) visit in the last 6 months",
-                value: d.seenPct6m != null ? `${d.seenPct6m}%` : "—",
-                isTotal: true,
-              },
-              { label: "In the last 12 months", value: d.seenPct12m != null ? `${d.seenPct12m}%` : "—" },
-            ]}
+            tooltip="Matched plan members with any real (non-cancelled, non-DNA) Dentally appointment in the last 6 / 12 months — are they actually turning up, not just paying."
           />
         )}
       </div>

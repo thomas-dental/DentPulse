@@ -1,17 +1,14 @@
 /**
- * DentPulse NHS / MOS / UOA income = monthly actual count × UDA (or case, or
- * UOA-unit) rate from uda_settings — same formula as Version 2.0 when
- * NHSIncomeFrom = DentPulse.
+ * DentPulse NHS / MOS income = monthly actual count × UDA (or case) rate
+ * from uda_settings — same formula as Version 2.0 when NHSIncomeFrom = DentPulse.
  *
  *   NHS: appointment_summary.uda_count × (nhs_contract_value / total_uda_obligation)
  *   MOS: appointment_summary.mos_count × (mos contract / obligation)
- *   UOA: appointment_summary.uoa_count × (uoa contract / obligation)
  *
- * MOS and UOA are both folded into the NHS production bucket (V2
- * GetBenchmarkReport parity — NHS is shown as one combined number).
+ * MOS is folded into the NHS production bucket (V2 GetBenchmarkReport parity).
  *
  * FY contract ceiling: when the selected range fully covers a UK dental FY
- * (1 Apr–31 Mar), earned NHS/MOS/UOA income is capped at that location’s
+ * (1 Apr–31 Mar), earned NHS/MOS income is capped at that location’s
  * uda_settings contract value for that FY (government max). Under-delivery
  * still shows actual earned income.
  */
@@ -19,7 +16,7 @@
 import { format, parse, startOfDay, startOfMonth } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
 
-export type ContractType = 'NHS' | 'MOS' | 'UOA';
+export type ContractType = 'NHS' | 'MOS';
 
 export type UdaRateRow = {
   locationId: string | null;
@@ -30,7 +27,7 @@ export type UdaRateRow = {
   contractValue: number;
 };
 
-type MonthSplit = { nhs: number; mos: number; uoa: number };
+type MonthSplit = { nhs: number; mos: number };
 
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -89,26 +86,21 @@ export async function resolveDentpulseIncomeFlags(
 ): Promise<{
   useNhs: boolean;
   useMos: boolean;
-  useUoa: boolean;
   /** Practice locations with nhs_income_source = dentpulse. */
   nhsLocationIds: Set<string>;
   /** Practice locations with mos_income_source = dentpulse. */
   mosLocationIds: Set<string>;
-  /** Practice locations with uoa_income_source = dentpulse. */
-  uoaLocationIds: Set<string>;
 }> {
   const empty = {
     useNhs: false,
     useMos: false,
-    useUoa: false,
     nhsLocationIds: new Set<string>(),
     mosLocationIds: new Set<string>(),
-    uoaLocationIds: new Set<string>(),
   };
 
   let q = (supabase as any)
     .from('practice_locations')
-    .select('id, nhs_income_source, mos_income_source, uoa_income_source')
+    .select('id, nhs_income_source, mos_income_source')
     .eq('organization_id', organizationId)
     .is('deleted_at', null);
   if (locationId && locationId !== 'all') q = q.eq('id', locationId);
@@ -122,26 +114,21 @@ export async function resolveDentpulseIncomeFlags(
     id: string;
     nhs_income_source?: string | null;
     mos_income_source?: string | null;
-    uoa_income_source?: string | null;
   }>;
   if (rows.length === 0) return empty;
 
   const nhsLocationIds = new Set<string>();
   const mosLocationIds = new Set<string>();
-  const uoaLocationIds = new Set<string>();
   for (const r of rows) {
     if (isDentpulseSource(r.nhs_income_source)) nhsLocationIds.add(String(r.id));
     if (isDentpulseSource(r.mos_income_source)) mosLocationIds.add(String(r.id));
-    if (isDentpulseSource(r.uoa_income_source)) uoaLocationIds.add(String(r.id));
   }
 
   return {
     useNhs: nhsLocationIds.size > 0,
     useMos: mosLocationIds.size > 0,
-    useUoa: uoaLocationIds.size > 0,
     nhsLocationIds,
     mosLocationIds,
-    uoaLocationIds,
   };
 }
 
@@ -202,7 +189,7 @@ export async function fetchUdaRates(
     if (rate <= 0) continue;
 
     const ct = String(r.contract_type || '').toUpperCase();
-    if (ct !== 'NHS' && ct !== 'MOS' && ct !== 'UOA') continue;
+    if (ct !== 'NHS' && ct !== 'MOS') continue;
 
     out.push({
       locationId: loc,
@@ -260,10 +247,9 @@ export type PractitionerMonthCount = {
   month: string; // yyyy-MM-01
   udaCount: number;
   mosCount: number;
-  uoaCount: number;
 };
 
-/** Load NHS/MOS/UOA counts for the given Dentally practitioner external_ids. */
+/** Load NHS/MOS counts for the given Dentally practitioner external_ids. */
 export async function fetchAppointmentCounts(
   organizationId: string,
   practitionerIds: number[],
@@ -277,7 +263,7 @@ export async function fetchAppointmentCounts(
 
   const { data, error } = await (supabase as any)
     .from('appointment_summary')
-    .select('practitioner_id, month, uda_count, mos_count, uoa_count')
+    .select('practitioner_id, month, uda_count, mos_count')
     .eq('organization_id', organizationId)
     .in('practitioner_id', practitionerIds)
     .gte('month', from)
@@ -293,13 +279,11 @@ export async function fetchAppointmentCounts(
     month: string;
     uda_count: number | string | null;
     mos_count: number | string | null;
-    uoa_count: number | string | null;
   }>).map((r) => ({
     practitionerId: Number(r.practitioner_id),
     month: String(r.month).slice(0, 10),
     udaCount: Number(r.uda_count) || 0,
     mosCount: Number(r.mos_count) || 0,
-    uoaCount: Number(r.uoa_count) || 0,
   }));
 }
 
@@ -326,19 +310,16 @@ function computeDentpulseNhsMosSplitByMonth(
   options: {
     includeNhs: boolean;
     includeMos: boolean;
-    includeUoa: boolean;
     nhsLocationIds?: Set<string>;
     mosLocationIds?: Set<string>;
-    uoaLocationIds?: Set<string>;
   },
 ): Map<string, { [monthKey: string]: MonthSplit }> {
-  const countByPracMonth = new Map<string, { uda: number; mos: number; uoa: number }>();
+  const countByPracMonth = new Map<string, { uda: number; mos: number }>();
   for (const c of counts) {
     const key = `${c.practitionerId}|${c.month}`;
-    const prev = countByPracMonth.get(key) ?? { uda: 0, mos: 0, uoa: 0 };
+    const prev = countByPracMonth.get(key) ?? { uda: 0, mos: 0 };
     prev.uda += c.udaCount;
     prev.mos += c.mosCount;
-    prev.uoa += c.uoaCount;
     countByPracMonth.set(key, prev);
   }
 
@@ -355,16 +336,12 @@ function computeDentpulseNhsMosSplitByMonth(
       options.includeMos &&
       (!options.mosLocationIds ||
         (!!locId && options.mosLocationIds.has(locId)));
-    const includeUoa =
-      options.includeUoa &&
-      (!options.uoaLocationIds ||
-        (!!locId && options.uoaLocationIds.has(locId)));
 
     const monthly: { [monthKey: string]: MonthSplit } = {};
     for (const mk of p.monthKeys) {
       const d = monthKeyToDate(mk);
       if (!d) {
-        monthly[mk] = { nhs: 0, mos: 0, uoa: 0 };
+        monthly[mk] = { nhs: 0, mos: 0 };
         continue;
       }
       const fy = ukDentalFinancialYear(d);
@@ -372,19 +349,16 @@ function computeDentpulseNhsMosSplitByMonth(
       // Rate only from this practice's (or org-wide) uda_settings — never another site.
       const nhsRate = includeNhs ? pickRate(rates, 'NHS', fy, p.locationId) : 0;
       const mosRate = includeMos ? pickRate(rates, 'MOS', fy, p.locationId) : 0;
-      const uoaRate = includeUoa ? pickRate(rates, 'UOA', fy, p.locationId) : 0;
 
       let nhs = 0;
       let mos = 0;
-      let uoa = 0;
       for (const extId of p.externalIds) {
         const c = countByPracMonth.get(`${extId}|${monthStart}`);
         if (!c) continue;
         if (includeNhs && nhsRate > 0) nhs += c.uda * nhsRate;
         if (includeMos && mosRate > 0) mos += c.mos * mosRate;
-        if (includeUoa && uoaRate > 0) uoa += c.uoa * uoaRate;
       }
-      monthly[mk] = { nhs: round2(nhs), mos: round2(mos), uoa: round2(uoa) };
+      monthly[mk] = { nhs: round2(nhs), mos: round2(mos) };
     }
     out.set(providerKey, monthly);
   }
@@ -393,8 +367,8 @@ function computeDentpulseNhsMosSplitByMonth(
 }
 
 /**
- * For each fully covered FY, scale NHS / MOS / UOA so location totals do not
- * exceed uda_settings contract values. Partial FY ranges are left uncapped.
+ * For each fully covered FY, scale NHS / MOS so location totals do not exceed
+ * uda_settings contract values. Partial FY ranges are left uncapped.
  */
 export function applyFyContractCaps(
   providers: ProviderDentpulseNhsInput[],
@@ -405,10 +379,8 @@ export function applyFyContractCaps(
   options: {
     includeNhs: boolean;
     includeMos: boolean;
-    includeUoa: boolean;
     nhsLocationIds?: Set<string>;
     mosLocationIds?: Set<string>;
-    uoaLocationIds?: Set<string>;
   },
 ): Map<string, { [monthKey: string]: MonthSplit }> {
   const fullFys = fullyCoveredUkDentalFinancialYears(fromDate, toDate);
@@ -419,7 +391,7 @@ export function applyFyContractCaps(
   for (const [pk, monthly] of split) {
     const copy: { [monthKey: string]: MonthSplit } = {};
     for (const [mk, cell] of Object.entries(monthly)) {
-      copy[mk] = { nhs: cell.nhs, mos: cell.mos, uoa: cell.uoa };
+      copy[mk] = { nhs: cell.nhs, mos: cell.mos };
     }
     working.set(pk, copy);
   }
@@ -454,14 +426,9 @@ export function applyFyContractCaps(
         options.includeMos &&
         (!options.mosLocationIds ||
           (!!locId && options.mosLocationIds.has(locId)));
-      const capUoa =
-        options.includeUoa &&
-        (!options.uoaLocationIds ||
-          (!!locId && options.uoaLocationIds.has(locId)));
 
       let nhsSum = 0;
       let mosSum = 0;
-      let uoaSum = 0;
       const cells: Array<{ pk: string; mk: string }> = [];
 
       for (const pk of providerKeys) {
@@ -472,7 +439,6 @@ export function applyFyContractCaps(
           if (!d || ukDentalFinancialYear(d) !== fy) continue;
           nhsSum += cell.nhs;
           mosSum += cell.mos;
-          uoaSum += cell.uoa;
           cells.push({ pk, mk });
         }
       }
@@ -480,23 +446,19 @@ export function applyFyContractCaps(
       // Cap only from THIS location's uda_settings contract (no cross-site fallback).
       const nhsCap = capNhs ? pickContractValue(rates, 'NHS', fy, sampleLoc) : 0;
       const mosCap = capMos ? pickContractValue(rates, 'MOS', fy, sampleLoc) : 0;
-      const uoaCap = capUoa ? pickContractValue(rates, 'UOA', fy, sampleLoc) : 0;
 
       const nhsScale =
         nhsCap > 0 && nhsSum > nhsCap + 0.005 ? nhsCap / nhsSum : 1;
       const mosScale =
         mosCap > 0 && mosSum > mosCap + 0.005 ? mosCap / mosSum : 1;
-      const uoaScale =
-        uoaCap > 0 && uoaSum > uoaCap + 0.005 ? uoaCap / uoaSum : 1;
 
-      if (nhsScale >= 1 && mosScale >= 1 && uoaScale >= 1) continue;
+      if (nhsScale >= 1 && mosScale >= 1) continue;
 
       for (const { pk, mk } of cells) {
         const cell = working.get(pk)?.[mk];
         if (!cell) continue;
         if (nhsScale < 1) cell.nhs = round2(cell.nhs * nhsScale);
         if (mosScale < 1) cell.mos = round2(cell.mos * mosScale);
-        if (uoaScale < 1) cell.uoa = round2(cell.uoa * uoaScale);
       }
     }
   }
@@ -511,7 +473,7 @@ function combineSplits(
   for (const [pk, monthly] of split) {
     const combined: { [monthKey: string]: number } = {};
     for (const [mk, cell] of Object.entries(monthly)) {
-      combined[mk] = round2(cell.nhs + cell.mos + cell.uoa);
+      combined[mk] = round2(cell.nhs + cell.mos);
     }
     out.set(pk, combined);
   }
@@ -519,9 +481,9 @@ function combineSplits(
 }
 
 /**
- * Build per-provider monthly NHS income (NHS + optional MOS + optional UOA)
- * from rates × counts. Applies FY contract caps when the date range fully
- * covers one or more FYs. Returns Map providerKey → monthKey → £ amount.
+ * Build per-provider monthly NHS income (NHS + optional MOS) from rates × counts.
+ * Applies FY contract caps when the date range fully covers one or more FYs.
+ * Returns Map providerKey → monthKey → £ amount.
  */
 export function computeDentpulseNhsByMonth(
   providers: ProviderDentpulseNhsInput[],
@@ -530,10 +492,8 @@ export function computeDentpulseNhsByMonth(
   options: {
     includeNhs: boolean;
     includeMos: boolean;
-    includeUoa: boolean;
     nhsLocationIds?: Set<string>;
     mosLocationIds?: Set<string>;
-    uoaLocationIds?: Set<string>;
   },
   fromDate?: Date,
   toDate?: Date,
@@ -563,17 +523,16 @@ export async function fetchDentpulseNhsMonthlyOverlay(
   locationId?: string | null,
 ): Promise<Map<string, { [monthKey: string]: number }>> {
   const flags = await resolveDentpulseIncomeFlags(organizationId, locationId);
-  if (!flags.useNhs && !flags.useMos && !flags.useUoa) return new Map();
+  if (!flags.useNhs && !flags.useMos) return new Map();
 
-  // Only overlay providers whose home practice uses DentPulse for NHS/MOS/UOA.
+  // Only overlay providers whose home practice uses DentPulse for NHS/MOS.
   // Others keep PMS / Accounting figures (critical for All Locations).
   const eligibleProviders = providers.filter((p) => {
     const loc = p.locationId;
     if (!loc) return false;
     return (
       (flags.useNhs && flags.nhsLocationIds.has(loc)) ||
-      (flags.useMos && flags.mosLocationIds.has(loc)) ||
-      (flags.useUoa && flags.uoaLocationIds.has(loc))
+      (flags.useMos && flags.mosLocationIds.has(loc))
     );
   });
   if (eligibleProviders.length === 0) return new Map();
@@ -581,7 +540,6 @@ export async function fetchDentpulseNhsMonthlyOverlay(
   const contractTypes: ContractType[] = [];
   if (flags.useNhs) contractTypes.push('NHS');
   if (flags.useMos) contractTypes.push('MOS');
-  if (flags.useUoa) contractTypes.push('UOA');
 
   const allExtIds = [
     ...new Set(
@@ -604,10 +562,8 @@ export async function fetchDentpulseNhsMonthlyOverlay(
     {
       includeNhs: flags.useNhs,
       includeMos: flags.useMos,
-      includeUoa: flags.useUoa,
       nhsLocationIds: flags.nhsLocationIds,
       mosLocationIds: flags.mosLocationIds,
-      uoaLocationIds: flags.uoaLocationIds,
     },
     fromDate,
     toDate,

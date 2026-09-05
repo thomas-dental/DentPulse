@@ -20,6 +20,7 @@ const { swaggerSpec } = require('./config/swagger');
 const { startCashflowThresholdCron } = require('./services/cashflowThresholdCron');
 const { startAiForecastCron } = require('./services/aiForecastCron');
 const { startAutoSyncCron } = require('./services/autoSyncCron');
+const { startPeSyncCron } = require('./services/patientEconomics/sync/peSyncCron');
 
 const authRoutes = require('./routes/auth');
 const dashboardRoutes = require('./routes/dashboard');
@@ -140,6 +141,8 @@ app.use('/api/ai-usage', require('./routes/aiUsage')); // Admin: AI token usage 
 app.use('/api/ai-key', require('./routes/aiKey'));     // Resolve per-user/tenant Anthropic key for client-side AI features
 app.use('/api/plaid', require('./routes/plaid'));          // Plaid open banking (onboarding, connections, statements)
 app.use('/api/module-access', require('./routes/moduleAccess')); // Module access (default + per-org module enable/disable)
+app.use('/api/economics-engine', require('./routes/economicsEngine')); // Patient Economics Engine (PAT credentials)
+app.use('/api/dentally-webhook', require('./routes/dentallyWebhook')); // Inbound Dentally webhooks (HMAC-signed)
 
 // Serve AP-Invoices folder for PDF files
 app.use('/AP-Invoices', express.static(path.join(__dirname, 'AP-Invoices')));
@@ -215,5 +218,12 @@ app.listen(PORT, async () => {
     startAutoSyncCron();
   } catch (err) {
     console.error('Failed to start auto-sync cron:', err.message);
+  }
+
+  // Patient Economics: resume in_progress / retryable sync_cursors (node-cron poller).
+  try {
+    startPeSyncCron();
+  } catch (err) {
+    console.error('Failed to start PE sync cron:', err.message);
   }
 });

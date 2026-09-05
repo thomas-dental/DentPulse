@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useOrganization } from '@/hooks/useOrganization';
-import { useFilters } from '@/contexts/FilterContext';
 import { MONTH_NAMES, PRACTICE_PLAN_MARKER } from '@/hooks/useMembershipUploadData';
 
 /**
@@ -20,16 +19,7 @@ import { MONTH_NAMES, PRACTICE_PLAN_MARKER } from '@/hooks/useMembershipUploadDa
  *   membership_statement_events (statement PDFs carry no cancellation
  *   REASON, so the breakdown is by plan).
  *
- * One fetch per (org, location, anchor); the dentist filter is applied
- * client-side.
- *
- * LOCATION-SCOPED: when the header has a location selected, member rows
- * follow the page's ownership rule (upload_location_id, falling back to the
- * matched patient's home location_id for unstamped legacy rows) and
- * statement summaries follow useMembershipStatementInsights' rule (the
- * upload stamp is the only location a summary carries; unstamped legacy
- * summaries stay visible under any location). Without this the charts
- * showed whole-org figures whichever location was picked.
+ * One fetch per (org, anchor); the dentist filter is applied client-side.
  *
  * PRACTICE PLAN ONLY: every member-row query filters on the
  * 'Practice Plan statement' marker, so Denplan sheet uploads never feed
@@ -100,7 +90,6 @@ function memberIdentity(m: TrendsSource['members'][number]): string | null {
 
 export function useMembershipTrends(anchorMonth: number, anchorYear: number, dentist: string | null) {
   const { organizationId } = useOrganization();
-  const { selectedLocationId } = useFilters();
 
   // A wide header range (e.g. "This Year") can pass an anchor that's still
   // in the future — the trailing-12-month window would then walk into
@@ -116,7 +105,7 @@ export function useMembershipTrends(anchorMonth: number, anchorYear: number, den
   const effectiveAnchorYear = isFutureAnchor ? now.getFullYear() : anchorYear;
 
   const { data: src, isLoading } = useQuery<TrendsSource>({
-    queryKey: ['membership_trends_src', organizationId, selectedLocationId ?? 'all', effectiveAnchorYear, effectiveAnchorMonth],
+    queryKey: ['membership_trends_src', organizationId, effectiveAnchorYear, effectiveAnchorMonth],
     enabled: !!organizationId && effectiveAnchorMonth >= 1 && effectiveAnchorMonth <= 12,
     queryFn: async () => {
       // Every lookup THROWS on error — a swallowed failure would let React
@@ -128,33 +117,26 @@ export function useMembershipTrends(anchorMonth: number, anchorYear: number, den
       const PAGE = 1000;
       const members: TrendsSource['members'] = [];
       for (let from = 0; ; from += PAGE) {
-        let membersQ = (supabase as any)
+        const { data, error } = await (supabase as any)
           .from('membership_upload_members')
           .select('upload_month, upload_year, net_due, treating_dentist, pay_grp_id, patient_id, surname, dob')
           .eq('organization_id', organizationId)
           .eq('explanatory_text', PRACTICE_PLAN_MARKER)
           .is('deleted_at', null)
-          .gte('upload_year', effectiveAnchorYear - 2);
-        if (selectedLocationId) {
-          membersQ = membersQ.or(`upload_location_id.eq.${selectedLocationId},and(upload_location_id.is.null,location_id.eq.${selectedLocationId})`);
-        }
-        const { data, error } = await membersQ.range(from, from + PAGE - 1);
+          .gte('upload_year', effectiveAnchorYear - 2)
+          .range(from, from + PAGE - 1);
         if (error) throw error;
         if (!data || data.length === 0) break;
         members.push(...data);
         if (data.length < PAGE) break;
       }
 
-      let summariesQ = (supabase as any)
+      const { data: summaries, error: sumErr } = await (supabase as any)
         .from('membership_statement_summaries')
         .select('id, statement_month, statement_year, treating_dentist, new_patient_count, cancelled_patient_count')
         .eq('organization_id', organizationId)
         .is('deleted_at', null)
         .gte('statement_year', effectiveAnchorYear - 2);
-      if (selectedLocationId) {
-        summariesQ = summariesQ.or(`upload_location_id.eq.${selectedLocationId},upload_location_id.is.null`);
-      }
-      const { data: summaries, error: sumErr } = await summariesQ;
       if (sumErr) throw sumErr;
 
       // Cancellation events for the anchor month's statements.
@@ -191,21 +173,14 @@ export function useMembershipTrends(anchorMonth: number, anchorYear: number, den
             .map(e => e.pp_patient_id as string),
         ));
         if (unresolvedPpIds.length > 0) {
-          // Same location rule as the main member fetch — PP patient numbers
-          // are per-site account, so another location's rows could carry a
-          // colliding id with a different plan.
-          let planQ = (supabase as any)
+          const { data: planRows, error: prErr } = await (supabase as any)
             .from('membership_upload_members')
             .select('pay_grp_id, fee_category, upload_year, upload_month')
             .eq('organization_id', organizationId)
             .eq('explanatory_text', PRACTICE_PLAN_MARKER)
             .is('deleted_at', null)
             .in('pay_grp_id', unresolvedPpIds)
-            .not('fee_category', 'is', null);
-          if (selectedLocationId) {
-            planQ = planQ.or(`upload_location_id.eq.${selectedLocationId},and(upload_location_id.is.null,location_id.eq.${selectedLocationId})`);
-          }
-          const { data: planRows, error: prErr } = await planQ
+            .not('fee_category', 'is', null)
             .order('upload_year', { ascending: false })
             .order('upload_month', { ascending: false });
           if (prErr) throw prErr;

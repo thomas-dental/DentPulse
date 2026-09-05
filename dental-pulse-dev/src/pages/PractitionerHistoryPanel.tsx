@@ -49,14 +49,7 @@ import {
   usePractitionerHistoryList,
   type MonthlyTrend,
 } from "@/hooks/usePractitionerHistory";
-import {
-  useAllProvidersNetProduction,
-  tpiUnmappedAmount,
-  filterNetProductionByStatus,
-  personMatchesProductionStatus,
-  PRODUCTION_PROVIDER_STATUS_OPTIONS,
-  type ProductionProviderStatus,
-} from "@/hooks/useAllProvidersNetProduction";
+import { useAllProvidersNetProduction, tpiUnmappedAmount } from "@/hooks/useAllProvidersNetProduction";
 import { useAllProvidersWorkingHours } from "@/hooks/useAllProvidersWorkingHours";
 import {
   CommonFilterDialog,
@@ -208,20 +201,6 @@ function bucketTrend(
  * providers-gated page, so keeping them separate avoids widening access
  * before that's resolved.
  */
-function classifyProviderTypeLabel(role: string | null | undefined): string {
-  const r = (role || "").toLowerCase();
-  if (
-    r.includes("dentist") ||
-    r.includes("dental surgeon") ||
-    r.includes("principal dentist")
-  ) {
-    return "Associate";
-  }
-  if (r.includes("hygienist") || r.includes("hygiene")) return "Hygienist";
-  if (r.includes("therapist") || r.includes("therapy")) return "Therapist";
-  return "Other";
-}
-
 export function PractitionerHistoryPanel() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -232,30 +211,54 @@ export function PractitionerHistoryPanel() {
   const practitionerTrendsMap = data?.practitionerTrendsMap;
   const totalUniquePatients = data?.totalUniquePatients ?? 0;
 
-  // Same Active / All / Inactive control as Providers → Production Data.
-  const [providerStatus, setProviderStatus] =
-    useState<ProductionProviderStatus>("all");
-
-  const statusFilteredPractitioners = useMemo(() => {
-    if (providerStatus === "all") return practitioners;
-    return practitioners.filter((p) =>
-      p.isActive === (providerStatus === "active"),
-    );
-  }, [practitioners, providerStatus]);
-
-  // Total Revenue / Total Hours cards reference the SAME sources as the
+  // Total Revenue / Total Hours cards below reference the SAME sources as the
   // provider management pages — Net Production raw TPI total (Dentally
-  // Practitioner Activity) and Working Hours (appointment_summary). One
-  // org-wide fetch (not four role splits) avoids double-counting roles such
-  // as "Dental Surgeon" that matched both Dentist and Other.
-  const { data: allNetProduction } = useAllProvidersNetProduction(
-    null,
+  // Practitioner Activity) and Working Hours (appointment_summary). One call
+  // per provider type doubles as the "by provider" breakdown for both tooltips.
+  const { data: associateProduction } = useAllProvidersNetProduction(
+    "Dentist",
     dateRange.startDate,
     dateRange.endDate,
     selectedLocationId,
   );
-  const { data: allWorkingHours } = useAllProvidersWorkingHours(
-    null,
+  const { data: hygienistProduction } = useAllProvidersNetProduction(
+    "Hygienist",
+    dateRange.startDate,
+    dateRange.endDate,
+    selectedLocationId,
+  );
+  const { data: therapistProduction } = useAllProvidersNetProduction(
+    "Therapist",
+    dateRange.startDate,
+    dateRange.endDate,
+    selectedLocationId,
+  );
+  const { data: otherProduction } = useAllProvidersNetProduction(
+    "Other",
+    dateRange.startDate,
+    dateRange.endDate,
+    selectedLocationId,
+  );
+  const { data: associateHours } = useAllProvidersWorkingHours(
+    "Dentist",
+    dateRange.startDate,
+    dateRange.endDate,
+    selectedLocationId,
+  );
+  const { data: hygienistHours } = useAllProvidersWorkingHours(
+    "Hygienist",
+    dateRange.startDate,
+    dateRange.endDate,
+    selectedLocationId,
+  );
+  const { data: therapistHours } = useAllProvidersWorkingHours(
+    "Therapist",
+    dateRange.startDate,
+    dateRange.endDate,
+    selectedLocationId,
+  );
+  const { data: otherHours } = useAllProvidersWorkingHours(
+    "Other",
     dateRange.startDate,
     dateRange.endDate,
     selectedLocationId,
@@ -264,45 +267,31 @@ export function PractitionerHistoryPanel() {
     "treatment" | "provider"
   >("treatment");
 
-  const visibleProduction = useMemo(
-    () =>
-      filterNetProductionByStatus(allNetProduction?.providers, providerStatus),
-    [allNetProduction, providerStatus],
-  );
-
-  const visibleHours = useMemo(
-    () =>
-      (allWorkingHours?.providers ?? []).filter((p) =>
-        personMatchesProductionStatus(
-          p.providerName,
-          providerStatus,
-          allNetProduction?.providers,
-        ),
-      ),
-    [allWorkingHours, providerStatus, allNetProduction],
-  );
-
-  // `total` = private + membership + nhs (nhs already includes the DentPulse
-  // NHS/MOS/UOA rate×count overlay) — this is what the headline card and its
-  // breakdown popover must agree on. `rawTotal` is kept separately: it's the
-  // unconditional Dentally-reconciling SUM(tpi_price), used only to detect
-  // "Other plans" (production on payment plans not tagged Private/Membership/
-  // NHS) via tpiUnmappedAmount — mixing the two here previously made the
-  // headline silently diverge from Private+Membership+NHS whenever DentPulse-
-  // sourced NHS/MOS/UOA income didn't match Dentally's own (often £0) TPI price.
   const netProductionTotals = useMemo(() => {
-    return visibleProduction.reduce(
-      (acc, p) => {
-        acc.total += p.total;
-        acc.rawTotal += p.totalRaw;
-        acc.private += p.totalPrivate;
-        acc.membership += p.totalMembership;
-        acc.nhs += p.totalNhs;
+    const sets = [
+      associateProduction,
+      hygienistProduction,
+      therapistProduction,
+      otherProduction,
+    ];
+    return sets.reduce(
+      (acc, d) => {
+        for (const p of d?.providers ?? []) {
+          acc.total += p.totalRaw;
+          acc.private += p.totalPrivate;
+          acc.membership += p.totalMembership;
+          acc.nhs += p.totalNhs;
+        }
         return acc;
       },
-      { total: 0, rawTotal: 0, private: 0, membership: 0, nhs: 0 },
+      { total: 0, private: 0, membership: 0, nhs: 0 },
     );
-  }, [visibleProduction]);
+  }, [
+    associateProduction,
+    hygienistProduction,
+    therapistProduction,
+    otherProduction,
+  ]);
 
   // Per-practitioner Private/Membership/NHS split, keyed by provider id, for
   // the table's Revenue column tooltip — same net-production source as the
@@ -312,120 +301,99 @@ export function PractitionerHistoryPanel() {
       string,
       { private: number; membership: number; nhs: number; rawTotal: number }
     >();
-    for (const p of visibleProduction) {
-      // Key by every raw providers.id folded into this person's group, not
-      // just the arbitrarily-chosen representative — the roster row shown
-      // in the table may point at a different (e.g. multi-location or
-      // inactive-duplicate) id than the one useAllProvidersNetProduction
-      // picked as representativeId, which silently missed the lookup below.
-      for (const id of p.allProviderIds ?? [p.providerId]) {
-        // Under "All locations" the same person appears once PER LOCATION
-        // (useAllProvidersNetProduction deliberately doesn't merge those —
-        // see its "do not re-merge across sites" comment), so most entries
-        // are zero except at the location(s) they actually work. Sum rather
-        // than overwrite, or whichever location's zero entry runs last
-        // clobbers the real figure — this reproduced as the tooltip always
-        // reading 0 under "All" while a single-location filter was correct.
-        const existing = map.get(id);
-        map.set(id, {
-          private: (existing?.private ?? 0) + p.totalPrivate,
-          membership: (existing?.membership ?? 0) + p.totalMembership,
-          nhs: (existing?.nhs ?? 0) + p.totalNhs,
-          rawTotal: (existing?.rawTotal ?? 0) + p.totalRaw,
-        });
+    const sets = [
+      associateProduction,
+      hygienistProduction,
+      therapistProduction,
+      otherProduction,
+    ];
+    for (const d of sets) {
+      for (const p of d?.providers ?? []) {
+        // Key by every raw providers.id folded into this person's group, not
+        // just the arbitrarily-chosen representative — the roster row shown
+        // in the table may point at a different (e.g. multi-location or
+        // inactive-duplicate) id than the one useAllProvidersNetProduction
+        // picked as representativeId, which silently missed the lookup below.
+        for (const id of p.allProviderIds ?? [p.providerId]) {
+          // Under "All locations" the same person appears once PER LOCATION
+          // (useAllProvidersNetProduction deliberately doesn't merge those —
+          // see its "do not re-merge across sites" comment), so most entries
+          // are zero except at the location(s) they actually work. Sum rather
+          // than overwrite, or whichever location's zero entry runs last
+          // clobbers the real figure — this reproduced as the tooltip always
+          // reading 0 under "All" while a single-location filter was correct.
+          const existing = map.get(id);
+          map.set(id, {
+            private: (existing?.private ?? 0) + p.totalPrivate,
+            membership: (existing?.membership ?? 0) + p.totalMembership,
+            nhs: (existing?.nhs ?? 0) + p.totalNhs,
+            rawTotal: (existing?.rawTotal ?? 0) + p.totalRaw,
+          });
+        }
       }
     }
     return map;
-  }, [visibleProduction]);
+  }, [
+    associateProduction,
+    hygienistProduction,
+    therapistProduction,
+    otherProduction,
+  ]);
 
   const revenueByProviderType = useMemo(() => {
-    const roleById = new Map(
-      practitioners.map((p) => [p.id, p.role] as const),
-    );
-    const roleByName = new Map(
-      practitioners.map((p) => [p.name.trim().toLowerCase(), p.role] as const),
-    );
-    const totals: Record<string, number> = {
-      Associate: 0,
-      Hygienist: 0,
-      Therapist: 0,
-      Other: 0,
-    };
-    for (const p of visibleProduction) {
-      let role: string | undefined;
-      for (const id of p.allProviderIds ?? [p.providerId]) {
-        role = roleById.get(id);
-        if (role) break;
-      }
-      if (!role) role = roleByName.get(p.providerName.trim().toLowerCase());
-      // Use `total` (private + membership + nhs, overlay-inclusive), not
-      // `totalRaw` — otherwise this "By provider" split silently sums to a
-      // different figure than the headline / "By treatment" breakdown.
-      totals[classifyProviderTypeLabel(role)] += p.total;
-    }
+    const sumRevenue = (d: typeof associateProduction) =>
+      (d?.providers ?? []).reduce((sum, p) => sum + p.totalRaw, 0);
     return [
-      { label: "Associate", revenue: totals.Associate },
-      { label: "Hygienist", revenue: totals.Hygienist },
-      { label: "Therapist", revenue: totals.Therapist },
-      { label: "Other", revenue: totals.Other },
+      { label: "Associate", revenue: sumRevenue(associateProduction) },
+      { label: "Hygienist", revenue: sumRevenue(hygienistProduction) },
+      { label: "Therapist", revenue: sumRevenue(therapistProduction) },
+      { label: "Other", revenue: sumRevenue(otherProduction) },
     ];
-  }, [visibleProduction, practitioners]);
+  }, [
+    associateProduction,
+    hygienistProduction,
+    therapistProduction,
+    otherProduction,
+  ]);
 
   const workingHoursTotals = useMemo(() => {
-    const roleById = new Map(
-      practitioners.map((p) => [p.id, p.role] as const),
-    );
-    const roleByName = new Map(
-      practitioners.map((p) => [p.name.trim().toLowerCase(), p.role] as const),
-    );
-    const totals: Record<string, number> = {
-      Associate: 0,
-      Hygienist: 0,
-      Therapist: 0,
-      Other: 0,
-    };
-    for (const p of visibleHours) {
-      const role =
-        roleById.get(p.providerId) ??
-        roleByName.get(p.providerName.trim().toLowerCase());
-      totals[classifyProviderTypeLabel(role)] += p.total;
-    }
+    const sumHours = (d: typeof associateHours) =>
+      (d?.providers ?? []).reduce((sum, p) => sum + p.total, 0);
     const byProviderType = [
-      { label: "Associate", hours: totals.Associate },
-      { label: "Hygienist", hours: totals.Hygienist },
-      { label: "Therapist", hours: totals.Therapist },
-      { label: "Other", hours: totals.Other },
+      { label: "Associate", hours: sumHours(associateHours) },
+      { label: "Hygienist", hours: sumHours(hygienistHours) },
+      { label: "Therapist", hours: sumHours(therapistHours) },
+      { label: "Other", hours: sumHours(otherHours) },
     ];
     const total = byProviderType.reduce((sum, t) => sum + t.hours, 0);
     return { total, byProviderType };
-  }, [visibleHours, practitioners]);
+  }, [associateHours, hygienistHours, therapistHours, otherHours]);
 
   // Hours don't carry an isActive flag of their own — join each provider's
   // hours back to the practitioner roster (matched by provider id) to get
   // the active/inactive split for the tooltip breakdown.
   const workingHoursByStatus = useMemo(() => {
     const isActiveMap = new Map(practitioners.map((p) => [p.id, p.isActive]));
-    const isActiveByName = new Map(
-      practitioners.map((p) => [p.name.trim().toLowerCase(), p.isActive] as const),
-    );
-    for (const p of allNetProduction?.providers ?? []) {
-      const key = p.providerName.trim().toLowerCase();
-      isActiveByName.set(
-        key,
-        (isActiveByName.get(key) ?? false) || p.isActive,
-      );
-    }
+    const sets = [associateHours, hygienistHours, therapistHours, otherHours];
     let active = 0;
     let inactive = 0;
-    for (const p of visibleHours) {
-      const isActive =
-        isActiveMap.get(p.providerId) ??
-        isActiveByName.get(p.providerName.trim().toLowerCase());
-      if (isActive === false) inactive += p.total;
-      else active += p.total;
+    for (const d of sets) {
+      for (const p of d?.providers ?? []) {
+        if (isActiveMap.get(p.providerId) === false) {
+          inactive += p.total;
+        } else {
+          active += p.total;
+        }
+      }
     }
     return { active, inactive };
-  }, [practitioners, visibleHours, allNetProduction]);
+  }, [
+    practitioners,
+    associateHours,
+    hygienistHours,
+    therapistHours,
+    otherHours,
+  ]);
   const [chartPractitioner, setChartPractitioner] = useState<string>("all");
   const [chartGranularity, setChartGranularity] =
     useState<ChartGranularity>("monthly");
@@ -433,36 +401,11 @@ export function PractitionerHistoryPanel() {
   const [compareDialogOpen, setCompareDialogOpen] = useState(false);
 
   // Filter chart data by selected practitioner, then re-bucket the (always
-  // daily) trend rows into the selected granularity. "All" respects the
-  // Active / Inactive / All filter so appointment bars stay in sync.
-  const dailyChartData = useMemo(() => {
-    if (chartPractitioner !== "all") {
-      return practitionerTrendsMap?.get(chartPractitioner) ?? [];
-    }
-    if (providerStatus === "all") return monthlyTrend;
-    const merged = new Map<string, MonthlyTrend>();
-    for (const p of statusFilteredPractitioners) {
-      for (const row of practitionerTrendsMap?.get(p.id) ?? []) {
-        const existing = merged.get(row.month);
-        if (!existing) {
-          merged.set(row.month, { ...row });
-          continue;
-        }
-        existing.attended += row.attended;
-        existing.cancelled += row.cancelled;
-        existing.completed += row.completed;
-        existing.dna += row.dna;
-        existing.revenue += row.revenue;
-      }
-    }
-    return [...merged.values()].sort((a, b) => a.month.localeCompare(b.month));
-  }, [
-    chartPractitioner,
-    providerStatus,
-    monthlyTrend,
-    practitionerTrendsMap,
-    statusFilteredPractitioners,
-  ]);
+  // daily) trend rows into the selected granularity.
+  const dailyChartData =
+    chartPractitioner === "all"
+      ? monthlyTrend
+      : (practitionerTrendsMap?.get(chartPractitioner) ?? []);
   const chartData = useMemo(
     () => bucketTrend(dailyChartData, chartGranularity),
     [dailyChartData, chartGranularity],
@@ -470,7 +413,7 @@ export function PractitionerHistoryPanel() {
   const chartPractitionerName =
     chartPractitioner === "all"
       ? "All Practitioners"
-      : (statusFilteredPractitioners.find((p) => p.id === chartPractitioner)?.name ??
+      : (practitioners.find((p) => p.id === chartPractitioner)?.name ??
         "All Practitioners");
   const [searchQuery, setSearchQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("totalRevenue");
@@ -487,11 +430,11 @@ export function PractitionerHistoryPanel() {
 
   const roleOptions = useMemo(
     () =>
-      [...new Set(statusFilteredPractitioners.map((p) => p.role))]
+      [...new Set(practitioners.map((p) => p.role))]
         .filter(Boolean)
         .sort((a, b) => a.localeCompare(b))
         .map((role) => ({ label: role, value: role })),
-    [statusFilteredPractitioners],
+    [practitioners],
   );
 
   const handleSort = (key: SortKey) => {
@@ -504,7 +447,7 @@ export function PractitionerHistoryPanel() {
     setCurrentPage(1);
   };
 
-  const filtered = statusFilteredPractitioners
+  const filtered = practitioners
     .filter(
       (p) =>
         p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -591,7 +534,7 @@ export function PractitionerHistoryPanel() {
   };
 
   // Summary metrics
-  const totals = statusFilteredPractitioners.reduce(
+  const totals = practitioners.reduce(
     (acc, p) => ({
       appointments: acc.appointments + p.totalAppointments,
       completed: acc.completed + p.completed,
@@ -651,33 +594,6 @@ export function PractitionerHistoryPanel() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-end">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground whitespace-nowrap">
-            Show Providers
-          </span>
-          <Select
-            value={providerStatus}
-            onValueChange={(next) => {
-              setProviderStatus(next as ProductionProviderStatus);
-              setChartPractitioner("all");
-              setCurrentPage(1);
-            }}
-          >
-            <SelectTrigger className="h-9 w-[130px] font-normal">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PRODUCTION_PROVIDER_STATUS_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
@@ -686,7 +602,7 @@ export function PractitionerHistoryPanel() {
               <Users className="w-4 h-4" />
               Practitioners
             </div>
-            <p className="text-2xl font-bold">{statusFilteredPractitioners.length}</p>
+            <p className="text-2xl font-bold">{practitioners.length}</p>
           </CardContent>
         </Card>
         <Card>
@@ -870,10 +786,8 @@ export function PractitionerHistoryPanel() {
                           </span>
                         </div>
                         {tpiUnmappedAmount(
-                          netProductionTotals.rawTotal,
+                          netProductionTotals.total,
                           netProductionTotals.private,
-                          netProductionTotals.membership,
-                          netProductionTotals.nhs,
                         ) > 0.004 ? (
                           <div className="flex justify-between gap-4 items-center">
                             <span className="text-xs text-slate-600">
@@ -882,10 +796,8 @@ export function PractitionerHistoryPanel() {
                             <span className="text-xs font-bold text-slate-900">
                               {formatCurrency(
                                 tpiUnmappedAmount(
-                                  netProductionTotals.rawTotal,
+                                  netProductionTotals.total,
                                   netProductionTotals.private,
-                                  netProductionTotals.membership,
-                                  netProductionTotals.nhs,
                                 ),
                               )}
                             </span>
@@ -979,7 +891,7 @@ export function PractitionerHistoryPanel() {
                     >
                       All Practitioners
                     </DropdownMenuItem>
-                    {statusFilteredPractitioners.map((p) => (
+                    {practitioners.map((p) => (
                       <DropdownMenuItem
                         key={p.id}
                         onClick={() => setChartPractitioner(p.id)}
@@ -1100,7 +1012,7 @@ export function PractitionerHistoryPanel() {
           Compare
         </Button>
         <div className="ml-auto text-sm text-muted-foreground">
-          {filtered.length} of {statusFilteredPractitioners.length} practitioners
+          {filtered.length} of {practitioners.length} practitioners
         </div>
       </div>
 
@@ -1294,8 +1206,6 @@ export function PractitionerHistoryPanel() {
                                 {tpiUnmappedAmount(
                                   breakdown.rawTotal,
                                   breakdown.private,
-                                  breakdown.membership,
-                                  breakdown.nhs,
                                 ) > 0.004 ? (
                                   <div className="flex justify-between gap-4 items-center">
                                     <span className="text-xs text-slate-600">
@@ -1306,8 +1216,6 @@ export function PractitionerHistoryPanel() {
                                         tpiUnmappedAmount(
                                           breakdown.rawTotal,
                                           breakdown.private,
-                                          breakdown.membership,
-                                          breakdown.nhs,
                                         ),
                                       )}
                                     </span>
@@ -1408,14 +1316,14 @@ export function PractitionerHistoryPanel() {
       <CancelledAppointmentsDialog
         open={cancelledDialogOpen}
         onOpenChange={setCancelledDialogOpen}
-        practitioners={statusFilteredPractitioners}
+        practitioners={practitioners}
       />
 
       {/* Compare Practitioners Dialog */}
       <ComparePractitionersDialog
         open={compareDialogOpen}
         onOpenChange={setCompareDialogOpen}
-        practitioners={statusFilteredPractitioners}
+        practitioners={practitioners}
       />
     </div>
   );

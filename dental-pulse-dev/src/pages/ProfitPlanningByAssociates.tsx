@@ -2,13 +2,11 @@ import { useState, useMemo, useEffect, Fragment } from "react";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { Helmet } from "react-helmet-async";
 import { useOrganization } from "@/hooks/useOrganization";
-import { useOrganizationSettings } from "@/hooks/useOrganizationSettings";
-import { usePlanAccess } from "@/hooks/usePlanAccess";
 import { useFilters } from "@/contexts/FilterContext";
 import { useAllProvidersNetProduction } from "@/hooks/useAllProvidersNetProduction";
 import { useAllProvidersWorkingHours } from "@/hooks/useAllProvidersWorkingHours";
 import { useLocations } from "@/hooks/useLocations";
-import { getOperationalExpense } from "@/services/integrations/plCostService";
+import { getOpCostByPlatform } from "@/services/integrations/plCostService";
 import { resolveBusinessInfoLocationId } from "@/lib/businessInfoLocation";
 import { loadProviderCostInputs, type ProviderCostInputRow, type ProviderCostInputsResult } from "@/lib/providerCostInputs";
 import { resolveProviderCost, isProductionScaledBasis } from "@/lib/providerCostResolution";
@@ -23,15 +21,14 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, Plus, X } from "lucide-react";
 
-const fmtCurrencyBase = (v: number, showDecimals: boolean): string => {
+const fmtCurrency = (v: number): string => {
   const formatted = Math.abs(v).toLocaleString("en-GB", {
-    minimumFractionDigits: showDecimals ? 2 : 0,
-    maximumFractionDigits: showDecimals ? 2 : 0,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   });
   return v < 0 ? `-£${formatted}` : `£${formatted}`;
 };
-const fmtPctBase = (v: number, showDecimals: boolean) =>
-  `${v.toFixed(showDecimals ? 2 : 0)}%`;
+const fmtPct = (v: number) => `${v.toFixed(2)}%`;
 
 const antdTheme = {
   token: {
@@ -43,14 +40,7 @@ const antdTheme = {
 
 export default function ProfitPlanningByAssociates() {
   const { organizationId } = useOrganization();
-  const { isModuleAllowedByPlan } = usePlanAccess();
-  const lockedForPlan = !isModuleAllowedByPlan("budget");
-  const { showDecimals } = useOrganizationSettings();
-  // Shadow the module-level helpers so every call site below picks up the
-  // org's "Show Decimals" setting without threading it through each call.
-  const fmtCurrency = (v: number) => fmtCurrencyBase(v, showDecimals);
-  const fmtPct = (v: number) => fmtPctBase(v, showDecimals);
-  const { selectedLocationId, dateRange: globalDateRange } = useFilters();
+  const { selectedLocationId } = useFilters();
   const { allAvailableLocations } = useLocations();
   const selectedLocationName = selectedLocationId
     ? (allAvailableLocations?.find((l) => l.id === selectedLocationId)
@@ -235,19 +225,21 @@ export default function ProfitPlanningByAssociates() {
   const isLoadingTable =
     isLoadingProviders || isLoadingProduction || isLoadingHours;
 
-  // Sync "Date Selection for Operations" with the navbar's global date
-  // filter — same pattern as Profit Goals Settings (ProvidersManagement).
-  // The user can still narrow/change it locally afterward.
-  useEffect(() => {
-    setProfitGoalsDateRange({
-      from: globalDateRange.startDate,
-      to: globalDateRange.endDate,
-    });
-  }, [globalDateRange.startDate.getTime(), globalDateRange.endDate.getTime()]);
-
-  // Planning Month still defaults to the current month on first load.
+  // Initialize date range to financial year start → previous month end
   useEffect(() => {
     const now = new Date();
+    const financialMonth = 4; // April
+    const fyStartYear =
+      now.getMonth() + 1 >= financialMonth
+        ? now.getFullYear()
+        : now.getFullYear() - 1;
+    const fyStart = new Date(fyStartYear, financialMonth - 1, 1);
+    const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+    const effectiveFrom =
+      fyStart > prevMonthEnd
+        ? new Date(fyStartYear - 1, financialMonth - 1, 1)
+        : fyStart;
+    setProfitGoalsDateRange({ from: effectiveFrom, to: prevMonthEnd });
     setPlanningMonth(new Date(now.getFullYear(), now.getMonth(), 1));
   }, []);
 
@@ -284,10 +276,11 @@ export default function ProfitPlanningByAssociates() {
 
       let opCosts = 0;
       try {
-        const { amount } = await getOperationalExpense(
+        const { amount } = await getOpCostByPlatform(
           organizationId,
           toLocalStr(startDate),
           toLocalStr(endDate),
+          "TC",
           selectedLocationId,
         );
         if (amount != null) opCosts = amount;
@@ -588,7 +581,7 @@ export default function ProfitPlanningByAssociates() {
   };
 
   return (
-    <MainLayout userRole="admin" aiContext={aiContextData} locked={lockedForPlan}>
+    <MainLayout userRole="admin" aiContext={aiContextData}>
       <Helmet>
         <title>Profit Planning by Associates</title>
         <meta
@@ -989,7 +982,7 @@ export default function ProfitPlanningByAssociates() {
                                   <div className="text-muted-foreground mb-0.5">
                                     Profit/Loss % on OCPSPD
                                   </div>
-                                  <div className="font-medium">{fmtPct(pm.plPctOnOCPSPD)}</div>
+                                  <div className="font-medium">{`${pm.plPctOnOCPSPD.toFixed(0)} %`}</div>
                                 </div>
                               </div>
                             </td>

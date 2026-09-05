@@ -1,14 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useOrganization } from './useOrganization';
-import { startOfMonth, endOfMonth, format } from 'date-fns';
+import { startOfMonth, endOfMonth, format, subMonths } from 'date-fns';
 import { fetchDentpulseNhsMonthlyOverlay } from '@/utils/dentpulseNhsIncome';
 import { dentistNamesLikelyMatch } from '@/lib/dentistNameMatch';
-import {
-  fetchMembershipProviderMappings,
-  type ResolvedProviderMapping,
-} from './useMembershipProviderMappings';
-import { filterProvidersByManagementType } from '@/lib/providerRosterFilters';
 import { jsonbHasNumericPlanIds } from '@/lib/setupCategoryPaymentPlans';
 
 export interface MonthlyProductionBreakdown {
@@ -79,222 +74,19 @@ export type FetchAllProvidersNetProductionArgs = {
 
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
-/** TPI not classified into any of Private / Membership / NHS. rawTotal can also carry
- *  non-TPI statement membership revenue (see the membership-module fallback above), so
- *  membership and nhs must be subtracted too — not just private — or that statement
- *  amount double-counts here as "unmapped" on top of its own Membership row. */
-export function tpiUnmappedAmount(
-  rawTotal: number,
-  mappedPrivate: number,
-  mappedMembership = 0,
-  mappedNhs = 0,
-): number {
-  return Math.max(
-    0,
-    round2(
-      (Number(rawTotal) || 0) -
-        (Number(mappedPrivate) || 0) -
-        (Number(mappedMembership) || 0) -
-        (Number(mappedNhs) || 0),
-    ),
-  );
+/** Cap net-production RPC window to avoid statement timeouts on very wide ranges. */
+const MAX_NET_PRODUCTION_MONTHS = 24;
+
+function clampNetProductionRange(start: Date, end: Date): { rangeStart: Date; rangeEnd: Date } {
+  const rangeEnd = endOfMonth(end);
+  const minStart = startOfMonth(subMonths(rangeEnd, MAX_NET_PRODUCTION_MONTHS));
+  const rangeStart = start < minStart ? minStart : startOfMonth(start);
+  return { rangeStart, rangeEnd };
 }
 
-/** Same Active / All / Inactive control as Providers → Production Data. */
-export type ProductionProviderStatus = 'all' | 'active' | 'inactive';
-
-export const PRODUCTION_PROVIDER_STATUS_OPTIONS: {
-  value: ProductionProviderStatus;
-  label: string;
-}[] = [
-  { value: 'active', label: 'Active' },
-  { value: 'all', label: 'All' },
-  { value: 'inactive', label: 'Inactive' },
-];
-
-export function productionStatusMatches(
-  isActive: boolean,
-  status: ProductionProviderStatus,
-): boolean {
-  if (status === 'all') return true;
-  if (status === 'active') return isActive;
-  return !isActive;
-}
-
-function productionPersonKey(name: string): string {
-  return name.trim().toLowerCase();
-}
-
-function emptyMonthCell(): MonthlyProductionBreakdown {
-  return { amount: 0, private: 0, membership: 0, nhs: 0, rawTotal: 0 };
-}
-
-function addMonthCells(
-  a?: MonthlyProductionBreakdown,
-  b?: MonthlyProductionBreakdown,
-): MonthlyProductionBreakdown {
-  const left = a ?? emptyMonthCell();
-  const right = b ?? emptyMonthCell();
-  return {
-    amount: left.amount + right.amount,
-    private: left.private + right.private,
-    membership: left.membership + right.membership,
-    nhs: left.nhs + right.nhs,
-    rawTotal: left.rawTotal + right.rawTotal,
-  };
-}
-
-/**
- * Fold duplicate person rows by display name (inactive Dentally leftovers
- * sharing a name with the live record), then keep Active / Inactive / All.
- * Mirrors the Production Data table so Insights totals match those monthly
- * column totals for the same status.
- */
-export function filterNetProductionByStatus(
-  providers: ProviderMonthlyProduction[] | undefined,
-  status: ProductionProviderStatus,
-): ProviderMonthlyProduction[] {
-  const folded = new Map<string, ProviderMonthlyProduction>();
-  for (const row of providers ?? []) {
-    const key = productionPersonKey(row.providerName);
-    const existing = folded.get(key);
-    if (!existing) {
-      folded.set(key, {
-        ...row,
-        monthlyData: { ...row.monthlyData },
-        allProviderIds: [...(row.allProviderIds ?? [row.providerId])],
-        externalIds: [...(row.externalIds ?? [])],
-      });
-      continue;
-    }
-
-    const monthlyData = { ...existing.monthlyData };
-    for (const month of new Set([
-      ...Object.keys(monthlyData),
-      ...Object.keys(row.monthlyData),
-    ])) {
-      monthlyData[month] = addMonthCells(monthlyData[month], row.monthlyData[month]);
-    }
-
-    folded.set(key, {
-      ...existing,
-      isActive: existing.isActive || row.isActive,
-      total: existing.total + row.total,
-      totalPrivate: existing.totalPrivate + row.totalPrivate,
-      totalMembership: existing.totalMembership + row.totalMembership,
-      totalNhs: existing.totalNhs + row.totalNhs,
-      totalNhsRaw: existing.totalNhsRaw + row.totalNhsRaw,
-      totalRaw: existing.totalRaw + row.totalRaw,
-      monthlyData,
-      allProviderIds: [
-        ...new Set([
-          ...existing.allProviderIds,
-          ...(row.allProviderIds ?? []),
-          row.providerId,
-        ]),
-      ],
-      externalIds: [...new Set([...existing.externalIds, ...(row.externalIds ?? [])])],
-    });
-  }
-
-  return [...folded.values()].filter((row) =>
-    productionStatusMatches(row.isActive !== false, status),
-  );
-}
-
-/**
- * Hours rows have no isActive flag — classify by the production roster.
- * Unmatched names are kept (same as Production Data) so a missing join
- * cannot zero out a real hours total.
- */
-export function personMatchesProductionStatus(
-  name: string,
-  status: ProductionProviderStatus,
-  production: ProviderMonthlyProduction[] | undefined,
-): boolean {
-  if (status === 'all') return true;
-  const key = productionPersonKey(name);
-  const rows = (production ?? []).filter(
-    (p) => productionPersonKey(p.providerName) === key,
-  );
-  if (rows.length === 0) return true;
-  return productionStatusMatches(
-    rows.some((p) => p.isActive !== false),
-    status,
-  );
-}
-
-const MONTH_NUM: Record<string, string> = {
-  jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
-  jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
-};
-
-/** Parse Production Data month labels (`Jan-26`) to `2026-01`. */
-export function netProductionMonthKey(label: string): string | null {
-  const raw = String(label ?? '').trim();
-  const mm = MONTH_NUM[raw.slice(0, 3).toLowerCase()];
-  const yyMatch = raw.match(/(\d{2})$/);
-  if (!mm || !yyMatch) return null;
-  return `20${yyMatch[1]}-${mm}`;
-}
-
-export type NetProductionMonthlyPoint = {
-  month: string;
-  monthKey: string;
-  total: number;
-  private: number;
-  nhs: number;
-  membership: number;
-};
-
-/**
- * Monthly Dentally totals from net production `rawTotal` — the same figures
- * as the Production Data monthly column totals for the given provider set.
- */
-export function buildNetProductionMonthlyTrend(
-  providers: ProviderMonthlyProduction[],
-  rangeStart: Date,
-  rangeEnd: Date,
-): NetProductionMonthlyPoint[] {
-  const spansYears = rangeStart.getFullYear() !== rangeEnd.getFullYear();
-  const map = new Map<
-    string,
-    { total: number; private: number; nhs: number; membership: number }
-  >();
-
-  for (const provider of providers) {
-    for (const [label, cell] of Object.entries(provider.monthlyData)) {
-      const key = netProductionMonthKey(label);
-      if (!key) continue;
-      const cur = map.get(key) ?? { total: 0, private: 0, nhs: 0, membership: 0 };
-      cur.total += cell.rawTotal || 0;
-      cur.private += cell.private || 0;
-      cur.nhs += cell.nhs || 0;
-      cur.membership += cell.membership || 0;
-      map.set(key, cur);
-    }
-  }
-
-  return [...map.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([key, d]) => {
-      const [year, month] = key.split('-').map(Number);
-      const date = new Date(Date.UTC(year, (month || 1) - 1, 1));
-      return {
-        month: spansYears
-          ? date.toLocaleString('default', {
-              month: 'short',
-              year: '2-digit',
-              timeZone: 'UTC',
-            })
-          : date.toLocaleString('default', { month: 'short', timeZone: 'UTC' }),
-        monthKey: key,
-        total: d.total,
-        private: d.private,
-        nhs: d.nhs,
-        membership: d.membership,
-      };
-    });
+/** TPI not classified as Setup Categories Private Income. Private + this = rawTotal. */
+export function tpiUnmappedAmount(rawTotal: number, mappedPrivate: number): number {
+  return Math.max(0, round2((Number(rawTotal) || 0) - (Number(mappedPrivate) || 0)));
 }
 
 /**
@@ -437,8 +229,9 @@ export async function fetchAllProvidersNetProduction(
   }
 
   const now = new Date();
-  const rangeStart = startDate && endDate ? startDate : startOfMonth(now);
-  const rangeEnd = startDate && endDate ? endDate : endOfMonth(now);
+  const rawStart = startDate && endDate ? startDate : startOfMonth(now);
+  const rawEnd = startDate && endDate ? endDate : endOfMonth(now);
+  const { rangeStart, rangeEnd } = clampNetProductionRange(rawStart, rawEnd);
 
   // Include inactive providers — Production Data must still show historical
   // figures for leavers. Soft-deleted rows stay excluded via deleted_at.
@@ -450,16 +243,28 @@ export async function fetchAllProvidersNetProduction(
     .is('deleted_at', null)
     .eq('organization_id', organizationId);
 
+  if (providerType) {
+    if (providerType === 'Dentist') {
+      providersQuery = providersQuery.or('provider_role.ilike.%dentist%,provider_role.ilike.%dental surgeon%,provider_role.ilike.%principal dentist%');
+    } else if (providerType === 'Hygienist') {
+      providersQuery = providersQuery.or('provider_role.ilike.%hygienist%,provider_role.ilike.%dental hygienist%,provider_role.ilike.%hygiene%');
+    } else if (providerType === 'Therapist') {
+      providersQuery = providersQuery.or('provider_role.ilike.%therapist%,provider_role.ilike.%dental therapist%,provider_role.ilike.%therapy%');
+    } else if (providerType === 'Other') {
+      providersQuery = providersQuery
+        .filter('provider_role', 'not.ilike', '%dentist%')
+        .filter('provider_role', 'not.ilike', '%hygienist%')
+        .filter('provider_role', 'not.ilike', '%hygiene%')
+        .filter('provider_role', 'not.ilike', '%therapist%')
+        .filter('provider_role', 'not.ilike', '%therapy%');
+    }
+  }
+
   const { data: rawProviders, error: providersError } = await providersQuery;
   if (providersError) {
     console.error('[fetchAllProvidersNetProduction] Error fetching providers:', providersError);
     throw providersError;
   }
-
-  const roleFilteredProviders = filterProvidersByManagementType(
-    rawProviders,
-    providerType,
-  );
 
   // When Private Income payment plans are mapped in Setup Categories, net
   // production must stay on those plans — do not pad unclassified Dentally
@@ -473,10 +278,10 @@ export async function fetchAllProvidersNetProduction(
 
   const regionFiltered =
     !locationId && regionLocationIds && regionLocationIds.length > 0
-      ? roleFilteredProviders.filter(
+      ? (rawProviders ?? []).filter(
           (p) => p.location_id != null && regionLocationIds.includes(p.location_id),
         )
-      : roleFilteredProviders;
+      : rawProviders ?? [];
   // Dentally Practitioner Activity is per practitioner *record*. Foazia
   // Sikandar Appoline (67715) Sep-25 is £5,356.85; her other-site ID 83516
   // had £291 of TPI (appointment at Appoline, TPI practitioner 83516) that
@@ -526,13 +331,7 @@ export async function fetchAllProvidersNetProduction(
       for (const r of rows) {
         const name = (r.treating_dentist ?? '').trim();
         if (!name) continue;
-        // Ownership rule (2026-08-20): the upload location owns the row
-        // (patient home only for legacy unstamped rows). The old home-OR-
-        // upload match showed a row under BOTH sites — and since the
-        // All-locations view sums per-location runs, such rows counted
-        // TWICE in the org-wide membership total.
-        const ownerLocationId = r.upload_location_id ?? r.location_id;
-        if (locationId && locationId !== 'all' && ownerLocationId !== locationId) continue;
+        if (locationId && locationId !== 'all' && r.location_id !== locationId && r.upload_location_id !== locationId) continue;
         const monthDate = new Date(Number(r.upload_year), Number(r.upload_month) - 1, 1);
         if (monthDate < rangeStartMonth || monthDate > rangeEndMonth) continue;
         const monthKey = format(monthDate, 'MMM-yy');
@@ -685,162 +484,22 @@ export async function fetchAllProvidersNetProduction(
     }
   }
 
-  const allGroups = [...emailGroupMap.values()];
-  const fuzzyGroups = allGroups.filter((g) => g.externalIds.length > 0);
+  const groups = [...emailGroupMap.values()].filter((g) => g.externalIds.length > 0);
 
-  // Resolve each membership-statement dentist name to provider group(s).
-  // An explicit Settings-tab mapping (membership_provider_mappings) wins
-  // outright; otherwise fall back to the fuzzy name match, and only when
-  // it's unambiguous — computed once, over every group, rather than
-  // per-group (dentistNamesLikelyMatch's nickname/prefix logic can match
-  // more than one real provider record to the same statement name, e.g.
-  // separate "Steve Lomas" and "Steven Lomas" rows for the same person;
-  // matching independently per group would double-count that membership
-  // revenue onto both instead of resolving the clash here). Sums are MERGED
-  // per group, not overwritten — two statement names can resolve to the
-  // same person once explicit mappings exist.
-  const explicitProviderMappings =
-    membershipByRawName.length > 0
-      ? await fetchMembershipProviderMappings(organizationId)
-      : new Map<string, ResolvedProviderMapping>();
-  // The stored provider row id may be a different site's row for the same
-  // person than this scope's group rows — resolve via the mapped row's own
-  // email/name key (the same key emailGroupMap groups by). Rows come from
-  // the role-filtered, PRE-location list so a mapped person with no record
-  // at this location can still be resolved (and injected below).
-  const mappableRowById = new Map<
-    string,
-    { id: string; name: string; email: string | null; location_id: string | null; is_active: boolean | null }
-  >();
-  for (const p of roleFilteredProviders as Array<{
-    id: string; name: string; email: string | null; location_id: string | null; is_active: boolean | null;
-  }>) {
-    mappableRowById.set(String(p.id), p);
-  }
-
+  // Resolve each membership-statement dentist name to AT MOST one provider
+  // group, and only when the match is unambiguous — computed once, over
+  // every group, rather than per-group (dentistNamesLikelyMatch's nickname/
+  // prefix logic can match more than one real provider record to the same
+  // statement name, e.g. separate "Steve Lomas" and "Steven Lomas" rows for
+  // the same person; matching independently per group would double-count
+  // that membership revenue onto both instead of resolving the clash here).
   const membershipByRepresentativeId = new Map<string, Map<string, number>>();
-  const addMembershipMonths = (repId: string, byMonth: Map<string, number>) => {
-    const existing = membershipByRepresentativeId.get(repId);
-    if (!existing) {
-      membershipByRepresentativeId.set(repId, new Map(byMonth));
-      return;
-    }
-    for (const [m, amt] of byMonth) existing.set(m, (existing.get(m) ?? 0) + amt);
-  };
-
-  /** Penny-exact equal split across n targets: each month's amount is
-   *  divided in pence, the leading targets absorb the remainder pennies —
-   *  so the per-provider figures always sum back to the statement amount
-   *  (the whole point of the explicit mapping is £-for-£ reconciliation
-   *  with the membership module; never lose or invent a penny here). */
-  const splitMonthsEqually = (byMonth: Map<string, number>, n: number): Array<Map<string, number>> => {
-    const parts: Array<Map<string, number>> = Array.from({ length: n }, () => new Map());
-    for (const [m, amt] of byMonth) {
-      const pence = Math.round((Number(amt) || 0) * 100);
-      const base = Math.floor(pence / n);
-      let leftover = pence - base * n;
-      for (let i = 0; i < n; i++) {
-        const share = base + (leftover > 0 ? 1 : 0);
-        if (leftover > 0) leftover -= 1;
-        if (share !== 0) parts[i].set(m, share / 100);
-      }
-    }
-    return parts;
-  };
-
-  // A statement name that resolves to NOBODY (no mapping row, no
-  // unambiguous fuzzy match, or a mapping whose people can't be resolved)
-  // still shows as its own labeled row carrying its statement £ — client
-  // rule 2026-08-20 "make sure both should be match": every pound of
-  // membership revenue must be visible in provider production, so the
-  // totals always reconcile with the membership module and an unmapped
-  // name is VISIBLE (a row named "Hygiene Only") instead of silently
-  // missing. Mapping the name in Membership → Settings moves the £ onto
-  // the real person and removes this row.
-  const statementOnlyGroup = (name: string) => {
-    const key = `stmt:${name.toLowerCase()}`;
-    let g = emailGroupMap.get(key);
-    if (!g) {
-      g = {
-        displayName: name,
-        representativeId: key,
-        allIds: [],
-        externalIds: [],
-        locationId: null,
-        isActive: true,
-      };
-      emailGroupMap.set(key, g);
-    }
-    return g;
-  };
-
   for (const entry of membershipByRawName) {
-    const explicit = explicitProviderMappings.get(entry.name);
-    if (explicit && explicit.providerIds.length > 0) {
-      // Explicit mapping wins outright — no fuzzy fallback even when
-      // nothing resolves in this scope (role filtered out / deleted),
-      // rather than let the name match hand the money to someone else.
-      // Dedupe by representative: two duplicate rows of the same person are
-      // ONE target, not an even-split pair.
-      const targets: typeof allGroups = [];
-      const seenReps = new Set<string>();
-      for (const pid of explicit.providerIds) {
-        const row = mappableRowById.get(pid);
-        if (!row) continue;
-        const key = (row.email ?? row.name ?? '').toLowerCase();
-        let g = emailGroupMap.get(key);
-        if (!g) {
-          // The mapped person has NO provider row at this location — the
-          // statement rows are stamped here, so inject a statement-only
-          // group for them (no Dentally externalIds: their TPI production
-          // stays under their own site's run; only the statement £ shows
-          // here). Registered in emailGroupMap so several statement names
-          // mapping to the same absent person still merge into one row.
-          g = {
-            displayName: row.name,
-            representativeId: row.id,
-            allIds: [row.id],
-            externalIds: [],
-            locationId: row.location_id ?? null,
-            isActive: row.is_active !== false,
-          };
-          emailGroupMap.set(key, g);
-        }
-        if (!seenReps.has(g.representativeId)) {
-          seenReps.add(g.representativeId);
-          targets.push(g);
-        }
-      }
-      if (targets.length === 1) {
-        addMembershipMonths(targets[0].representativeId, entry.byMonth);
-      } else if (targets.length > 1) {
-        const parts = splitMonthsEqually(entry.byMonth, targets.length);
-        targets.forEach((g, i) => addMembershipMonths(g.representativeId, parts[i]));
-      } else {
-        // Mapped, but nobody resolvable (all mapped rows role-filtered out
-        // or deleted) — keep the £ visible under the statement name.
-        addMembershipMonths(statementOnlyGroup(entry.name).representativeId, entry.byMonth);
-      }
-      continue;
-    }
-    const matchingGroups = fuzzyGroups.filter((g) => dentistNamesLikelyMatch(entry.name, g.displayName));
+    const matchingGroups = groups.filter((g) => dentistNamesLikelyMatch(entry.name, g.displayName));
     if (matchingGroups.length === 1) {
-      addMembershipMonths(matchingGroups[0].representativeId, entry.byMonth);
-    } else {
-      // No match, or ambiguous — a labeled statement row, never a dropped £.
-      addMembershipMonths(statementOnlyGroup(entry.name).representativeId, entry.byMonth);
+      membershipByRepresentativeId.set(matchingGroups[0].representativeId, entry.byMonth);
     }
   }
-
-  // A group normally needs Dentally external ids to be worth an RPC pass,
-  // but an explicitly-mapped provider with NO Dentally record still gets a
-  // row — their statement membership revenue must show under them or the
-  // provider total can never reconcile to the membership total. Read from
-  // emailGroupMap (not the pre-loop allGroups snapshot) so groups injected
-  // for mapped people with no row at this location are included.
-  const groups = [...emailGroupMap.values()].filter(
-    (g) => g.externalIds.length > 0 || membershipByRepresentativeId.has(g.representativeId),
-  );
 
   // ── Fast path: ONE aggregated RPC for every practitioner ──────────────────
   // get_all_providers_net_production_monthly (migration 20260804000002)
@@ -918,10 +577,6 @@ export async function fetchAllProvidersNetProduction(
         if (moduleAmount != null && moduleAmount > 0) {
           cell.membership = round2(moduleAmount);
           cell.amount = round2(cell.private + cell.membership + cell.nhs);
-          // Statement membership never passes through tpi_price, so it isn't
-          // in rawTotal yet — fold it in or the Production Data default
-          // (which displays rawTotal) silently drops real revenue.
-          cell.rawTotal = round2(cell.rawTotal + cell.membership);
           continue;
         }
         if (privatePlansConfigured) {
@@ -1053,7 +708,7 @@ export function useAllProvidersNetProduction(
 
   return useQuery({
     queryKey: [
-      'all-providers-net-production-v24',
+      'all-providers-net-production-v22',
       organizationId,
       providerType,
       startDate ? format(startDate, 'yyyy-MM-dd') : null,

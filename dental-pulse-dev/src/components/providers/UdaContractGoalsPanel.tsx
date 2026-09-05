@@ -25,14 +25,13 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   providerPerformsNhs,
   providerPerformsMos,
-  providerPerformsUoa,
 } from "@/types/provider";
 import {
   useAllProvidersCounts,
   type ProviderMonthlyCount,
 } from "@/hooks/useAllProvidersCounts";
 
-export type UdaContractType = "NHS" | "MOS" | "UOA";
+export type UdaContractType = "NHS" | "MOS";
 
 interface ProviderLite {
   id: string;
@@ -65,10 +64,7 @@ function fyStartYearForDate(d: Date, financialMonthStart: number): number {
   return month < financialMonthStart ? year - 1 : year;
 }
 
-function fyRange(
-  fyStartYear: number,
-  financialMonthStart: number,
-): { start: Date; end: Date } {
+function fyRange(fyStartYear: number, financialMonthStart: number): { start: Date; end: Date } {
   const fms = financialMonthStart || 4;
   return {
     start: new Date(fyStartYear, fms - 1, 1),
@@ -111,12 +107,7 @@ export function UdaContractGoalsPanel({
   const contractLabel = `${contractType} Contract Value`;
   const obligationLabel =
     contractType === "NHS" ? "Total UDA Obligation" : "Total UDA Obligation";
-  const rateLabel =
-    contractType === "NHS"
-      ? "UDA Rate"
-      : contractType === "UOA"
-        ? "UDA Rate"
-        : "UDA Rate";
+  const rateLabel = contractType === "NHS" ? "UDA Rate" : "Case Per Rate";
   const fms = financialMonthStart || 4;
 
   // selectedFY = FY *start* year (storage). UI shows "YYYY-YY" (e.g. 2026-27).
@@ -168,8 +159,7 @@ export function UdaContractGoalsPanel({
     const { start, end } = fyRange(selectedFY, financialMonthStart);
     const clampToFy = (d: Date | null, fallback: Date) => {
       const base = d ?? fallback;
-      if (base < start)
-        return new Date(start.getFullYear(), start.getMonth(), 1);
+      if (base < start) return new Date(start.getFullYear(), start.getMonth(), 1);
       if (base > end) return new Date(end.getFullYear(), end.getMonth(), 1);
       return new Date(base.getFullYear(), base.getMonth(), 1);
     };
@@ -263,18 +253,11 @@ export function UdaContractGoalsPanel({
   }, [organizationId, planningMonth, contractType]);
 
   // Which appointment_summary column backs this contract's actuals — NHS pays
-  // per UDA (uda_count); MOS is paid per case (mos_count); UOA is paid per
-  // unit of orthodontic activity (uoa_count) — each its own column.
-  const actualsField =
-    contractType === "MOS"
-      ? "mos_count"
-      : contractType === "UOA"
-        ? "uoa_count"
-        : "uda_count";
+  // per UDA (uda_count); MOS is paid per case (mos_count), its own column.
+  const actualsField = contractType === "MOS" ? "mos_count" : "uda_count";
 
   const fyBounds = useMemo(() => {
-    if (!financialMonthStart)
-      return { start: null as Date | null, end: null as Date | null };
+    if (!financialMonthStart) return { start: null as Date | null, end: null as Date | null };
     return fyRange(selectedFY, financialMonthStart);
   }, [selectedFY, financialMonthStart]);
 
@@ -430,13 +413,11 @@ export function UdaContractGoalsPanel({
     [filteredProviders],
   );
 
-  /** Provider opted into this contract type (NHS / MOS / UOA treatment flag). */
+  /** Provider opted into this contract type (NHS / MOS treatment flag). */
   const performsContract = (p: ProviderLite) =>
     contractType === "MOS"
       ? providerPerformsMos(p.additional_options)
-      : contractType === "UOA"
-        ? providerPerformsUoa(p.additional_options)
-        : providerPerformsNhs(p.additional_options);
+      : providerPerformsNhs(p.additional_options);
 
   // Merge provider rows from the parent list with anyone who only appears in
   // Production Data counts (e.g. inactive / missing from filteredProviders).
@@ -630,42 +611,36 @@ export function UdaContractGoalsPanel({
                 <tbody>
                   {yearlyListProviders.length === 0 ? (
                     <tr>
-                      <td
-                        colSpan={3}
-                        className="px-4 py-8 text-center text-muted-foreground text-sm"
-                      >
-                        No associates with {contractType} actuals or “Does
-                        Perform {contractType} Treatments?” enabled.
+                      <td colSpan={3} className="px-4 py-8 text-center text-muted-foreground text-sm">
+                        No associates with {contractType} actuals or “Does Perform {contractType} Treatments?” enabled.
                       </td>
                     </tr>
                   ) : (
                     yearlyListProviders.map((provider, idx) => (
-                      <tr
-                        key={provider.id}
-                        className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}
-                      >
-                        <td className="px-4 py-3 font-medium">
-                          {provider.name}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          {yearlyActuals[provider.id] ?? 0}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <Input
-                            type="text"
-                            inputMode="numeric"
-                            value={yearlyTargets[provider.id] ?? "0"}
-                            onChange={(e) => {
-                              const val = e.target.value.replace(/[^0-9]/g, "");
-                              setYearlyTargets((prev) => ({
-                                ...prev,
-                                [provider.id]: val,
-                              }));
-                            }}
-                            className="w-24 h-8 text-right ml-auto"
-                          />
-                        </td>
-                      </tr>
+                    <tr
+                      key={provider.id}
+                      className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}
+                    >
+                      <td className="px-4 py-3 font-medium">{provider.name}</td>
+                      <td className="px-4 py-3 text-right">
+                        {yearlyActuals[provider.id] ?? 0}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <Input
+                          type="text"
+                          inputMode="numeric"
+                          value={yearlyTargets[provider.id] ?? "0"}
+                          onChange={(e) => {
+                            const val = e.target.value.replace(/[^0-9]/g, "");
+                            setYearlyTargets((prev) => ({
+                              ...prev,
+                              [provider.id]: val,
+                            }));
+                          }}
+                          className="w-24 h-8 text-right ml-auto"
+                        />
+                      </td>
+                    </tr>
                     ))
                   )}
                   <tr className="border-t bg-white font-semibold">
@@ -776,40 +751,36 @@ export function UdaContractGoalsPanel({
               <tbody>
                 {monthlyListProviders.length === 0 ? (
                   <tr>
-                    <td
-                      colSpan={3}
-                      className="px-4 py-8 text-center text-muted-foreground text-sm"
-                    >
-                      No associates with {contractType} actuals or “Does Perform{" "}
-                      {contractType} Treatments?” enabled.
+                    <td colSpan={3} className="px-4 py-8 text-center text-muted-foreground text-sm">
+                      No associates with {contractType} actuals or “Does Perform {contractType} Treatments?” enabled.
                     </td>
                   </tr>
                 ) : (
                   monthlyListProviders.map((provider, idx) => (
-                    <tr
-                      key={provider.id}
-                      className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}
-                    >
-                      <td className="px-4 py-3 font-medium">{provider.name}</td>
-                      <td className="px-4 py-3 text-right">
-                        {monthlyActuals[provider.id] ?? 0}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <Input
-                          type="text"
-                          inputMode="numeric"
-                          value={monthlyTargets[provider.id] ?? "0"}
-                          onChange={(e) => {
-                            const val = e.target.value.replace(/[^0-9]/g, "");
-                            setMonthlyTargets((prev) => ({
-                              ...prev,
-                              [provider.id]: val,
-                            }));
-                          }}
-                          className="w-24 h-8 text-right ml-auto"
-                        />
-                      </td>
-                    </tr>
+                  <tr
+                    key={provider.id}
+                    className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}
+                  >
+                    <td className="px-4 py-3 font-medium">{provider.name}</td>
+                    <td className="px-4 py-3 text-right">
+                      {monthlyActuals[provider.id] ?? 0}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <Input
+                        type="text"
+                        inputMode="numeric"
+                        value={monthlyTargets[provider.id] ?? "0"}
+                        onChange={(e) => {
+                          const val = e.target.value.replace(/[^0-9]/g, "");
+                          setMonthlyTargets((prev) => ({
+                            ...prev,
+                            [provider.id]: val,
+                          }));
+                        }}
+                        className="w-24 h-8 text-right ml-auto"
+                      />
+                    </td>
+                  </tr>
                   ))
                 )}
                 <tr className="border-t bg-white font-semibold">

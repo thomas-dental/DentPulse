@@ -58,7 +58,6 @@ import {
   XCircle,
   Link2,
   Info,
-  List,
 } from "lucide-react";
 import {
   Tooltip,
@@ -115,12 +114,10 @@ function computeAge(dob: string | null | undefined): number | null {
 }
 
 function formatCurrency(amount: number): string {
-  // Always pence-exact (client rule 2026-08-19: never round £ off in the
-  // membership module — figures must reconcile against the statement).
   return new Intl.NumberFormat("en-GB", {
     style: "currency",
     currency: "GBP",
-    minimumFractionDigits: 2,
+    minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   }).format(amount);
 }
@@ -423,8 +420,8 @@ export default function MembershipPerformance() {
     membersError,
     refetchMembers,
     displayMonth,
-    effectivePairs,
     isShowingFallbackMonth,
+    isShowingFallbackLocation,
     selectedMonth,
     selectedYear,
     previewRows,
@@ -448,18 +445,12 @@ export default function MembershipPerformance() {
     isImporting,
     clearData,
     isClearing,
-    uploadSlices,
-    isLoadingUploadSlices,
-    deleteUploadSlice,
-    isDeletingUploadSlice,
     availablePlans,
     feeCategoryPlanMap,
     setFeeCategoryPlan,
     unmappedFeeCategories,
     rowPlanMatches,
     membersByLocation,
-    unmatchedMembers,
-    membersByLocationForModal,
     isLocationSplitFetching,
     isImportSummaryOpen,
     openImportSummary,
@@ -540,12 +531,6 @@ export default function MembershipPerformance() {
     closeUploadChooser();
     openSourcePicker(source);
   };
-  // Manage-uploads dialog: targeted removal of one practitioner's statement
-  // or a whole month, without clearing everything else.
-  const [manageUploadsOpen, setManageUploadsOpen] = useState(false);
-  // Two-click confirm: first click arms the row's button, second deletes.
-  const [armedSliceKey, setArmedSliceKey] = useState<string | null>(null);
-
   // Upload button: direct picker when the source is known; otherwise (org has
   // no data and never chose) fall back to the chooser.
   const handleUploadClick = () => {
@@ -620,25 +605,8 @@ export default function MembershipPerformance() {
           : undefined) ??
         dbPlanByName.get(ps.fee_category.toLowerCase());
 
-      // Practice Plan statement categories carry no per-row mapped_plan_id
-      // and their labels ("Low A"…) never name-match a Dentally plan — their
-      // Dentally plan(s) live in the Plan Mapping dialog
-      // (membership_plan_mappings, same source planPaymentPlanIdsByLabel
-      // uses below). Without this, every PP category fell through to £0
-      // cost and the Monthly Costs tile stayed empty however the hook
-      // costed the plans.
-      const mappedPlans =
-        !matched && ps.is_practice_plan
-          ? (planMappings.find((m) => m.plan_label === ps.fee_category)?.payment_plan_ids ?? [])
-              .map((id) => dbPlanById.get(id))
-              .filter((p): p is PlanOverview => !!p)
-          : [];
-
-      // Penny-precision, never whole-£ (client rule 2026-08-19: no rounding
-      // off £ anywhere in the membership module).
-      const revenuePerMonth = Math.round(ps.total_net_due * 100) / 100;
-      const costsPerMonth =
-        matched?.costsPerMonth ?? mappedPlans.reduce((s, p) => s + p.costsPerMonth, 0);
+      const revenuePerMonth = Math.round(ps.total_net_due);
+      const costsPerMonth = matched?.costsPerMonth ?? 0;
       const netProfit = revenuePerMonth - costsPerMonth;
       const netProfitPct =
         revenuePerMonth > 0 ? (netProfit / revenuePerMonth) * 100 : 0;
@@ -658,14 +626,14 @@ export default function MembershipPerformance() {
         avgTenureMonths: matched?.avgTenureMonths ?? 0,
         revenuePerMonth,
         costsPerMonth,
-        netProfit: Math.round(netProfit * 100) / 100,
+        netProfit: Math.round(netProfit),
         netProfitPct: Math.round(netProfitPct),
         utilisation,
         monthlyFee: matched?.monthlyFee ?? 0,
         status,
       };
     });
-  }, [planOverviews, uploadPlanSummary, thresholds, planMappings]);
+  }, [planOverviews, uploadPlanSummary, thresholds]);
 
   // Additional Revenue — the extra treatment revenue each plan's members
   // generate beyond their subscription, sourced from Dentally (same figure
@@ -709,7 +677,7 @@ export default function MembershipPerformance() {
       };
     }
     const totalMembers = uploadTotalMembers;
-    const monthlyRevenue = Math.round(uploadTotalRevenue * 100) / 100;
+    const monthlyRevenue = Math.round(uploadTotalRevenue);
     const monthlyCosts = mergedPlanOverviews.reduce(
       (s, p) => s + p.costsPerMonth,
       0,
@@ -720,9 +688,9 @@ export default function MembershipPerformance() {
     return {
       ...summary,
       totalMembers,
-      monthlyRevenue: Math.round(monthlyRevenue * 100) / 100,
-      monthlyCosts: Math.round(monthlyCosts * 100) / 100,
-      netProfit: Math.round(netProfit * 100) / 100,
+      monthlyRevenue: Math.round(monthlyRevenue),
+      monthlyCosts: Math.round(monthlyCosts),
+      netProfit: Math.round(netProfit),
       avgMarginPct: Math.round(avgMarginPct),
     };
   }, [
@@ -797,8 +765,8 @@ export default function MembershipPerformance() {
 
       result.push({
         plan: planName,
-        treatmentCost: -(Math.round((agg?.treatmentCost ?? 0) * 100) / 100), // negative for left side (cost to plan)
-        planRevenue: Math.round(revenue * 100) / 100, // positive for right side
+        treatmentCost: -Math.round(agg?.treatmentCost ?? 0), // negative for left side (cost to plan)
+        planRevenue: Math.round(revenue), // positive for right side
         chairTimeHrs: Math.round((agg?.chairTimeHrs ?? 0) * 10) / 10,
         treatmentCount: agg?.treatmentCount ?? 0,
       });
@@ -941,7 +909,7 @@ export default function MembershipPerformance() {
         costPerUnit: Math.round(costPerUnit * 100) / 100,
         revenuePerUnit: Math.round(revenuePerUnit * 100) / 100,
         marginPerUnit: Math.round(marginPerUnit * 100) / 100,
-        totalMargin: Math.round(item.marginSum * 100) / 100,
+        totalMargin: Math.round(item.marginSum),
         marginPct: Math.round(marginPct),
         marginImpact,
         // Individual cost components (per unit)
@@ -982,47 +950,20 @@ export default function MembershipPerformance() {
     safePage * consumptionPageSize,
   );
 
-  const costedCategoryCount = mergedPlanOverviews.filter((p) => p.costsPerMonth > 0).length;
-  // Live worked-sum rows behind each tile's ⓘ — real numbers for the shown
-  // period, in the same rows-not-prose shape the insights tabs' Stat tiles
-  // use, so every headline figure on this page is checkable by hand.
-  const summaryCards: Array<{
-    label: string;
-    value: string;
-    trend: number;
-    trendLabel: string;
-    color: string;
-    calc?: Array<{ label: string; value: string; isTotal?: boolean }>;
-  }> = [
+  const summaryCards = [
     {
       label: "TOTAL MEMBERS",
       value: mergedSummary.totalMembers.toLocaleString(),
       trend: mergedSummary.membersTrend,
       trendLabel: "vs last year",
       color: "text-foreground",
-      calc: [
-        { label: "Statement plan categories", value: uploadPlanSummary.length.toLocaleString() },
-        { label: "= Members across the uploaded statement(s)", value: mergedSummary.totalMembers.toLocaleString(), isTotal: true },
-      ],
     },
     {
-      // Range-aware: revenue now sums each member's collected £ across every
-      // month in the selected range (range_net_due), so calling a multi-month
-      // figure "monthly" would misstate it.
-      label: effectivePairs.length > 1 ? `REVENUE · ${effectivePairs.length} MONTHS` : "MONTHLY REVENUE",
+      label: "MONTHLY REVENUE",
       value: formatCurrency(mergedSummary.monthlyRevenue),
       trend: mergedSummary.revenueTrend,
       trendLabel: "vs last year",
       color: "text-foreground",
-      calc: [
-        {
-          label: effectivePairs.length > 1
-            ? `Collected across ${effectivePairs.length.toLocaleString()} months in the selected range`
-            : `Net due, summed across ${uploadPlanSummary.length.toLocaleString()} categories`,
-          value: formatCurrency(mergedSummary.monthlyRevenue),
-          isTotal: true,
-        },
-      ],
     },
     {
       label: "MONTHLY COSTS",
@@ -1030,16 +971,6 @@ export default function MembershipPerformance() {
       trend: mergedSummary.costsTrend,
       trendLabel: hasCostData ? "vs last year" : "no accounting platform connected",
       color: "text-foreground",
-      calc: hasCostData
-        ? [
-            { label: "Categories with a mapped Dentally plan and cost", value: costedCategoryCount.toLocaleString() },
-            {
-              label: "= Cost of their delivered treatments this period (membership Treatments settings)",
-              value: formatCurrency(mergedSummary.monthlyCosts),
-              isTotal: true,
-            },
-          ]
-        : undefined,
     },
     {
       label: "NET PROFIT",
@@ -1047,14 +978,6 @@ export default function MembershipPerformance() {
       trend: 0,
       trendLabel: hasCostData ? `${mergedSummary.avgMarginPct}% avg margin` : "costs unavailable — revenue only",
       color: mergedSummary.netProfit >= 0 ? "text-emerald-600" : "text-red-600",
-      calc: hasCostData
-        ? [
-            { label: "Monthly revenue", value: formatCurrency(mergedSummary.monthlyRevenue) },
-            { label: "− Monthly costs", value: formatCurrency(mergedSummary.monthlyCosts) },
-            { label: "= Net profit", value: formatCurrency(mergedSummary.netProfit), isTotal: true },
-            { label: "Margin", value: `${mergedSummary.avgMarginPct}%` },
-          ]
-        : undefined,
     },
   ];
 
@@ -1064,9 +987,9 @@ export default function MembershipPerformance() {
     feeCategory: (p as any).feeCategory ?? p.planName,
     mappedPlanName: (p as any).mappedPlanName ?? null,
     members: p.members,
-    monthlyRevenue: Math.round((p.revenuePerMonth || 0) * 100) / 100,
-    monthlyCosts: Math.round((p.costsPerMonth || 0) * 100) / 100,
-    netProfit: Math.round((p.netProfit || 0) * 100) / 100,
+    monthlyRevenue: Math.round(p.revenuePerMonth || 0),
+    monthlyCosts: Math.round(p.costsPerMonth || 0),
+    netProfit: Math.round(p.netProfit || 0),
     netProfitPercent: p.netProfitPct,
     utilisationPercent: p.utilisation,
     avgTenureMonths: p.avgTenureMonths,
@@ -1181,33 +1104,8 @@ export default function MembershipPerformance() {
               className="bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800"
             >
               <CardContent className="pt-4 pb-3">
-                <span className="text-xs uppercase tracking-wider font-semibold text-muted-foreground inline-flex items-center gap-1">
+                <span className="text-xs uppercase tracking-wider font-semibold text-muted-foreground">
                   {card.label}
-                  {card.calc && (
-                    <TooltipProvider delayDuration={200}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Info className="w-3 h-3 shrink-0 cursor-default text-muted-foreground" />
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="w-auto min-w-56">
-                          <div className="flex flex-col gap-1">
-                            {card.calc.map((row, i) => (
-                              <div
-                                key={i}
-                                className={cn(
-                                  "flex items-baseline justify-between gap-4",
-                                  row.isTotal ? "mt-1 pt-1 border-t border-border font-semibold" : "text-muted-foreground",
-                                )}
-                              >
-                                <span className="max-w-[260px]">{row.label}</span>
-                                <span className="whitespace-nowrap tabular-nums text-popover-foreground">{row.value}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  )}
                 </span>
                 <div className={cn("text-2xl font-bold mt-1", card.color)}>
                   {card.value}
@@ -1274,18 +1172,6 @@ export default function MembershipPerformance() {
                 >
                   <Users className="w-4 h-4" />
                   View by Location
-                </Button>
-              )}
-              {uploadSlices.length > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-2"
-                  onClick={() => setManageUploadsOpen(true)}
-                  title="See every uploaded month and statement, and remove a specific practitioner's data or a whole month"
-                >
-                  <List className="w-4 h-4" />
-                  Manage
                 </Button>
               )}
               {uploadedMembers.length > 0 && (
@@ -1378,19 +1264,35 @@ export default function MembershipPerformance() {
               </div>
             ) : uploadPlanSummary.length > 0 ? (
               <div className="space-y-4">
-                {isShowingFallbackMonth && (
-                  // The header period doesn't match when the data was
-                  // uploaded — the page fell back so the numbers stay
-                  // visible; say exactly what is on screen. (There is
-                  // deliberately NO location fallback — a location never
-                  // shows another location's data.)
+                {(isShowingFallbackMonth || isShowingFallbackLocation) && (
+                  // The header filters don't match where/when the data was
+                  // uploaded — the page fell back so the numbers stay visible;
+                  // say exactly what is on screen.
                   <div className="rounded-md border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/40 px-4 py-2.5 text-sm text-blue-800 dark:text-blue-300">
                     Showing{" "}
                     <strong>
                       {MONTH_NAMES[displayMonth.month - 1]} {displayMonth.year}
                     </strong>{" "}
-                    membership data — the latest uploaded month (nothing is
-                    uploaded for the period selected in the top bar).
+                    membership data
+                    {isShowingFallbackMonth && (
+                      <>
+                        {" "}
+                        — the latest uploaded month (nothing is uploaded for the
+                        period selected in the top bar)
+                      </>
+                    )}
+                    {isShowingFallbackLocation && (
+                      <>
+                        {isShowingFallbackMonth ? "; it is" : " —"} saved under{" "}
+                        <strong>
+                          {membersByLocation
+                            .map((g) => g.locationName)
+                            .join(", ") || "another location"}
+                        </strong>
+                        , not the location selected in the top bar
+                      </>
+                    )}
+                    .
                   </div>
                 )}
                 {/* Plan-wise breakdown cards */}
@@ -2699,113 +2601,6 @@ export default function MembershipPerformance() {
         </DialogContent>
       </Dialog>
 
-      {/* Manage uploaded data — every stored month × statement dentist, with
-          targeted removal of one practitioner's data or a whole month.
-          Deletion is a two-click confirm (arm, then confirm) and soft-deletes
-          the member rows plus the matching statement summaries/events. */}
-      <Dialog
-        open={manageUploadsOpen}
-        onOpenChange={(open) => {
-          setManageUploadsOpen(open);
-          if (!open) setArmedSliceKey(null);
-        }}
-      >
-        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle>Manage uploaded membership data</DialogTitle>
-            <p className="text-sm text-muted-foreground">
-              Remove one practitioner's uploaded statement, or a whole month. Removal only affects this
-              app's uploaded membership data — nothing in Dentally or {providerLabel} itself.
-            </p>
-          </DialogHeader>
-          <div className="overflow-y-auto flex-1">
-            {isLoadingUploadSlices ? (
-              <div className="flex items-center justify-center py-10 gap-2 text-sm text-muted-foreground">
-                <Loader2 className="w-4 h-4 animate-spin" /> Loading…
-              </div>
-            ) : uploadSlices.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-8">No uploaded data.</p>
-            ) : (
-              (() => {
-                const monthsInOrder: Array<{ month: number; year: number }> = [];
-                const seen = new Set<string>();
-                for (const s of uploadSlices) {
-                  const k = `${s.year}-${s.month}`;
-                  if (!seen.has(k)) { seen.add(k); monthsInOrder.push({ month: s.month, year: s.year }); }
-                }
-                const armDelete = (key: string, run: () => void) => {
-                  if (armedSliceKey === key) { setArmedSliceKey(null); run(); }
-                  else setArmedSliceKey(key);
-                };
-                return monthsInOrder.map(({ month, year }) => {
-                  const slices = uploadSlices.filter((s) => s.month === month && s.year === year);
-                  const monthKey = `month:${year}-${month}`;
-                  const monthMembers = slices.reduce((a, s) => a + s.memberCount, 0);
-                  const monthValue = slices.reduce((a, s) => a + s.totalNetDue, 0);
-                  return (
-                    <div key={monthKey} className="mb-4 rounded-lg border">
-                      <div className="flex items-center justify-between px-3 py-2 bg-muted/40 rounded-t-lg">
-                        <span className="text-sm font-semibold">
-                          {MONTH_NAMES[month - 1]} {year}
-                          <span className="ml-2 font-normal text-muted-foreground">
-                            {monthMembers} members · £{monthValue.toFixed(2)}
-                          </span>
-                        </span>
-                        <Button
-                          variant={armedSliceKey === monthKey ? "destructive" : "outline"}
-                          size="sm"
-                          className="gap-1"
-                          disabled={isDeletingUploadSlice}
-                          onClick={() => armDelete(monthKey, () => deleteUploadSlice({ month, year, treatingDentist: null }))}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          {armedSliceKey === monthKey ? "Confirm — remove whole month" : "Remove month"}
-                        </Button>
-                      </div>
-                      <div className="divide-y">
-                        {slices.map((s) => {
-                          const sliceKey = `slice:${year}-${month}|${s.treatingDentist ?? ""}`;
-                          return (
-                            <div key={sliceKey} className="flex items-center justify-between px-3 py-2">
-                              <span className="text-sm">
-                                {s.treatingDentist ?? <em className="text-muted-foreground">No dentist recorded</em>}
-                                <span className="ml-2 text-muted-foreground">
-                                  {s.memberCount} members · £{s.totalNetDue.toFixed(2)}
-                                </span>
-                              </span>
-                              <Button
-                                variant={armedSliceKey === sliceKey ? "destructive" : "ghost"}
-                                size="sm"
-                                className="gap-1"
-                                disabled={isDeletingUploadSlice || s.treatingDentist == null}
-                                title={
-                                  s.treatingDentist == null
-                                    ? "Rows with no dentist recorded can only be removed with the whole month"
-                                    : `Remove ${s.treatingDentist}'s data for ${MONTH_NAMES[month - 1]} ${year}`
-                                }
-                                onClick={() =>
-                                  s.treatingDentist != null &&
-                                  armDelete(sliceKey, () =>
-                                    deleteUploadSlice({ month, year, treatingDentist: s.treatingDentist }),
-                                  )
-                                }
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                {armedSliceKey === sliceKey ? "Confirm" : "Remove"}
-                              </Button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                });
-              })()
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
-
       {/* Location-split modal — auto-opens after Confirm Import and
           re-openable via the "View by Location" button on the card header.
           Shows one tab per location found (named from practice_locations)
@@ -2824,10 +2619,9 @@ export default function MembershipPerformance() {
               {MONTH_NAMES[displayMonth.month - 1]} {displayMonth.year}
             </DialogTitle>
             <p className="text-sm text-muted-foreground">
-              Members are grouped by the location their file was uploaded for. Members whose statement row
-              couldn't be matched to any Dentally patient are listed under{" "}
-              <strong>Not found in Dentally</strong> — they still count and import, but pages that join to
-              Dentally activity (Margin, Capacity) can't include them until they match.
+              Members are split by each patient's home location from the
+              database. Rows whose patient could not be matched appear under{" "}
+              <strong>Unassigned</strong>.
             </p>
           </DialogHeader>
           {membersByLocation.length === 0 && isLocationSplitFetching ? (
@@ -2835,27 +2629,17 @@ export default function MembershipPerformance() {
               <Loader2 className="w-4 h-4 animate-spin" />
               Loading imported members…
             </div>
-          ) : membersByLocationForModal.length === 0 && unmatchedMembers.length === 0 ? (
+          ) : membersByLocation.length === 0 ? (
             <div className="text-center py-10 text-sm text-muted-foreground">
-              {membersByLocation.length > 0
-                ? // Data exists this month, just not under the selected
-                  // location — name where it lives, never list its rows.
-                  `No members uploaded under the location selected in the top bar for this month — data is saved under ${membersByLocation
-                    .map((g) => g.locationName)
-                    .join(", ")}. Switch the Location filter to view it.`
-                : "No imported members for this month."}
+              No imported members for this month.
             </div>
           ) : (
             <Tabs
-              defaultValue={
-                membersByLocationForModal.length > 0
-                  ? membersByLocationForModal[0].locationId ?? "__unassigned__"
-                  : "__unmatched__"
-              }
+              defaultValue={membersByLocation[0].locationId ?? "__unassigned__"}
               className="flex-1 overflow-hidden flex flex-col"
             >
               <TabsList className="flex-wrap h-auto justify-start">
-                {membersByLocationForModal.map((g) => (
+                {membersByLocation.map((g) => (
                   <TabsTrigger
                     key={g.locationId ?? "__unassigned__"}
                     value={g.locationId ?? "__unassigned__"}
@@ -2867,16 +2651,8 @@ export default function MembershipPerformance() {
                     </Badge>
                   </TabsTrigger>
                 ))}
-                {unmatchedMembers.length > 0 && (
-                  <TabsTrigger value="__unmatched__" className="gap-2">
-                    Not found in Dentally
-                    <Badge variant="destructive" className="text-xs">
-                      {unmatchedMembers.length}
-                    </Badge>
-                  </TabsTrigger>
-                )}
               </TabsList>
-              {membersByLocationForModal.map((g) => (
+              {membersByLocation.map((g) => (
                 <TabsContent
                   key={g.locationId ?? "__unassigned__"}
                   value={g.locationId ?? "__unassigned__"}
@@ -2885,18 +2661,6 @@ export default function MembershipPerformance() {
                   <LocationMembersPanel group={g} />
                 </TabsContent>
               ))}
-              {unmatchedMembers.length > 0 && (
-                <TabsContent value="__unmatched__" className="flex-1 overflow-auto mt-3">
-                  <LocationMembersPanel
-                    group={{
-                      locationId: "__unmatched__",
-                      locationName: "Not found in Dentally",
-                      members: unmatchedMembers,
-                      totalNetDue: unmatchedMembers.reduce((s, m) => s + m.net_due, 0),
-                    }}
-                  />
-                </TabsContent>
-              )}
             </Tabs>
           )}
           <DialogFooter>
@@ -3062,18 +2826,11 @@ function LocationMembersPanel({ group }: { group: MembershipLocationGroup }) {
               </TableRow>
             ) : (
               pagedMembers.map((m) => {
-                // Practice Plan statements print the member's FULL given
-                // names (stored in `initial`, e.g. "Premyslaw") — show them
-                // as printed (client 2026-08-20). A genuine single-letter
-                // initial (Denplan sheets) keeps the "P." style.
-                const given = (m.initial ?? "").trim();
-                const givenLabel = given
-                  ? given.length === 1
-                    ? `${given.toUpperCase()}.`
-                    : given
+                const initialLetter = m.initial
+                  ? `${m.initial.charAt(0).toUpperCase()}.`
                   : "";
                 const memberLabel =
-                  [m.title, givenLabel, m.surname]
+                  [m.title, initialLetter, m.surname]
                     .filter(Boolean)
                     .join(" ") || m.surname;
                 let age: number | null = null;

@@ -65,6 +65,7 @@ import {
   type CustomRange,
 } from "@/components/ui/chart-date-filter";
 import { Badge } from "@/components/ui/badge";
+import { useOrganizationSettings } from "@/hooks/useOrganizationSettings";
 
 /** Map header FilterContext range ids to ChartDateFilter labels. */
 function headerPeriodLabel(rangeId: string): string {
@@ -242,17 +243,19 @@ export function ProfitBenchmarkPanel({
   onProfitSummaryChange?: (summary: ProfitBenchmarkSummary | null) => void;
 } = {}) {
   const { organizationId } = useOrganization();
+  const { showDecimals } = useOrganizationSettings();
   const formatCurrency = (value: number): string => {
     const n = Number(value) || 0;
     const abs = Math.abs(n);
     return abs.toLocaleString("en-GB", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
+      minimumFractionDigits: showDecimals ? 2 : 0,
+      maximumFractionDigits: showDecimals ? 2 : 0,
     });
   };
-  const formatPercent = (value: number) => formatPercentDisplay(value, 2);
+  const formatPercent = (value: number) =>
+    formatPercentDisplay(value, showDecimals ? 2 : 0);
   const formatCurrencyParensIfNegative = (value: number): string =>
-    formatGbp(value, { decimals: 2 });
+    formatGbp(value, { decimals: showDecimals ? 2 : 0 });
   const {
     selectedLocationId,
     dateRange: globalDateRange,
@@ -368,15 +371,8 @@ export function ProfitBenchmarkPanel({
     const privateIncome = round2(
       accountingIncome?.private != null ? accountingIncome.private : pmsPrivate,
     );
-    // Membership: the accounting path returns 0 (not null) whenever the
-    // source defaults to Accounting App but no membership ledger revenue is
-    // mapped/posted — that zero must not shadow the real statement-upload
-    // revenue carried by provider net production (client 2026-08-20
-    // "implement membership revenue"). A NON-ZERO accounting figure still
-    // wins — same gate as provider production's own per-month fallback.
-    // Keep in sync with composeIncomeBreakdown (profitBenchmarkActual.ts).
     const membershipIncome = round2(
-      accountingIncome?.membership != null && accountingIncome.membership !== 0
+      accountingIncome?.membership != null
         ? accountingIncome.membership
         : pmsMembership,
     );

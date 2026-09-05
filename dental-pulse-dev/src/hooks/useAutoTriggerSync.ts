@@ -55,13 +55,9 @@ export function useAutoTriggerSync() {
         // If there are truly zero jobs AND integration has api_key, this is likely a fresh account
         // where onboarding failed to create jobs
         if (!hasResumedRef.current) {
-          const { data: existingJobs } = await supabase
-            .from('sync_jobs')
-            .select('id')
-            .eq('organization_id', organizationId)
-            .limit(1);
+          const existingJobs = await SyncJobService.getSyncJobs(organizationId, 1);
 
-          if (existingJobs && existingJobs.length > 0) {
+          if (existingJobs.length > 0) {
             // Jobs exist (completed/failed/etc.) — don't auto-trigger
             console.log('[AutoTriggerSync] Existing jobs found, skipping auto-trigger');
             hasResumedRef.current = true;
@@ -71,10 +67,10 @@ export function useAutoTriggerSync() {
           // Zero jobs at all — check if any Dentally integration has API key
           const { data: integrationRows } = await supabase
             .from('integrations')
-            .select('id, api_key')
+            .select('id, pat_hint')
             .eq('organization_id', organizationId)
             .eq('integration_name', 'Dentally')
-            .not('api_key', 'is', null);
+            .not('pat_hint', 'is', null);
 
           if (integrationRows && integrationRows.length > 0) {
             console.log(`[AutoTriggerSync] Fresh account with ${integrationRows.length} Dentally integration(s) — auto-triggering full sync`);
